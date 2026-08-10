@@ -1,6 +1,6 @@
 # minwind
 
-Build-time Tailwind classname compression.
+Build-time CSS name compression for Tailwind projects.
 
 minwind renames utility classes to short, stable names and consolidates repeated
 class lists. It rewrites HTML, JavaScript, and CSS together so every reference
