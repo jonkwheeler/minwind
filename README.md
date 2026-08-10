@@ -108,6 +108,14 @@ vocabulary words, then hashes. With `words`, every token draws from the
 vocabulary. Names are always valid CSS identifiers and never collide with
 classes you excluded.
 
+A fair warning about `quotes`: names are a global bijection, so a quote word
+appears everywhere its token appears — the one list that assembles
+`"everything that happens now"` is outnumbered by the elements where
+`everything` sits next to unrelated words. Quotes land best on sites with
+long, distinctive class lists; if your DOM is mostly short lists of common
+utilities, `words` reads better. Single-token lists never take quote words
+for this reason — a lone word is mid-quote residue.
+
 ## Consolidation
 
 When the exact same class list appears in several places, minwind can fold it
