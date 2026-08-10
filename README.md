@@ -1,0 +1,195 @@
+# minwind
+
+A Vite plugin that shrinks Tailwind CSS classnames at build time. It renames
+every utility class to a short generated name, rewrites your HTML, JS, and CSS
+together, and consolidates repeated class lists into single rules. Production
+builds only — your source and your dev server stay readable.
+
+```html
+<!-- before -->
+<div class="mx-auto flex min-h-screen max-w-3xl flex-col px-6">
+<span class="flex items-center gap-5 text-sm font-medium">
+
+<!-- after -->
+<div class="quill willow north lark ember ljaa">
+<span class="willow glen brook dog drift">
+```
+
+## Why
+
+Tailwind class attributes are long, repeated on every element, and shipped in
+every HTML page. Brotli hides some of it, but not all: the class strings still
+cost bytes on the wire, and they dominate the DOM you read in devtools.
+
+Measured on a real SolidStart site ([jonkwheeler.com](https://jonkwheeler.com),
+~40 prerendered routes):
+
+|                              | before    | after     | delta   |
+| ---------------------------- | --------- | --------- | ------- |
+| HTML + CSS, raw              | 1,768 KB  | 1,356 KB  | -23.3%  |
+| HTML + CSS, Brotli 11        | 100.9 KB  | 96.9 KB   | -4.0%   |
+| median class attribute       | 106 chars | 26 chars  | -75%    |
+
+And on the tiny demo app in `examples/demo` (3 routes):
+
+|                              | before    | after     | delta   |
+| ---------------------------- | --------- | --------- | ------- |
+| HTML + CSS, raw              | 58.0 KB   | 53.4 KB   | -8.0%   |
+| median class attribute       | 47 chars  | 23 chars  | -51%    |
+
+Every claim above is gated by the comparison harness: it builds your site with
+the plugin off and on, crawls both outputs, and fails unless the rendered
+styles match element-for-element, screenshots are pixel-identical, there are
+zero console errors, and interactions (clicks, client-side navigation, theme
+toggles) behave the same.
+
+## Install
+
+```bash
+npm install minwind
+# peer deps: vite, tailwindcss v4
+```
+
+## Use
+
+```ts
+// vite.config.ts (or app.config.ts for SolidStart)
+import { minwind } from 'minwind'
+
+export default defineConfig({
+  plugins: [
+    minwind(),
+    // ...
+  ],
+})
+```
+
+Build. That's it. The plugin only runs on `vite build`; dev is untouched.
+
+### Measure first, before installing anything
+
+Point the read-only CLI at an existing production build to project the savings:
+
+```bash
+npx minwind measure .output/public
+```
+
+It reports the projected gzip/Brotli delta for the rename arm, the consolidate
+arm, and the theoretical upper bound, without modifying anything.
+
+After a plugin build, summarize what happened:
+
+```bash
+npx minwind report        # reads .output/minwind/report.json
+```
+
+## Naming strategies
+
+The default is content-hash naming: each class maps to a short stable hash
+(`xkzu`, `au6h`), identical across builds, so long-term caching works.
+
+If you want the DOM to have some personality, provide a vocabulary or a quote
+corpus:
+
+```ts
+minwind({
+  naming: {
+    strategy: 'quotes',
+    corpus: ['the quick brown fox jumps over the lazy dog'],
+    vocabulary: ['quill', 'willow', 'ember', 'lark', 'glen', 'harbor'],
+  },
+})
+```
+
+With `quotes`, the classes on a single element spell out fragments of your
+corpus — `class="the quick brown"` — and leftover tokens fall back to
+vocabulary words, then hashes. With `words`, every token draws from the
+vocabulary. Names are always valid CSS identifiers and never collide with
+classes you excluded.
+
+## Consolidation
+
+When the exact same class list appears in several places, minwind can fold it
+into one generated rule and replace every occurrence with a single class:
+
+```html
+<!-- before, in 12 components -->
+<span class="select-none pointer-events-none">
+
+<!-- after -->
+<span class="ckqw">
+```
+
+Consolidation is conservative. A list only folds when it is static, repeated,
+variant-free, and provably cascade-safe; otherwise the report says exactly why
+it was skipped (`intervening-cascade`, `has-variants`, ...).
+
+## Safety model
+
+minwind only renames what it can prove safe. Anything it cannot prove is left
+untouched and listed in the report:
+
+- Classes constructed dynamically at runtime (`cn()` with non-literal parts)
+  are transformed literal-by-literal; unprovable parts pass through.
+- Classes that appear in CSS but never in source (`css-only`) are kept.
+- Classes you list in `exclusions` are never renamed or assigned as generated
+  names — important for classes injected by third-party scripts or routers:
+
+```ts
+minwind({
+  exclusions: {
+    names: ['active', 'inactive'], // e.g. Solid Router's <A> link classes
+    prefixes: ['shiki'],           // e.g. syntax highlighter themes
+  },
+})
+```
+
+Every build writes `.output/minwind/report.json` with the full rename map,
+exclusion reasons, consolidation verdicts, and warnings.
+
+### Verify it yourself
+
+The same harness that gates this repo works against any site using the plugin:
+
+```bash
+pnpm compare --site path/to/your/site
+```
+
+It builds with `MINWIND=off` and `MINWIND=on`, crawls every prerendered route
+in headless Chromium, diffs computed styles and screenshots, replays
+interactions, and checks the byte and class-length deltas. If anything
+mismatches, the build fails and you keep the untransformed output.
+
+## Flags
+
+- `MINWIND=off` — build with the plugin disabled (used by the harness).
+- `MINWIND_REPORT=0` — skip writing `report.json`.
+
+## How it works
+
+1. **Pre-pass** (`buildStart`): compiles your CSS with Tailwind once, scans
+   your content, and builds the class universe — every token, where it came
+   from, and whether it is excludable.
+2. **Source transform** (`transform`): parses each JS/TS module with the
+   TypeScript compiler API and rewrites class strings in JSX attributes,
+   `classList` objects, and `cn()` calls with span-precise edits (sourcemaps
+   intact).
+3. **CSS transform** (`generateBundle`): parses the emitted stylesheet with
+   css-tree and rewrites selectors to the same generated names, appending
+   consolidated rules.
+
+One global bijection — original token to generated name — is shared by all
+three phases, so HTML, JS, and CSS always agree.
+
+## Development
+
+```bash
+pnpm install
+pnpm test          # unit tests
+pnpm compare       # full harness against examples/demo
+pnpm build         # emit dist/ (JS + d.ts)
+```
+
+## License
+
+[MIT](./LICENSE)

@@ -1,0 +1,8 @@
+@layer utilities {
+  .bg-white {
+    background-color: #fff;
+  }
+  .alpha {
+    color: red;
+  }
+}

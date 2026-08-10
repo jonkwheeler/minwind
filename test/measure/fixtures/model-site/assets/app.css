@@ -1,0 +1,36 @@
+@layer utilities {
+  .bg-white {
+    background-color: #fff;
+  }
+  .hover\:bg-red-500:hover {
+    background-color: red;
+  }
+  .alpha,
+  .beta {
+    color: red;
+  }
+  .group:hover .group-hover\:glow {
+    filter: none;
+  }
+  .group-hover\:v4:is(:where(.group):hover *) {
+    color: pink;
+  }
+  .peer:checked ~ .peer-checked\:x {
+    color: blue;
+  }
+  :where(.space-y-3>:not(:last-child)) {
+    margin-top: 0;
+  }
+  .js-toggled {
+    display: block;
+  }
+  .inline-toggled {
+    display: inline;
+  }
+  .css-only-class {
+    margin: 0;
+  }
+}
+.brand-title {
+  font-weight: bold;
+}

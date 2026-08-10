@@ -1,0 +1,11 @@
+@layer utilities {
+  .m-2 {
+    margin: 0.5rem;
+  }
+  .p-4 {
+    padding: 1rem;
+  }
+  :where(.space-y-2 > :not(:last-child)) {
+    margin-top: 0.5rem;
+  }
+}

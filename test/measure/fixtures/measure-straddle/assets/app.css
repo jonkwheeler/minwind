@@ -1,0 +1,8 @@
+@layer utilities {
+  .t-1 {
+    top: 0.25rem;
+  }
+  .js-locked-utility-with-a-deliberately-long-name {
+    position: sticky;
+  }
+}

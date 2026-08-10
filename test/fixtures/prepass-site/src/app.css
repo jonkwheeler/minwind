@@ -1,0 +1,14 @@
+@import "tailwindcss";
+
+@utility fade-in {
+  opacity: 0;
+  animation: fade-in 1s ease forwards;
+}
+
+.site-card {
+  border: 1px solid;
+}
+
+.css-only-class {
+  color: red;
+}

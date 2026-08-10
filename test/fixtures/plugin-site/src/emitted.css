@@ -1,0 +1,4 @@
+@layer theme,base,components,utilities;
+@layer utilities{.flex{display:flex}.flex-col{flex-direction:column}.items-center{align-items:center}.p-4{padding:1rem}.fade-in{opacity:0;animation:fade-in 1s ease forwards}}
+.site-card{border:1px solid}
+.css-only-class{color:red}

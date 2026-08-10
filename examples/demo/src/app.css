@@ -1,0 +1,35 @@
+@import 'tailwindcss';
+
+@theme {
+  --color-ink: #16161e;
+  --color-paper: #fafaf7;
+  --color-accent: #7c5cff;
+  --color-accent-soft: #ece8ff;
+}
+
+@layer base {
+  body {
+    @apply bg-paper text-ink font-sans antialiased;
+  }
+
+  .dark body {
+    @apply bg-ink text-paper;
+  }
+}
+
+@layer components {
+  /* Referenced from a classList object on the about route. */
+  .demo-note {
+    border-inline-start: 3px solid var(--color-accent);
+    padding-inline-start: 0.75rem;
+  }
+
+  /* Deliberately unreferenced: the measure CLI reports these as css-only. */
+  .demo-unused {
+    letter-spacing: 0.08em;
+  }
+
+  .demo-also-unused {
+    text-wrap: balance;
+  }
+}

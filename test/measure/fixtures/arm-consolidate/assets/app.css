@@ -1,0 +1,14 @@
+@layer utilities {
+  .m-2 {
+    margin: 0.5rem;
+  }
+  .p-4 {
+    padding: 1rem;
+  }
+  .solo {
+    display: block;
+  }
+  .js-locked {
+    position: fixed;
+  }
+}

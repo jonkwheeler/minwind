@@ -1,0 +1,28 @@
+.site-header {
+  padding: 16px;
+  background-color: rgb(250, 250, 250);
+}
+
+.title {
+  margin: 0;
+  color: rgb(10, 20, 30);
+}
+
+.box {
+  background-color: rgb(1, 2, 3);
+  color: rgb(200, 210, 220);
+  padding: 8px;
+  margin: 4px;
+}
+
+.nav-link {
+  color: rgb(0, 0, 200);
+}
+
+.site-footer {
+  margin-top: 24px;
+}
+
+.theme-toggle {
+  border: 1px solid rgb(9, 9, 9);
+}

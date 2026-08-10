@@ -1,0 +1,68 @@
+{
+  "_components-CWoJdK_F.js": {
+    "file": "assets/components-CWoJdK_F.js",
+    "name": "components"
+  },
+  "_server-fns-C5zym07_.js": {
+    "file": "assets/server-fns-C5zym07_.js",
+    "name": "server-fns",
+    "dynamicImports": [
+      "src/routes/[...404].tsx?pick=default&pick=$css",
+      "src/routes/[...404].tsx?pick=default&pick=$css",
+      "src/routes/about.tsx?pick=default&pick=$css",
+      "src/routes/about.tsx?pick=default&pick=$css",
+      "src/routes/index.tsx?pick=default&pick=$css",
+      "src/routes/index.tsx?pick=default&pick=$css",
+      "src/app.tsx"
+    ]
+  },
+  "src/app.tsx": {
+    "file": "assets/app-CD-f1n0S.js",
+    "name": "app",
+    "src": "src/app.tsx",
+    "isDynamicEntry": true,
+    "imports": [
+      "_server-fns-C5zym07_.js",
+      "_components-CWoJdK_F.js"
+    ],
+    "css": [
+      "assets/app-DdRVE1IF.css"
+    ]
+  },
+  "src/routes/[...404].tsx?pick=default&pick=$css": {
+    "file": "_...404_.js",
+    "name": "_...404_",
+    "src": "src/routes/[...404].tsx?pick=default&pick=$css",
+    "isEntry": true,
+    "isDynamicEntry": true,
+    "imports": [
+      "_components-CWoJdK_F.js"
+    ]
+  },
+  "src/routes/about.tsx?pick=default&pick=$css": {
+    "file": "about.js",
+    "name": "about",
+    "src": "src/routes/about.tsx?pick=default&pick=$css",
+    "isEntry": true,
+    "isDynamicEntry": true,
+    "imports": [
+      "_components-CWoJdK_F.js"
+    ]
+  },
+  "src/routes/index.tsx?pick=default&pick=$css": {
+    "file": "index.js",
+    "name": "index",
+    "src": "src/routes/index.tsx?pick=default&pick=$css",
+    "isEntry": true,
+    "isDynamicEntry": true
+  },
+  "virtual:$vinxi/handler/server-fns": {
+    "file": "server-fns.js",
+    "name": "server-fns",
+    "src": "virtual:$vinxi/handler/server-fns",
+    "isEntry": true,
+    "imports": [
+      "_server-fns-C5zym07_.js"
+    ]
+  }
+}

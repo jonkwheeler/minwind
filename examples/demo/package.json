@@ -1,0 +1,21 @@
+{
+  "name": "minwind-demo",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vinxi build",
+    "dev": "vinxi dev",
+    "start": "vinxi start"
+  },
+  "dependencies": {
+    "@solidjs/router": "^0.15.4",
+    "@solidjs/start": "^1.2.1",
+    "minwind": "workspace:*",
+    "solid-js": "^1.9.10",
+    "vinxi": "^0.5.10"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.1.18",
+    "tailwindcss": "^4.1.18"
+  }
+}

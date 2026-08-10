@@ -1,0 +1,20 @@
+@layer utilities {
+  .m-2 {
+    margin: 0.5rem;
+  }
+  .p-4 {
+    padding: 1rem;
+  }
+  .solo {
+    display: block;
+  }
+  .group:hover .group-hover\:glow {
+    filter: none;
+  }
+  .js-locked {
+    position: fixed;
+  }
+}
+.custom-chip {
+  border: 0;
+}

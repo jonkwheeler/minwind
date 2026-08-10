@@ -1,0 +1,76 @@
+{
+  "name": "minwind",
+  "version": "0.1.0",
+  "description": "Build-time Tailwind classname compression for Vite: renames and consolidates utility classes across TSX and CSS together, with optional themed naming.",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./measure": {
+      "types": "./dist/measure/index.d.ts",
+      "import": "./dist/measure/index.js"
+    }
+  },
+  "bin": {
+    "minwind": "./dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "clean": "rm -rf dist",
+    "compare": "tsx harness/compare.ts",
+    "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,css,md}\"",
+    "format:check": "prettier --check \"**/*.{ts,tsx,js,jsx,json,css,md}\"",
+    "prepublishOnly": "pnpm run clean && pnpm run build",
+    "test": "node --import tsx --test test/*.test.ts test/measure/*.test.ts",
+    "test:unit": "MINWIND_SKIP_BUILD=1 node --import tsx --test test/*.test.ts test/measure/*.test.ts",
+    "typecheck": "tsc --noEmit",
+    "check": "pnpm run typecheck && pnpm run format:check && pnpm run test"
+  },
+  "keywords": [
+    "tailwind",
+    "tailwindcss",
+    "classname",
+    "classnames",
+    "minify",
+    "compression",
+    "vite",
+    "vite-plugin",
+    "css"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jonkwheeler/minwind.git"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "peerDependencies": {
+    "tailwindcss": "^4",
+    "vite": "^5 || ^6 || ^7"
+  },
+  "dependencies": {
+    "@tailwindcss/node": "^4.1.18",
+    "@tailwindcss/oxide": "^4.1.18",
+    "css-tree": "^3.2.1",
+    "magic-string": "^1.1.0",
+    "parse5": "^8.0.1",
+    "typescript": "^5.9.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.14.0",
+    "@types/pngjs": "^6.0.5",
+    "playwright": "^1.62.1",
+    "pngjs": "^7.0.0",
+    "prettier": "^3.8.0",
+    "tailwindcss": "^4.1.18",
+    "tsx": "^4.21.0",
+    "vite": "^6.4.1"
+  },
+  "packageManager": "pnpm@9.15.9"
+}

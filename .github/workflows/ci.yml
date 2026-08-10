@@ -1,0 +1,42 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install headless Chromium
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Typecheck
+        run: pnpm run typecheck
+
+      - name: Format check
+        run: pnpm run format:check
+
+      - name: Build dist
+        run: pnpm run build
+
+      - name: Comparison harness (builds the demo off + on, crawls, gates)
+        run: pnpm run compare
+
+      - name: Unit tests (demo build now present, gated tests included)
+        run: pnpm test
