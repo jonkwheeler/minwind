@@ -151,6 +151,100 @@ above-the-fold markup changes; if a build warns that the manifest matched
 zero tokens, it was generated from a renamed build — regenerate it with
 `MINWIND=off`.
 
+### Case study: Spaceballs-themed classnames
+
+The `words` strategy exists because of
+[jonkwheeler.com](https://github.com/jonkwheeler/jonkwheeler-dot-com-solidstart),
+which ships class names drawn from Spaceballs. The whole setup, lessons
+included:
+
+**1. Curate a vocabulary.** Every word must stand alone in a class
+attribute — single words, no phrases, nothing that reads as mid-sentence
+residue. Order the list iconic-first; curation order is the prominence
+priority.
+
+```ts
+// spaceballs.ts
+export const SPACEBALLS_VOCABULARY: ReadonlyArray<string> = [
+  // the greatest hits — the DOM shell wears these
+  "schwartz",
+  "lonestar",
+  "darkhelmet",
+  "vespa",
+  "barf",
+  "dotmatrix",
+  "yogurt",
+  "megamaid",
+  "winnebago",
+  "ludicrous",
+  // ...~150 words total: characters, planets, ships, props, bits
+];
+```
+
+**2. Wire the strategy with prominence.** The manifest is a build artifact;
+load it if it's there, fall back to the plain length-weighted deal if not.
+
+```ts
+// app.config.ts
+import { readFileSync } from "node:fs";
+import { SPACEBALLS_VOCABULARY } from "./spaceballs";
+
+function loadProminence(): Record<string, number> | undefined {
+  try {
+    const manifest = JSON.parse(
+      readFileSync("minwind.prominence.json", "utf8"),
+    );
+    return manifest.tokens;
+  } catch {
+    return undefined;
+  }
+}
+
+minwind({
+  naming: {
+    strategy: "words",
+    vocabulary: SPACEBALLS_VOCABULARY,
+    prominence: loadProminence(),
+  },
+});
+```
+
+**3. Generate the manifest** once, and again after above-the-fold markup
+changes:
+
+```bash
+MINWIND=off pnpm build && npx minwind prominence .output/public && pnpm build
+```
+
+The result: open devtools and the document shell reads like the cast list —
+
+```html
+<div class="darkhelmet lonestar schwartz">
+  <header class="darkhelmet dotmatrix barf vespa">
+    <nav class="eagle5 sandurz"></nav>
+  </header>
+</div>
+```
+
+— while the hot, deeply-nested elements keep the shortest remaining words
+(`dot`, `jam`, `vega`), which is where the bytes actually are. With this
+exact setup the site's gate reports: median class attribute 77 → 36 chars
+(-53%), whole-site raw -21.9%, Brotli -3.6%, pixel-identical rendering.
+
+What the exercise taught:
+
+- **The window is a budget.** A 32-element window spent so many short words
+  on the shell that the median class-length drop fell under the site's 50%
+  gate. Eight elements — root, header, nav — reads just as iconic and costs
+  nothing measurable. Tune with `--window`.
+- **Long names are nearly free on the shell.** `megamaid` on an element that
+  renders once per page costs less than `jam` on a card that renders fifty
+  times. Prominence and byte-optimality only conflict where an element is
+  both early and hot, which is rare in practice.
+- **Quotes didn't survive contact with a real DOM** (see the warning above);
+  single themed words did. Curate for words that still make sense next to a
+  random neighbor, because every pairing happens somewhere.
+
 ## Consolidation
 
 When the exact same class list appears in several places, minwind can fold it
