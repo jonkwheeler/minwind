@@ -5,12 +5,11 @@ import { Scanner } from "@tailwindcss/oxide";
 import * as ts from "typescript";
 import {
   DECLARATION_PATTERN,
-  parseSourceModule,
   SOURCE_MODULE_PATTERN,
   tokenize,
-  walkClassContexts,
   type LiteralOccurrence,
 } from "./class-contexts.js";
+import { SFC_PATTERN, walkModuleContexts } from "./sfc.js";
 import {
   createNameRegistry,
   hashClassName,
@@ -85,9 +84,11 @@ async function sourceModulePaths(root: string): Promise<Array<string>> {
       const full = path.join(directory, entry.name);
       if (entry.isDirectory()) {
         children.push(walk(full));
+      } else if (DECLARATION_PATTERN.test(entry.name)) {
+        continue;
       } else if (
-        SOURCE_MODULE_PATTERN.test(entry.name) &&
-        !DECLARATION_PATTERN.test(entry.name)
+        SOURCE_MODULE_PATTERN.test(entry.name) ||
+        SFC_PATTERN.test(entry.name)
       ) {
         found.push(full);
       }
@@ -101,8 +102,6 @@ async function sourceModulePaths(root: string): Promise<Array<string>> {
 }
 
 function scanModule(filePath: string, text: string, scan: SourceScan): void {
-  const sourceFile = parseSourceModule(filePath, text);
-
   function recordList(tokens: Array<string>): void {
     const key = canonicalListKey(tokens);
     if (key === "") return;
@@ -157,7 +156,7 @@ function scanModule(filePath: string, text: string, scan: SourceScan): void {
   let groupTokens: Array<string> = [];
   let groupLiterals: Array<{ start: number; tokens: Array<string> }> = [];
 
-  walkClassContexts(sourceFile, {
+  walkModuleContexts(filePath, text, {
     enterRenameGroup: function (): void {
       groupTokens = [];
       groupLiterals = [];

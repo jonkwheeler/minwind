@@ -4,12 +4,11 @@ import process from "node:process";
 import type { Plugin } from "vite";
 import {
   DECLARATION_PATTERN,
-  parseSourceModule,
   SOURCE_MODULE_PATTERN,
   tokenize,
-  walkClassContexts,
   type RenameContextKind,
 } from "./class-contexts.js";
+import { SFC_PATTERN, walkModuleContexts } from "./sfc.js";
 import {
   assertConsolidatedNames,
   consolidateStylesheet,
@@ -147,7 +146,7 @@ function accumulateRenamesByKind(
   id: string,
   registry: NameRegistry,
 ): void {
-  walkClassContexts(parseSourceModule(id, code), {
+  walkModuleContexts(id, code, {
     renameLiteral: function (literal, kind) {
       for (const token of tokenize(literal.text)) {
         if (registry.nameFor(token) !== undefined) counts[kind] += 1;
@@ -176,11 +175,16 @@ async function scanForJsxClassTokens(
         if (await walk(full)) return true;
         continue;
       }
-      if (!SOURCE_MODULE_PATTERN.test(entry.name)) continue;
       if (DECLARATION_PATTERN.test(entry.name)) continue;
-      const sourceFile = parseSourceModule(full, await readFile(full, "utf8"));
+      if (
+        !SOURCE_MODULE_PATTERN.test(entry.name) &&
+        !SFC_PATTERN.test(entry.name)
+      ) {
+        continue;
+      }
+      const text = await readFile(full, "utf8");
       let hit = false;
-      walkClassContexts(sourceFile, {
+      walkModuleContexts(full, text, {
         renameLiteral: function (literal, kind) {
           if (hit || kind !== "class-attribute") return;
           for (const token of tokenize(literal.text)) {

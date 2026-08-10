@@ -101,9 +101,21 @@ describe("shouldTransformModule", function () {
     assert.ok(!shouldTransformModule("/site/src/types.d.ts"));
     assert.ok(!shouldTransformModule("/site/src/types.d.mts"));
     assert.ok(!shouldTransformModule("/site/src/types.d.cts"));
-    assert.ok(!shouldTransformModule("/site/src/component.vue"));
-    assert.ok(!shouldTransformModule("/site/src/component.svelte"));
-    assert.ok(!shouldTransformModule("/site/src/page.astro"));
+    assert.ok(!shouldTransformModule("/site/src/styles.scss"));
+  });
+
+  it("accepts SFC main modules and rejects framework-carved sub-modules", function () {
+    assert.ok(shouldTransformModule("/site/src/component.vue"));
+    assert.ok(shouldTransformModule("/site/src/component.svelte"));
+    assert.ok(shouldTransformModule("/site/src/page.astro"));
+    // ?vue&type=script slices are carved from the already-transformed main
+    // module by the framework plugin; transforming them again would double
+    // the walk.
+    assert.ok(
+      !shouldTransformModule("/site/src/component.vue?vue&type=script"),
+    );
+    assert.ok(!shouldTransformModule("/site/src/page.astro?astro&type=script"));
+    assert.ok(!shouldTransformModule("/site/node_modules/pkg/component.vue"));
   });
 });
 

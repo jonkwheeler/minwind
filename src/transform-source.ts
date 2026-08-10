@@ -6,12 +6,19 @@ import {
   tokenize,
   walkClassContexts,
   type ClassContextKind,
+  type ClassContextVisitor,
   type LiteralOccurrence,
   type RenameContextKind,
   type RuntimeContextKind,
 } from "./class-contexts.js";
 import { canonicalListKey, type ConsolidationVerdict } from "./consolidate.js";
 import type { NameRegistry } from "./names.js";
+import {
+  isSfcModule,
+  maskSfcStyleContent,
+  SFC_PATTERN,
+  walkSfcClassContexts,
+} from "./sfc.js";
 
 // U3 source-module transform (KTD1, KTD4): the pure function the Vite
 // plugin's enforce-pre transform hook calls per module. Renames class
@@ -63,14 +70,21 @@ export interface SourceEdit {
   replacement: string;
 }
 
-// The KTD1 module filter: src/**/*.{ts,tsx,js,jsx,mts,cts,mjs,cjs},
-// node_modules and declaration files excluded. Any absolute path with a
-// /src/ segment qualifies; Vite only feeds the plugin modules from the app
-// graph.
+// The KTD1 module filter: src/**/*.{ts,tsx,js,jsx,mts,cts,mjs,cjs} plus the
+// SFC formats (.vue/.svelte/.astro), node_modules and declaration files
+// excluded. Any absolute path with a /src/ segment qualifies; Vite only
+// feeds the plugin modules from the app graph. Query-suffixed SFC ids are
+// framework-carved sub-modules (?vue&type=script) whose content is a slice
+// of the already-transformed main module — only the raw main module
+// transforms.
 export function shouldTransformModule(id: string): boolean {
   const clean = id.split("?")[0].replace(/\\/g, "/");
   if (clean.includes("node_modules")) return false;
   if (DECLARATION_PATTERN.test(clean)) return false;
+  if (SFC_PATTERN.test(clean)) {
+    if (id.includes("?")) return false;
+    return clean.startsWith("src/") || clean.includes("/src/");
+  }
   if (!SOURCE_MODULE_PATTERN.test(clean)) return false;
   return clean.startsWith("src/") || clean.includes("/src/");
 }
@@ -135,19 +149,48 @@ function isWholeWord(text: string, start: number, length: number): boolean {
   return !CLASSNAME_CHAR.test(before) && !CLASSNAME_CHAR.test(after);
 }
 
+// Line/column lookup for SFC modules, whose spans are absolute offsets into
+// the raw file and never pass through a TS parse of the whole text.
+function lineStartOffsets(text: string): Array<number> {
+  const starts = [0];
+  for (let i = 0; i < text.length; i += 1) {
+    if (text[i] === "\n") starts.push(i + 1);
+  }
+  return starts;
+}
+
+function locateInText(
+  starts: Array<number>,
+  position: number,
+): { line: number; column: number } {
+  let low = 0;
+  let high = starts.length - 1;
+  while (low < high) {
+    const mid = Math.ceil((low + high) / 2);
+    if (starts[mid] <= position) low = mid;
+    else high = mid - 1;
+  }
+  return { line: low + 1, column: position - starts[low] + 1 };
+}
+
 export function transformSource(
   options: TransformSourceOptions,
 ): TransformSourceResult | null {
   const { code, id, registry } = options;
   if (!shouldTransformModule(id)) return null;
-  const sourceFile = parseSourceModule(id, code);
+  const sfc = isSfcModule(id);
+  const sourceFile = sfc ? null : parseSourceModule(id, code);
+  const lineStarts = sfc ? lineStartOffsets(code) : null;
 
   const edits = new Map<string, SourceEdit>();
   const warnings: Array<TransformWarning> = [];
 
   function location(position: number): { line: number; column: number } {
-    const at = sourceFile.getLineAndCharacterOfPosition(position);
-    return { line: at.line + 1, column: at.character + 1 };
+    if (sourceFile !== null) {
+      const at = sourceFile.getLineAndCharacterOfPosition(position);
+      return { line: at.line + 1, column: at.character + 1 };
+    }
+    return locateInText(lineStarts ?? [0], position);
   }
 
   function addEdit(
@@ -339,7 +382,7 @@ export function transformSource(
     }
   }
 
-  walkClassContexts(sourceFile, {
+  const visitor: ClassContextVisitor = {
     enterRenameGroup: function (kind: RenameContextKind): void {
       groupStack.push({ kind, literals: [], editKeys: [], literalEdits: [] });
     },
@@ -373,7 +416,10 @@ export function transformSource(
       }
     },
     unprovableTemplate: function (node, kind: ClassContextKind): void {
-      const at = location(node.getStart(sourceFile));
+      // No sourceFile argument: in the SFC path the node belongs to the
+      // masked script-block parse, whose offsets are already absolute into
+      // the file (whitespace masking preserves positions).
+      const at = location(node.getStart());
       warnings.push({
         kind: "unprovable-template",
         id,
@@ -407,18 +453,26 @@ export function transformSource(
           ` "${literal.text}" keep their original names`,
       });
     },
-  });
+  };
+  if (sourceFile !== null) {
+    walkClassContexts(sourceFile, visitor);
+  } else {
+    walkSfcClassContexts(id, code, visitor);
+  }
 
   // Reverse-leak check (KTD7): whole-word occurrences of registry tokens in
   // the original source that no edit consumed are class names the stylesheet
-  // renames but this module keeps — warn with locations, never fail.
+  // renames but this module keeps — warn with locations, never fail. SFCs
+  // scan with <style> contents blanked: a utility word used as a CSS value
+  // (display: flex) is not a class reference.
+  const leakText = sfc ? maskSfcStyleContent(id, code) : code;
   for (const entry of registry.entries()) {
     let from = 0;
     for (;;) {
-      const at = code.indexOf(entry.token, from);
+      const at = leakText.indexOf(entry.token, from);
       if (at === -1) break;
       from = at + entry.token.length;
-      if (!isWholeWord(code, at, entry.token.length)) continue;
+      if (!isWholeWord(leakText, at, entry.token.length)) continue;
       let consumed = false;
       for (const edit of edits.values()) {
         if (edit.start <= at && edit.end >= at + entry.token.length) {
