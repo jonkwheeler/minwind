@@ -1,7 +1,7 @@
 {
   "name": "minwind",
-  "version": "0.3.0",
-  "description": "Build-time Tailwind classname compression: renames and consolidates utility classes across JS/TS, SFC, HTML, and CSS together, with optional themed naming. Vite and webpack/rspack plugins plus a post-build CLI.",
+  "version": "0.4.0",
+  "description": "Build-time CSS name compression for Tailwind projects: renames and consolidates classes across JS/TS, SFC, HTML, and CSS, with optional custom-property aliases. Vite and webpack/rspack plugins plus a post-build CLI.",
   "type": "module",
   "exports": {
     ".": {

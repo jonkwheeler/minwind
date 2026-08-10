@@ -1,6 +1,6 @@
 # minwind
 
-Build-time Tailwind classname compression.
+Build-time CSS name compression for Tailwind projects.
 
 minwind renames utility classes to short, stable names and consolidates repeated
 class lists. It rewrites HTML, JavaScript, and CSS together so every reference
@@ -285,12 +285,24 @@ variable is private merely because it sees a declaration:
 minwind({
   customProperties: {
     owned: ["--color-accent", "--surface", "--content-width"],
+    aliases: {
+      "--color-accent": "--a",
+      "--content-width": "--w",
+    },
   },
 });
 ```
 
+`owned` defines the complete set minwind may rename. The optional `aliases`
+map chooses the emitted name for selected owned properties; owned properties
+without an alias still receive a stable generated name. Alias keys must also
+appear in `owned`, and every alias must be a unique custom-property name
+beginning with `--`. minwind fails the build if an alias conflicts with an
+existing property or another configured name.
+
 Declarations, `var()` references, and `@property` registrations use the same
-stable generated name. Static property-name arguments to
+emitted name—either the configured alias or a stable generated name. Static
+property-name arguments to
 `element.style.setProperty()`, `element.style.removeProperty()`, and
 `getComputedStyle(element).getPropertyValue()` are rewritten too.
 
@@ -305,10 +317,10 @@ stable generated name. Static property-name arguments to
 
 /* after */
 :root {
-  --h4sh: #d946ef;
+  --a: #d946ef;
 }
 .button {
-  color: var(--h4sh);
+  color: var(--a);
 }
 ```
 

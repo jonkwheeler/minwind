@@ -555,7 +555,10 @@ describe("minwind owned custom properties", function () {
       const plugins = minwind({
         root: FIXTURE,
         cssEntry: CSS_ENTRY,
-        customProperties: { owned: ["--fixture-accent"] },
+        customProperties: {
+          owned: ["--fixture-accent"],
+          aliases: { "--fixture-accent": "--fx" },
+        },
       });
       const result = await driveLifecycle(plugins, {
         withModules: true,
@@ -569,7 +572,7 @@ describe("minwind owned custom properties", function () {
           (await readFile(path.join(FIXTURE, "src", "emitted.css"), "utf8")) +
           ".uses-property{color:var(--fixture-accent)}",
       });
-      const generated = `--${hashClassName("custom-property:--fixture-accent")}`;
+      const generated = "--fx";
       assert.ok(result.cssOutputs[0].includes(`${generated}:red`));
       assert.ok(result.cssOutputs[0].includes(`var(${generated})`));
       assert.ok(
