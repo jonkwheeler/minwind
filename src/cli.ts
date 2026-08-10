@@ -1,14 +1,17 @@
 #!/usr/bin/env node
 import process from "node:process";
+import { runApplyCli } from "./apply-cli.js";
 import { runMeasureCli } from "./measure/cli.js";
 import { runProminenceCli } from "./prominence-cli.js";
 import { runReportCli } from "./report-cli.js";
 
 // The minwind bin. The package's center of gravity is the Vite plugin; the
-// CLI carries the read-only companions: `measure` projects the savings
-// on an existing build (run it before installing the plugin), `report`
-// summarizes the report.json the plugin writes into the build output, and
-// `prominence` writes the DOM-order manifest for prominence-aware naming.
+// CLI carries the companions: `measure` projects the savings on an existing
+// build (run it before installing the plugin), `report` summarizes the
+// report.json a build writes, `prominence` writes the DOM-order manifest
+// for prominence-aware naming, and `apply` rewrites a built output
+// directory for bundlers without a plugin hook (Turbopack, esbuild,
+// Parcel).
 
 const USAGE = `Usage: minwind <command> [options]
 
@@ -24,6 +27,10 @@ Commands:
                                        the words strategy's prominence
                                        option. Run against a MINWIND=off
                                        build.
+  apply <build-output-directory>       Rewrite a production build's HTML,
+                                       CSS, and JS with compressed class
+                                       names. For bundlers without a plugin
+                                       hook (Turbopack, esbuild, Parcel).
 `;
 
 async function main(): Promise<number> {
@@ -32,6 +39,7 @@ async function main(): Promise<number> {
   if (command === "measure") return runMeasureCli(rest);
   if (command === "report") return runReportCli(rest);
   if (command === "prominence") return runProminenceCli(rest);
+  if (command === "apply") return runApplyCli(rest);
   if (command === undefined || command === "--help" || command === "-h") {
     process.stdout.write(USAGE);
     return command === undefined ? 1 : 0;

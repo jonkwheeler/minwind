@@ -27,15 +27,22 @@ import {
 // walks can never see each other's regions (an HTML-looking string inside a
 // script never becomes a phantom element).
 
+// The module-graph SFC formats. Plain .html is deliberately absent: the
+// Vite/webpack plugins must not transform HTML modules, and the pre-pass
+// must not scan source HTML (an untransformed copy would diverge from the
+// renamed stylesheet). The post-build CLI is the only .html consumer — it
+// rewrites emitted HTML — so sfcFormatFor maps it but SFC_PATTERN excludes
+// it.
 export const SFC_PATTERN = /\.(?:vue|svelte|astro)$/;
 
-type SfcFormat = "vue" | "svelte" | "astro";
+type SfcFormat = "vue" | "svelte" | "astro" | "html";
 
 export function sfcFormatFor(filePath: string): SfcFormat | null {
   const clean = filePath.split("?")[0];
   if (clean.endsWith(".vue")) return "vue";
   if (clean.endsWith(".svelte")) return "svelte";
   if (clean.endsWith(".astro")) return "astro";
+  if (clean.endsWith(".html")) return "html";
   return null;
 }
 
@@ -80,8 +87,8 @@ function findScriptRegions(
     regions.push({
       contentStart,
       contentEnd: contentStart + match[2].length,
-      // Astro compiles its client scripts as TypeScript; Vue and Svelte
-      // default to plain JS unless lang says otherwise.
+      // Astro compiles its client scripts as TypeScript; Vue, Svelte, and
+      // plain HTML inline scripts default to JS unless lang says otherwise.
       lang:
         langMatch !== null
           ? langMatch[1].toLowerCase()
@@ -485,7 +492,11 @@ export function walkSfcClassContexts(
       return { start: region.contentStart, end: region.contentEnd };
     }),
   );
-  if (format !== "vue") templateText = maskBraceExpressions(templateText);
+  // Only Svelte and Astro interpolate {} in templates; Vue and plain HTML
+  // attribute values are always literal (or always-quoted expressions).
+  if (format === "svelte" || format === "astro") {
+    templateText = maskBraceExpressions(templateText);
+  }
   const document = parse5.parse(templateText, {
     sourceCodeLocationInfo: true,
   });
@@ -503,9 +514,13 @@ export function walkSfcClassContexts(
           location.endOffset,
         );
         const value = text.slice(span.start, span.end);
-        // Vue 3 forbids mustache interpolation in attributes, so a Vue class
-        // attribute is always static; Svelte and Astro interpolate {}.
-        if (format !== "vue" && value.includes("{")) {
+        // Vue 3 forbids mustache interpolation in attributes and plain HTML
+        // has no expression syntax, so their class attributes are always
+        // static; Svelte and Astro interpolate {}.
+        if (
+          (format === "svelte" || format === "astro") &&
+          value.includes("{")
+        ) {
           emitMixedTemplate(value, span.start, visitor);
         } else {
           emitStaticClassAttribute(value, span.start, span.end, visitor);

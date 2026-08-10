@@ -176,8 +176,18 @@ function locateInText(
 export function transformSource(
   options: TransformSourceOptions,
 ): TransformSourceResult | null {
+  if (!shouldTransformModule(options.id)) return null;
+  return transformModule(options);
+}
+
+// The filter-free core: the Vite/webpack plugins gate on shouldTransformModule
+// (module-graph ids), while the post-build CLI rewrites emitted .html files
+// that live outside any module graph. Everything else — contexts, edits,
+// warnings — is identical.
+export function transformModule(
+  options: TransformSourceOptions,
+): TransformSourceResult | null {
   const { code, id, registry } = options;
-  if (!shouldTransformModule(id)) return null;
   const sfc = isSfcModule(id);
   const sourceFile = sfc ? null : parseSourceModule(id, code);
   const lineStarts = sfc ? lineStartOffsets(code) : null;

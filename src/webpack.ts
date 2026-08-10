@@ -100,7 +100,12 @@ export interface CssAssetRewriteResult {
 // witnessed in the output.
 export function rewriteCssAssets(
   assets: Readonly<Record<string, string>>,
-  prepass: PrepassResult,
+  prepass: {
+    registry: PrepassResult["registry"];
+    consolidationVerdicts: ReadonlyArray<
+      PrepassResult["consolidationVerdicts"][number]
+    >;
+  },
   consolidate: boolean,
 ): CssAssetRewriteResult {
   const registry = prepass.registry;
