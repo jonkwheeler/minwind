@@ -9,6 +9,7 @@ import {
   type WebpackCompilerLike,
 } from "../src/webpack.js";
 import minwindLoader from "../src/webpack-loader.js";
+import { createCustomPropertyRegistry } from "../src/custom-properties.js";
 
 // The webpack adapter's wiring is exercised against structural fakes — the
 // pure cores (transformSource, transformStylesheet, consolidateStylesheet)
@@ -115,6 +116,29 @@ describe("rewriteCssAssets", function () {
         "}",
     );
     assert.deepStrictEqual(result.warnings, []);
+  });
+
+  it("forwards the owned custom-property registry to every CSS asset", function () {
+    const prepass = fakePrepass();
+    prepass.customProperties = createCustomPropertyRegistry({
+      owned: ["--accent"],
+    });
+    const result = rewriteCssAssets(
+      {
+        "assets/app.css":
+          ":root{--accent:red}" +
+          "@layer utilities{" +
+          ".flex{color:var(--accent)}" +
+          ".items-center{align-items:center}" +
+          ".p-4{padding:1rem}" +
+          "}",
+      },
+      prepass,
+      false,
+    );
+    const name = prepass.customProperties.nameFor("--accent") ?? "";
+    assert.ok(result.assets["assets/app.css"].includes(`${name}:red`));
+    assert.ok(result.assets["assets/app.css"].includes(`var(${name})`));
   });
 });
 

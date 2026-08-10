@@ -21,6 +21,11 @@ correctness depends on four rules:
 These rules matter more than any adapter or naming strategy. A change that
 violates one is not a valid optimization.
 
+Owned CSS custom properties use a separate registry at the same seam. They
+share the global-poison rule but not the classname universe or naming
+configuration: custom properties are an explicit application-owned interface,
+and their generated names always retain the required `--` prefix.
+
 ## Pipeline
 
 ```text
@@ -87,6 +92,13 @@ at-rule context, and cascade order are proven safe.
 
 The CSS phase must happen before content hashes are finalized. A transformed
 stylesheet may never be paired with untransformed markup or JavaScript.
+
+`src/custom-properties.ts` rewrites explicitly owned custom-property
+declarations, `var()` references, `@property` registrations, and provable
+CSSOM string arguments. Its scanner ignores comments and strings and recognizes
+only semantic CSS positions; custom-property-looking URL text is not rewritten.
+Any source occurrence outside a supported CSSOM call excludes that property
+globally before source or CSS edits begin.
 
 ### 4. Reports and artifacts
 

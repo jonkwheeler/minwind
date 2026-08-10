@@ -6,6 +6,7 @@ import type { NameRegistry } from "./names.js";
 import type { CssTransformWarning } from "./transform-css.js";
 import type { TransformWarning } from "./transform-source.js";
 import { compareCodeUnits } from "./util.js";
+import type { CustomPropertyRegistry } from "./custom-properties.js";
 
 // U6 build artifacts (R5, R11; KTD9). The exclusion report and the rename map
 // are deterministic functions of the pre-pass registry, the frozen verdicts,
@@ -39,6 +40,10 @@ export interface TransformReport {
   exclusions: Array<{ token: string; reason: string }>;
   consolidation: { verdicts: Array<ReportVerdict> };
   warnings: Array<Record<string, unknown>>;
+  customProperties?: {
+    renames: Array<{ property: string; name: string }>;
+    excluded: Array<{ property: string; reason: "source-context" }>;
+  };
 }
 
 export interface RenameMap {
@@ -47,6 +52,7 @@ export interface RenameMap {
   names: Record<string, string>;
   // Consolidated name -> the sorted member list it stands for (KTD6).
   consolidated: Record<string, Array<string>>;
+  customProperties?: Record<string, string>;
 }
 
 // Serializes one warning, dropping undefined fields so the bytes are stable.
@@ -89,6 +95,7 @@ export interface BuildReportInput {
   verdicts: ReadonlyArray<ConsolidationVerdict>;
   warnings: ReadonlyArray<TransformWarning | CssTransformWarning>;
   consolidate: boolean;
+  customProperties?: CustomPropertyRegistry;
 }
 
 export function buildReport(input: BuildReportInput): TransformReport {
@@ -125,7 +132,7 @@ export function buildReport(input: BuildReportInput): TransformReport {
     return compareCodeUnits(warningKey(a), warningKey(b));
   });
 
-  return {
+  const report: TransformReport = {
     version: 1,
     flags: { enabled: true, consolidate: input.consolidate },
     summary: {
@@ -141,11 +148,21 @@ export function buildReport(input: BuildReportInput): TransformReport {
     consolidation: { verdicts },
     warnings,
   };
+  if (input.customProperties !== undefined) {
+    report.customProperties = {
+      renames: input.customProperties.entries(),
+      excluded: input.customProperties.excluded().map(function (property) {
+        return { property, reason: "source-context" as const };
+      }),
+    };
+  }
+  return report;
 }
 
 export function buildRenameMap(
   registry: NameRegistry,
   verdicts: ReadonlyArray<ConsolidationVerdict>,
+  customProperties?: CustomPropertyRegistry,
 ): RenameMap {
   const names: Record<string, string> = {};
   for (const entry of registry.entries()) {
@@ -162,7 +179,15 @@ export function buildRenameMap(
   for (const verdict of consolidatedVerdicts) {
     consolidated[verdict.name ?? ""] = [...verdict.tokens];
   }
-  return { version: 1, names, consolidated };
+  const map: RenameMap = { version: 1, names, consolidated };
+  if (customProperties !== undefined) {
+    const propertyNames: Record<string, string> = {};
+    for (const entry of customProperties.entries()) {
+      propertyNames[entry.name] = entry.property;
+    }
+    map.customProperties = propertyNames;
+  }
+  return map;
 }
 
 export interface ArtifactPaths {

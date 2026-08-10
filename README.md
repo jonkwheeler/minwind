@@ -275,6 +275,55 @@ An exclusion is global: an excluded original token cannot be assigned as a
 generated name, and that token remains unchanged across HTML, JavaScript, and
 CSS.
 
+## Owned CSS custom properties
+
+minwind can also shorten CSS custom-property names when your application owns
+their complete interface. Ownership is explicit—minwind never infers that a
+variable is private merely because it sees a declaration:
+
+```ts
+minwind({
+  customProperties: {
+    owned: ["--color-accent", "--surface", "--content-width"],
+  },
+});
+```
+
+Declarations, `var()` references, and `@property` registrations use the same
+stable generated name. Static property-name arguments to
+`element.style.setProperty()`, `element.style.removeProperty()`, and
+`getComputedStyle(element).getPropertyValue()` are rewritten too.
+
+```css
+/* before */
+:root {
+  --color-accent: #d946ef;
+}
+.button {
+  color: var(--color-accent);
+}
+
+/* after */
+:root {
+  --h4sh: #d946ef;
+}
+.button {
+  color: var(--h4sh);
+}
+```
+
+If an owned name appears anywhere in source outside those provable CSSOM
+contexts—dynamic construction, `cssText`, serialization, framework style
+objects, or application content—it keeps its original name globally and is
+listed under `customProperties.excluded` in the build report. SFC script usage
+is currently conservative and therefore excluded; `<style>` content is handled
+later as emitted CSS. Do not opt in variables that form a public theming
+interface for third-party code.
+
+This option is available through the Vite and webpack/rspack integrations.
+`minwind apply` does not accept it because the post-build CLI has no project
+configuration surface on which to declare ownership.
+
 ## Supported source files
 
 The source transform supports:

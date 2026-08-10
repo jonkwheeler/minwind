@@ -19,6 +19,10 @@ import {
   SFC_PATTERN,
   walkSfcClassContexts,
 } from "./sfc.js";
+import {
+  scanCustomPropertySource,
+  type CustomPropertyRegistry,
+} from "./custom-properties.js";
 
 // U3 source-module transform (KTD1, KTD4): the pure function the Vite
 // plugin's enforce-pre transform hook calls per module. Renames class
@@ -55,6 +59,7 @@ export interface TransformSourceOptions {
   // semantically free, so the DOM reads as the quote. Consolidation wins
   // when both match (a collapsed list has no order to preserve).
   quoteOrder?: ReadonlyMap<string, ReadonlyArray<string>>;
+  customProperties?: CustomPropertyRegistry;
 }
 
 export interface TransformSourceResult {
@@ -260,6 +265,20 @@ export function transformModule(
     literalEdits: Array<{ literal: LiteralOccurrence; keys: Array<string> }>;
   }
   const groupStack: Array<OpenGroup> = [];
+
+  if (options.customProperties !== undefined) {
+    const propertyScan = scanCustomPropertySource(
+      code,
+      id,
+      options.customProperties,
+    );
+    for (const span of propertyScan.rewritable) {
+      const name = options.customProperties.nameFor(span.property);
+      if (name !== undefined) {
+        addEdit(span.start, span.end, span.property, name);
+      }
+    }
+  }
 
   function collapseGroup(group: OpenGroup): boolean {
     // class="..." groups hold one literal: rewrite its content span only, so

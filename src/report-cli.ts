@@ -22,6 +22,10 @@ interface ReportShape {
     warnings?: number;
   };
   exclusions?: Array<{ token?: string; reason?: string }>;
+  customProperties?: {
+    renames?: Array<{ property?: string; name?: string }>;
+    excluded?: Array<{ property?: string; reason?: string }>;
+  };
   consolidation?: {
     verdicts?: Array<{
       tokens?: Array<string>;
@@ -85,6 +89,20 @@ export async function runReportCli(args: Array<string>): Promise<number> {
         lines.push("", "exclusions:");
         for (const entry of exclusions) {
           lines.push(`  ${entry.token ?? "?"} (${entry.reason ?? "?"})`);
+        }
+      }
+
+      const propertyRenames = report.customProperties?.renames ?? [];
+      const propertyExclusions = report.customProperties?.excluded ?? [];
+      if (propertyRenames.length > 0 || propertyExclusions.length > 0) {
+        lines.push("", "custom properties:");
+        for (const entry of propertyRenames) {
+          lines.push(`  ${entry.name ?? "?"} <- ${entry.property ?? "?"}`);
+        }
+        for (const entry of propertyExclusions) {
+          lines.push(
+            `  [kept: ${entry.reason ?? "?"}] ${entry.property ?? "?"}`,
+          );
         }
       }
 

@@ -23,21 +23,24 @@ adapters around that contract.
   both sides together.
 - Development output remains untouched.
 - Consolidation is optional and strictly more conservative than renaming.
+- Custom-property ownership is explicit. An unprovable source occurrence must
+  preserve that property name globally.
 
 ## Where to work
 
-| Task                                   | Primary files                                                    | Start with tests                                                    |
-| -------------------------------------- | ---------------------------------------------------------------- | ------------------------------------------------------------------- |
-| Source syntax or class-context support | `src/class-contexts.ts`, `src/transform-source.ts`, `src/sfc.ts` | `test/transform-source.test.ts`, `test/sfc.test.ts`                 |
-| Registry, exclusions, or hash names    | `src/names.ts`, `src/naming.ts`                                  | `test/names.test.ts`, `test/naming.test.ts`                         |
-| CSS selector rewriting                 | `src/transform-css.ts`, `src/css-util.ts`                        | `test/transform-css.test.ts`                                        |
-| Consolidation safety                   | `src/consolidate.ts`                                             | `test/consolidate.test.ts`                                          |
-| Vite lifecycle                         | `src/plugin.ts`, `src/prepass.ts`                                | `test/plugin.test.ts`, `test/prepass.test.ts`                       |
-| webpack/rspack lifecycle               | `src/webpack.ts`, `src/webpack-loader.ts`                        | `test/webpack.test.ts`                                              |
-| Post-build apply                       | `src/apply.ts`, `src/apply-cli.ts`, `src/transform-bundle.ts`    | `test/apply.test.ts`                                                |
-| Reports and artifacts                  | `src/report.ts`, `src/report-cli.ts`                             | `test/plugin.test.ts`, `test/webpack.test.ts`, `test/apply.test.ts` |
-| Measurement                            | `src/measure/`                                                   | `test/measure/`                                                     |
-| Browser equivalence and byte gates     | `harness/`                                                       | `pnpm compare`                                                      |
+| Task                                   | Primary files                                                    | Start with tests                                                                                                        |
+| -------------------------------------- | ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| Source syntax or class-context support | `src/class-contexts.ts`, `src/transform-source.ts`, `src/sfc.ts` | `test/transform-source.test.ts`, `test/sfc.test.ts`                                                                     |
+| Registry, exclusions, or hash names    | `src/names.ts`, `src/naming.ts`                                  | `test/names.test.ts`, `test/naming.test.ts`                                                                             |
+| CSS selector rewriting                 | `src/transform-css.ts`, `src/css-util.ts`                        | `test/transform-css.test.ts`                                                                                            |
+| Consolidation safety                   | `src/consolidate.ts`                                             | `test/consolidate.test.ts`                                                                                              |
+| Vite lifecycle                         | `src/plugin.ts`, `src/prepass.ts`                                | `test/plugin.test.ts`, `test/prepass.test.ts`                                                                           |
+| webpack/rspack lifecycle               | `src/webpack.ts`, `src/webpack-loader.ts`                        | `test/webpack.test.ts`                                                                                                  |
+| Post-build apply                       | `src/apply.ts`, `src/apply-cli.ts`, `src/transform-bundle.ts`    | `test/apply.test.ts`                                                                                                    |
+| Reports and artifacts                  | `src/report.ts`, `src/report-cli.ts`                             | `test/plugin.test.ts`, `test/webpack.test.ts`, `test/apply.test.ts`                                                     |
+| Owned CSS custom properties            | `src/custom-properties.ts`, adapter wiring                       | `test/custom-properties.test.ts`, `test/transform-css.test.ts`, `test/transform-source.test.ts`, `test/prepass.test.ts` |
+| Measurement                            | `src/measure/`                                                   | `test/measure/`                                                                                                         |
+| Browser equivalence and byte gates     | `harness/`                                                       | `pnpm compare`                                                                                                          |
 
 Confirm current filenames with `rg --files` before assuming a mapped test exists.
 

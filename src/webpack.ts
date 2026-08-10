@@ -22,6 +22,7 @@ import {
   type CssTransformWarning,
 } from "./transform-css.js";
 import type { TransformWarning } from "./transform-source.js";
+import type { CustomPropertiesConfig } from "./custom-properties.js";
 
 // webpack/rspack adapter (U3 outside Vite). The shape mirrors the Vite
 // plugin: a pre-pass runs once before compilation (beforeCompile), a loader
@@ -43,6 +44,7 @@ export interface MinwindWebpackOptions {
   naming?: NamingConfig;
   // Site-specific classes the transform must not touch.
   exclusions?: ExclusionConfig;
+  customProperties?: CustomPropertiesConfig;
   // Consolidation (repeated static lists collapse to one generated class).
   // Defaults to true.
   consolidate?: boolean;
@@ -105,6 +107,7 @@ export function rewriteCssAssets(
     consolidationVerdicts: ReadonlyArray<
       PrepassResult["consolidationVerdicts"][number]
     >;
+    customProperties?: PrepassResult["customProperties"];
   },
   consolidate: boolean,
 ): CssAssetRewriteResult {
@@ -115,7 +118,12 @@ export function rewriteCssAssets(
   const renamedAssets: Array<string> = [];
   for (const fileName of Object.keys(assets).sort()) {
     const original = assets[fileName];
-    const renamed = transformStylesheet({ css: original, registry, fileName });
+    const renamed = transformStylesheet({
+      css: original,
+      registry,
+      fileName,
+      customProperties: prepass.customProperties,
+    });
     warnings.push(...renamed.warnings);
     renamedAssets.push(renamed.css);
     let finalCss = renamed.css;
@@ -190,6 +198,7 @@ export class MinwindWebpackPlugin {
         cssEntry: plugin.options.cssEntry ?? path.join(root, "src", "app.css"),
         naming: plugin.options.naming,
         exclusions: plugin.options.exclusions,
+        customProperties: plugin.options.customProperties,
       });
       if (plugin.consolidate) {
         assertConsolidatedNames(
@@ -263,10 +272,12 @@ export class MinwindWebpackPlugin {
         verdicts: prepass.consolidationVerdicts,
         warnings: plugin.warnings,
         consolidate: plugin.consolidate,
+        customProperties: prepass.customProperties,
       });
       const map = buildRenameMap(
         prepass.registry,
         prepass.consolidationVerdicts,
+        prepass.customProperties,
       );
       await writeArtifacts(root, report, map);
     });

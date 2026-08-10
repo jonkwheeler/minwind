@@ -17,6 +17,7 @@ import {
   transformSource,
   type TransformSourceResult,
 } from "../src/transform-source.js";
+import { createCustomPropertyRegistry } from "../src/custom-properties.js";
 
 // A fixed toy registry as the U2 pre-pass would build it: eight renameable
 // tokens, one excluded-prefix token (dissolve-reduced), and two
@@ -195,6 +196,25 @@ export const cls = cn("flex", "mb-16")
     // A .mts file is never JSX-parsed: JSX-looking text stays untouched.
     const tsOnly = transform(code, "/site/src/c.mts");
     assert.ok(tsOnly === null || !tsOnly.code.includes(nameOf("flex")));
+  });
+});
+
+describe("transformSource owned custom properties", function () {
+  it("rewrites static CSSOM calls through the normal source-transform seam", function () {
+    const properties = createCustomPropertyRegistry({
+      owned: ["--color-accent"],
+    });
+    const result = transformSource({
+      code: `element.style.setProperty("--color-accent", value);`,
+      id: "/site/src/theme.ts",
+      registry: REGISTRY,
+      customProperties: properties,
+    });
+    assert.ok(result !== null);
+    assert.strictEqual(
+      result.code,
+      `element.style.setProperty("${properties.nameFor("--color-accent")}", value);`,
+    );
   });
 });
 

@@ -2,6 +2,10 @@ import { ident, parse, type CssNode } from "css-tree";
 import { applySpanEdits, childArray, type SpanEdit } from "./css-util.js";
 import type { NameRegistry, RegistryEntry } from "./names.js";
 import { compareCodeUnits } from "./util.js";
+import {
+  transformCustomPropertiesInCss,
+  type CustomPropertyRegistry,
+} from "./custom-properties.js";
 
 // U4 stylesheet transform (KTD2, KTD7): the pure function the Vite plugin's
 // enforce-post generateBundle hook calls per emitted CSS asset. Renames class
@@ -16,6 +20,7 @@ export interface TransformCssOptions {
   css: string;
   registry: NameRegistry;
   fileName?: string;
+  customProperties?: CustomPropertyRegistry;
 }
 
 export type CssTransformWarningKind = "mixed-compound-skipped";
@@ -649,9 +654,17 @@ export function transformStylesheet(
     renamed: new Map<string, string>(),
   };
   const edits = collectContainerEdits(childArray(ast), css, 0, ctx);
-  const output = applySpanEdits(css, edits, fileName);
+  const renamedClasses = applySpanEdits(css, edits, fileName);
+  const output =
+    options.customProperties === undefined
+      ? renamedClasses
+      : transformCustomPropertiesInCss(
+          renamedClasses,
+          options.customProperties,
+        );
 
   registry.assertBijection();
+  options.customProperties?.assertBijection();
   assertNoSurvivingTokens(registry, output, fileName);
 
   const renamed = Array.from(ctx.renamed, function ([token, name]) {

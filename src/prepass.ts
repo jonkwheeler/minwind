@@ -30,6 +30,12 @@ import {
   type StylesheetModel,
 } from "./consolidate.js";
 import { compareCodeUnits } from "./util.js";
+import {
+  createCustomPropertyRegistry,
+  scanCustomPropertySource,
+  type CustomPropertiesConfig,
+  type CustomPropertyRegistry,
+} from "./custom-properties.js";
 
 // U2 buildStart pre-pass (KTD3): establish the class universe from the
 // compiled CSS entry and the source token inventory from the module scan,
@@ -45,6 +51,7 @@ export interface PrepassOptions {
   // Site-specific classes the transform must not touch (runtime-injected
   // markup classes, third-party widget classes). Defaults to none.
   exclusions?: ExclusionConfig;
+  customProperties?: CustomPropertiesConfig;
 }
 
 export interface PrepassResult {
@@ -58,6 +65,7 @@ export interface PrepassResult {
   stylesheet: string;
   stylesheetModel: StylesheetModel;
   naming?: NamingResult;
+  customProperties?: CustomPropertyRegistry;
 }
 
 interface SourceScan {
@@ -278,6 +286,31 @@ export async function runPrepass(
   const stylesheetModel = modelStylesheet(stylesheet);
   const scan = await scanSources(options.root);
 
+  let customProperties: CustomPropertyRegistry | undefined;
+  if (options.customProperties !== undefined) {
+    const provisional = createCustomPropertyRegistry(options.customProperties);
+    const unsafe = new Set<string>();
+    const paths = await sourceModulePaths(options.root);
+    const texts = await Promise.all(
+      paths.map(function (filePath) {
+        return readFile(filePath, "utf8");
+      }),
+    );
+    for (let index = 0; index < paths.length; index += 1) {
+      const sourceScan = scanCustomPropertySource(
+        texts[index],
+        paths[index],
+        provisional,
+      );
+      for (const property of sourceScan.unsafe) unsafe.add(property);
+    }
+    customProperties = createCustomPropertyRegistry(
+      options.customProperties,
+      unsafe,
+    );
+    customProperties.assertBijection();
+  }
+
   // Detection-only tokens feed the exclusion report (KTD4), so they join the
   // registry's source set; the runtime-context precedence in the registry
   // keeps them excluded.
@@ -372,5 +405,6 @@ export async function runPrepass(
     stylesheet,
     stylesheetModel,
     naming,
+    customProperties,
   };
 }

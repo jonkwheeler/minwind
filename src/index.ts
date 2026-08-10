@@ -3,6 +3,7 @@ import { minwind } from "./plugin.js";
 export { minwind, resolveFlags } from "./plugin.js";
 export type { MinwindFlags, MinwindOptions } from "./plugin.js";
 export type { NamingConfig, NamingList, NamingResult } from "./naming.js";
+export type { CustomPropertiesConfig } from "./custom-properties.js";
 export type {
   ExclusionConfig,
   ExclusionEntry,
