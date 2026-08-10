@@ -154,9 +154,9 @@ zero tokens, it was generated from a renamed build — regenerate it with
 ### Case study: Spaceballs-themed classnames
 
 The `words` strategy exists because of
-[jonkwheeler.com](https://github.com/jonkwheeler/jonkwheeler-dot-com-solidstart),
-which ships class names drawn from Spaceballs. The whole setup, lessons
-included:
+[jonkwheeler.com](https://jonkwheeler.com), which ships class names drawn
+from Spaceballs — open devtools there and read the DOM. The whole setup,
+lessons included:
 
 **1. Curate a vocabulary.** Every word must stand alone in a class
 attribute — single words, no phrases, nothing that reads as mid-sentence
