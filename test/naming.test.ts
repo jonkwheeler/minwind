@@ -169,10 +169,10 @@ describe("resolveNaming quotes strategy", function () {
     assert.strictEqual(result.names.get("p-4"), "schwartz");
   });
 
-  it("lets longer lists claim words before singletons", function () {
-    // Long lists are the hardest to satisfy and are typically the components
-    // that render most; a singleton's source count says nothing about how
-    // often it renders, so it picks last and spends leftover words.
+  it("deals singletons from the vocabulary, never quote words", function () {
+    // A lone word is mid-quote residue and reads as noise in the DOM, so
+    // 1-token lists skip the corpus entirely and spend vocabulary words
+    // (chosen to stand alone), falling back to hashes when it runs out.
     const result = quotes(
       ["may the schwartz be with you", "plaid"],
       [
@@ -183,15 +183,19 @@ describe("resolveNaming quotes strategy", function () {
         "site-card",
         "text-lg",
         "block-ish",
+        "gap-2",
       ],
       [
         list(100, "block-ish"),
+        list(50, "gap-2"),
         list(1, "flex", "items-center", "mb-16", "p-4", "site-card", "text-lg"),
       ],
+      ["darkhelmet"],
     );
     assert.strictEqual(result.names.get("flex"), "may");
-    assert.strictEqual(result.names.get("block-ish"), "plaid");
-    assert.strictEqual(result.quotedLists, 2);
+    assert.strictEqual(result.names.get("block-ish"), "darkhelmet");
+    assert.strictEqual(result.names.get("gap-2"), hashClassName("gap-2"));
+    assert.strictEqual(result.quotedLists, 1);
   });
 
   it("breaks size ties by frequency", function () {

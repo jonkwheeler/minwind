@@ -5,13 +5,15 @@ import { compareCodeUnits } from "./util.js";
 // Themed naming strategies: an opt-in alternative to content-hash naming
 // (KTD5) for sites that want personality in the DOM. 'words' deals a curated
 // vocabulary to class tokens; 'quotes' goes further — it assigns words so a
-// whole class list reads as a quote fragment. Class order inside an
-// attribute is semantically free (only stylesheet order matters), so the
-// source transform may reorder a fully-renamed static list to match its
-// quote's word order; the global token->name bijection (R2) is untouched,
-// and uncovered tokens fall back to vocabulary words, then to content-hash
-// names. Everything is a deterministic function of the token set, the list
-// frequencies, and the corpus.
+// whole class list reads as a quote fragment. Only lists of two or more
+// tokens participate in quotes: a single-word class can never read as a
+// phrase, so singletons draw from the vocabulary instead. Class order
+// inside an attribute is semantically free (only stylesheet order matters),
+// so the source transform may reorder a fully-renamed static list to match
+// its quote's word order; the global token->name bijection (R2) is
+// untouched, and uncovered tokens fall back to vocabulary words, then to
+// content-hash names. Everything is a deterministic function of the token
+// set, the list frequencies, and the corpus.
 
 export type NamingConfig =
   | { strategy: "hash" }
@@ -164,6 +166,12 @@ export function resolveNaming(
 
   let quotedLists = 0;
   for (const list of sortedLists) {
+    // Singletons never take quote words: a lone word is mid-quote residue
+    // ("feet" from "my brains are going into my feet") and reads as noise
+    // in the DOM. They draw from the vocabulary below, where every word is
+    // chosen to stand alone, and the corpus stays whole for lists that can
+    // actually carry a phrase.
+    if (list.tokens.length < 2) continue;
     const candidates = fragments.get(list.tokens.length);
     if (candidates === undefined) continue;
     for (const fragment of candidates) {
