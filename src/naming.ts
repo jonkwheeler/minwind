@@ -132,7 +132,6 @@ export function resolveNaming(
   if (config.strategy === "hash") return undefined;
   const corpus = config.strategy === "quotes" ? config.corpus : [];
   const tokenSet = new Set<string>(tokens);
-  const sortedTokens = Array.from(tokens).sort(compareCodeUnits);
 
   // Only lists whose tokens all rename can participate: a list carrying an
   // excluded token keeps that token's original bytes, so its words can
@@ -228,12 +227,32 @@ export function resolveNaming(
   ).filter(function (word) {
     return !tokenForWord.has(word);
   });
+
+  // Deal the shortest words to the hottest tokens: a token's render weight
+  // is the summed count of every list carrying it, and short names cost the
+  // fewest bytes where they render most. Weight ties keep token code-unit
+  // order; word length ties keep the vocabulary's curation order.
+  const weight = new Map<string, number>();
+  for (const list of lists) {
+    for (const token of list.tokens) {
+      weight.set(token, (weight.get(token) ?? 0) + list.count);
+    }
+  }
+  const dealOrder = Array.from(tokens).sort(function (a, b) {
+    return (
+      (weight.get(b) ?? 0) - (weight.get(a) ?? 0) || compareCodeUnits(a, b)
+    );
+  });
+  const shortestFirst = vocabulary.slice().sort(function (a, b) {
+    return a.length - b.length;
+  });
+
   const names = new Map<string, string>(assigned);
   let dealt = 0;
-  for (const token of sortedTokens) {
+  for (const token of dealOrder) {
     if (names.has(token)) continue;
-    if (dealt < vocabulary.length) {
-      names.set(token, vocabulary[dealt]);
+    if (dealt < shortestFirst.length) {
+      names.set(token, shortestFirst[dealt]);
       dealt += 1;
     } else {
       names.set(token, hashClassName(token));

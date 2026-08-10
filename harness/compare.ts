@@ -108,7 +108,10 @@ export interface GateInput {
   sizes: SizeSummary;
 }
 
-export function evaluateGate(report: GateInput): GateVerdict {
+export function evaluateGate(
+  report: GateInput,
+  minClassDropPercent: number = MIN_CLASS_LENGTH_DROP_PERCENT,
+): GateVerdict {
   const failures: Array<GateFailure> = [];
   const missing = [
     ...report.missingRoutes.offOnly,
@@ -145,7 +148,7 @@ export function evaluateGate(report: GateInput): GateVerdict {
   }
   if (
     report.classLength.dropPercent === null ||
-    report.classLength.dropPercent < MIN_CLASS_LENGTH_DROP_PERCENT
+    report.classLength.dropPercent < minClassDropPercent
   ) {
     failures.push({
       kind: "class-length",
@@ -156,7 +159,7 @@ export function evaluateGate(report: GateInput): GateVerdict {
             ? "n/a"
             : `${report.classLength.dropPercent.toFixed(2)}%`
         } ` +
-        `(needs at least ${MIN_CLASS_LENGTH_DROP_PERCENT}%)`,
+        `(needs at least ${minClassDropPercent}%)`,
     });
   }
   return { passed: failures.length === 0, failures };
@@ -168,6 +171,9 @@ export interface CompareDirsOptions {
   browser?: Browser;
   crawl?: Partial<CrawlOptions>;
   screenshotTolerance?: ScreenshotTolerance;
+  // Themed naming trades class-length bytes for personality, so themed
+  // sites lower this bar; the rendering gates are not adjustable.
+  minClassDropPercent?: number;
   // Test seams for the harness-owned resources: a rejecting serve() forces
   // a server-startup failure, and launchBrowser observes (or fakes) the
   // browser the harness would launch, without port or process tricks.
@@ -359,7 +365,7 @@ export async function compareDirs(
     },
     durationMs: Date.now() - started,
   };
-  report.passed = evaluateGate(report).passed;
+  report.passed = evaluateGate(report, options.minClassDropPercent).passed;
   return report;
 }
 
@@ -385,6 +391,12 @@ Options:
   --json                Emit the full report as JSON instead of text
   --build-timeout <ms>  Kill a site build that runs longer than this
                         (default 600000; env MINWIND_COMPARE_BUILD_TIMEOUT_MS)
+  --min-class-drop <pct>  Minimum median class-attribute length drop the
+                        gate requires (default 50). Themed naming (words or
+                        quotes) trades bytes for personality, so themed
+                        sites can lower the bar here — the rendering gates
+                        (pixel equality, console errors, interactions) are
+                        not negotiable.
   --help                Show this message
 
 With no options, both builds run sequentially into
@@ -404,6 +416,7 @@ interface CliOptions {
   onDir: string | null;
   json: boolean;
   buildTimeoutMs: number;
+  minClassDropPercent: number;
 }
 
 // Site builds are allowed to be slow, but not unbounded: pnpm build hangs
@@ -425,12 +438,24 @@ function parseTimeout(value: string, source: string): number {
   return Number(value);
 }
 
+function parsePercent(value: string, source: string): number {
+  if (!/^\d+(\.\d+)?$/.test(value)) {
+    usageError(`${source} must be a number between 0 and 100, got "${value}"`);
+  }
+  const percent = Number(value);
+  if (percent < 0 || percent > 100) {
+    usageError(`${source} must be a number between 0 and 100, got "${value}"`);
+  }
+  return percent;
+}
+
 export function parseArgs(argv: Array<string>): CliOptions {
   let site: string | null = null;
   let offDir: string | null = null;
   let onDir: string | null = null;
   let json = false;
   let buildTimeoutMs = DEFAULT_BUILD_TIMEOUT_MS;
+  let minClassDropPercent = MIN_CLASS_LENGTH_DROP_PERCENT;
   const envTimeout = process.env[BUILD_TIMEOUT_ENV];
   if (envTimeout !== undefined) {
     buildTimeoutMs = parseTimeout(envTimeout, BUILD_TIMEOUT_ENV);
@@ -476,6 +501,17 @@ export function parseArgs(argv: Array<string>): CliOptions {
         "--build-timeout",
       );
       i += 1;
+    } else if (arg === "--min-class-drop") {
+      const value = argv[i + 1];
+      if (value === undefined) usageError("--min-class-drop requires a value");
+      minClassDropPercent = parsePercent(value, "--min-class-drop");
+      i += 2;
+    } else if (arg.startsWith("--min-class-drop=")) {
+      minClassDropPercent = parsePercent(
+        arg.slice("--min-class-drop=".length),
+        "--min-class-drop",
+      );
+      i += 1;
     } else {
       usageError(`unknown option: ${arg}`);
     }
@@ -484,7 +520,7 @@ export function parseArgs(argv: Array<string>): CliOptions {
   if ((offDir === null) !== (onDir === null)) {
     usageError("--off-dir and --on-dir must be given together");
   }
-  return { site, offDir, onDir, json, buildTimeoutMs };
+  return { site, offDir, onDir, json, buildTimeoutMs, minClassDropPercent };
 }
 
 // The build spawns grandchildren (pnpm -> vinxi -> vite), so the child is
@@ -781,7 +817,10 @@ function renderRoute(route: RouteComparison): Array<string> {
   return lines;
 }
 
-function renderReport(report: HarnessReport): string {
+function renderReport(
+  report: HarnessReport,
+  minClassDropPercent: number = MIN_CLASS_LENGTH_DROP_PERCENT,
+): string {
   const { compare } = report;
   const lines: Array<string> = [];
   lines.push(`minwind-compare: ${compare.passed ? "PASS" : "FAIL"}`);
@@ -854,7 +893,7 @@ function renderReport(report: HarnessReport): string {
     );
   }
 
-  const gate = evaluateGate(compare);
+  const gate = evaluateGate(compare, minClassDropPercent);
   if (gate.failures.length > 0) {
     lines.push("");
     lines.push("gate failures:");
@@ -930,7 +969,9 @@ async function main(): Promise<number> {
   }
 
   process.stderr.write("minwind-compare: crawling both outputs ...\n");
-  const compare = await compareDirs(offDir, onDir, {});
+  const compare = await compareDirs(offDir, onDir, {
+    minClassDropPercent: options.minClassDropPercent,
+  });
   const upperBound = await measureUpperBound(offDir, repoRoot);
   const report: HarnessReport = {
     compare,
@@ -941,7 +982,7 @@ async function main(): Promise<number> {
   if (options.json) {
     process.stdout.write(JSON.stringify(report, null, 2) + "\n");
   } else {
-    process.stdout.write(renderReport(report));
+    process.stdout.write(renderReport(report, options.minClassDropPercent));
   }
   return compare.passed ? 0 : 1;
 }

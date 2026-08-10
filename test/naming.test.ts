@@ -71,8 +71,9 @@ describe("resolveNaming words strategy", function () {
       new Set(),
     );
     assert.ok(result !== undefined);
-    assert.strictEqual(result.names.get("flex"), "megamaid");
-    assert.strictEqual(result.names.get("p-4"), "tshirt");
+    // Dealt shortest-first, so "tshirt" (6) precedes "megamaid" (8).
+    assert.strictEqual(result.names.get("flex"), "tshirt");
+    assert.strictEqual(result.names.get("p-4"), "megamaid");
   });
 
   it("falls back to content-hash names when the vocabulary runs out", function () {
@@ -85,6 +86,20 @@ describe("resolveNaming words strategy", function () {
     assert.ok(result !== undefined);
     assert.strictEqual(result.names.get("flex"), "plaid");
     assert.strictEqual(result.names.get("p-4"), hashClassName("p-4"));
+  });
+
+  it("deals the shortest words to the hottest tokens", function () {
+    // mb-16 renders 100 times across its lists, flex once: the two-letter
+    // word goes to mb-16 regardless of curation or code-unit order.
+    const result = resolveNaming(
+      { strategy: "words", vocabulary: ["schwartz", "mo"] },
+      ["flex", "mb-16"],
+      [list(1, "flex"), list(100, "mb-16")],
+      new Set(),
+    );
+    assert.ok(result !== undefined);
+    assert.strictEqual(result.names.get("mb-16"), "mo");
+    assert.strictEqual(result.names.get("flex"), "schwartz");
   });
 });
 
@@ -154,7 +169,8 @@ describe("resolveNaming quotes strategy", function () {
     );
     assert.strictEqual(result.quotedLists, 0);
     assert.strictEqual(result.names.get("flex"), "plaid");
-    assert.strictEqual(result.names.get("p-4"), "megamaid");
+    // Dealt shortest-first: plaid, schwartz, megamaid, then ludicrous.
+    assert.strictEqual(result.names.get("p-4"), "ludicrous");
   });
 
   it("ignores quote runs with repeated words", function () {
