@@ -115,9 +115,7 @@ export function runProminenceCli(argv: Array<string>): number {
   }
   const htmlFiles = walkHtmlFiles(options.buildDir);
   if (htmlFiles.length === 0) {
-    process.stderr.write(
-      `Error: no .html files under ${options.buildDir}\n`,
-    );
+    process.stderr.write(`Error: no .html files under ${options.buildDir}\n`);
     return 1;
   }
   const pages: Array<ProminencePage> = htmlFiles.map(function (file) {
