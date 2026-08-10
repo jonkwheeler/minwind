@@ -83,15 +83,106 @@ function transformWithVerdicts(
 }
 
 describe("shouldTransformModule", function () {
-  it("accepts src .ts/.tsx modules and rejects everything else", function () {
+  it("accepts src TS/JS-family modules and rejects everything else", function () {
     assert.ok(shouldTransformModule("/site/src/routes/index.tsx"));
     assert.ok(shouldTransformModule("/site/src/utils/dissolve.ts"));
     assert.ok(shouldTransformModule("src/app.tsx"));
     assert.ok(shouldTransformModule("C:\\site\\src\\app.tsx"));
     assert.ok(shouldTransformModule("/site/src/app.tsx?import"));
+    assert.ok(shouldTransformModule("/site/src/routes/plain.js"));
+    assert.ok(shouldTransformModule("/site/src/routes/widget.jsx"));
+    assert.ok(shouldTransformModule("/site/src/lib/server.mts"));
+    assert.ok(shouldTransformModule("/site/src/lib/legacy.cts"));
+    assert.ok(shouldTransformModule("/site/src/lib/util.mjs"));
+    assert.ok(shouldTransformModule("/site/src/lib/util.cjs"));
     assert.ok(!shouldTransformModule("/site/node_modules/pkg/index.tsx"));
+    assert.ok(!shouldTransformModule("/site/node_modules/pkg/index.jsx"));
     assert.ok(!shouldTransformModule("/site/src/styles.css"));
     assert.ok(!shouldTransformModule("/site/src/types.d.ts"));
+    assert.ok(!shouldTransformModule("/site/src/types.d.mts"));
+    assert.ok(!shouldTransformModule("/site/src/types.d.cts"));
+    assert.ok(!shouldTransformModule("/site/src/component.vue"));
+    assert.ok(!shouldTransformModule("/site/src/component.svelte"));
+    assert.ok(!shouldTransformModule("/site/src/page.astro"));
+  });
+});
+
+describe("transformSource JS-family modules", function () {
+  it("renames JSX class attributes in .jsx modules", function () {
+    const result = transform(
+      `export function A() {
+  return <div class="flex flex-col">x</div>
+}
+`,
+      "/site/src/routes/test.jsx",
+    );
+    assert.ok(result !== null);
+    assert.strictEqual(
+      result.code,
+      `export function A() {
+  return <div class="${nameOf("flex")} ${nameOf("flex-col")}">x</div>
+}
+`,
+    );
+  });
+
+  it("parses JSX in .js modules (React-flavored projects compile it)", function () {
+    const result = transform(
+      `export function A() {
+  return <div class="flex p-4">x</div>
+}
+`,
+      "/site/src/routes/test.js",
+    );
+    assert.ok(result !== null);
+    assert.ok(
+      result.code.includes(`class="${nameOf("flex")} ${nameOf("p-4")}"`),
+    );
+  });
+
+  it("renames cn() arguments in plain .js modules without JSX", function () {
+    const result = transform(
+      `import { cn } from "./cn.js"
+export const cls = cn("flex", "mb-16")
+`,
+      "/site/src/lib/util.js",
+    );
+    assert.ok(result !== null);
+    assert.ok(
+      result.code.includes(`cn("${nameOf("flex")}", "${nameOf("mb-16")}")`),
+    );
+  });
+
+  it("renames class attributes in .mjs and .cjs modules", function () {
+    for (const id of ["/site/src/a.mjs", "/site/src/b.cjs"]) {
+      const result = transform(
+        `export const el = <span class="items-center">y</span>\n`,
+        id,
+      );
+      assert.ok(result !== null, `${id} must transform`);
+      assert.ok(result.code.includes(`class="${nameOf("items-center")}"`));
+    }
+  });
+
+  it("renames cn() arguments in .mts and .cts modules", function () {
+    const code = `export function A() {
+  return <div class="flex">x</div>
+}
+`;
+    // .mts/.cts are TypeScript: no JSX, but cn() and classList contexts apply.
+    for (const id of ["/site/src/a.mts", "/site/src/b.cts"]) {
+      const result = transform(
+        `import { cn } from "./cn.js"\nexport const cls = cn("flex", "p-4")\n`,
+        id,
+      );
+      assert.ok(result !== null, `${id} must transform`);
+      assert.ok(
+        result.code.includes(`cn("${nameOf("flex")}", "${nameOf("p-4")}")`),
+      );
+    }
+    // A .mts file is never JSX-parsed: JSX-looking text stays untouched.
+    const tsOnly = transform(code, "/site/src/c.mts");
+    assert.ok(tsOnly === null || !tsOnly.code.includes(nameOf("flex")));
   });
 });
 

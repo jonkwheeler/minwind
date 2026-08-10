@@ -3,7 +3,9 @@ import path from "node:path";
 import process from "node:process";
 import type { Plugin } from "vite";
 import {
+  DECLARATION_PATTERN,
   parseSourceModule,
+  SOURCE_MODULE_PATTERN,
   tokenize,
   walkClassContexts,
   type RenameContextKind,
@@ -174,7 +176,8 @@ async function scanForJsxClassTokens(
         if (await walk(full)) return true;
         continue;
       }
-      if (!/\.tsx?$/.test(entry.name)) continue;
+      if (!SOURCE_MODULE_PATTERN.test(entry.name)) continue;
+      if (DECLARATION_PATTERN.test(entry.name)) continue;
       const sourceFile = parseSourceModule(full, await readFile(full, "utf8"));
       let hit = false;
       walkClassContexts(sourceFile, {

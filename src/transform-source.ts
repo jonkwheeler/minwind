@@ -1,6 +1,8 @@
 import MagicString, { type SourceMap } from "magic-string";
 import {
+  DECLARATION_PATTERN,
   parseSourceModule,
+  SOURCE_MODULE_PATTERN,
   tokenize,
   walkClassContexts,
   type ClassContextKind,
@@ -61,14 +63,15 @@ export interface SourceEdit {
   replacement: string;
 }
 
-// The KTD1 module filter: src/**/*.{ts,tsx}, node_modules excluded. Any
-// absolute path with a /src/ segment qualifies; Vite only feeds the plugin
-// modules from the app graph.
+// The KTD1 module filter: src/**/*.{ts,tsx,js,jsx,mts,cts,mjs,cjs},
+// node_modules and declaration files excluded. Any absolute path with a
+// /src/ segment qualifies; Vite only feeds the plugin modules from the app
+// graph.
 export function shouldTransformModule(id: string): boolean {
   const clean = id.split("?")[0].replace(/\\/g, "/");
   if (clean.includes("node_modules")) return false;
-  if (clean.endsWith(".d.ts")) return false;
-  if (!clean.endsWith(".ts") && !clean.endsWith(".tsx")) return false;
+  if (DECLARATION_PATTERN.test(clean)) return false;
+  if (!SOURCE_MODULE_PATTERN.test(clean)) return false;
   return clean.startsWith("src/") || clean.includes("/src/");
 }
 

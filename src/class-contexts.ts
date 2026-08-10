@@ -82,20 +82,41 @@ export function tokenize(text: string): Array<string> {
   });
 }
 
-export function parseSourceModule(
-  filePath: string,
-  text: string,
-): ts.SourceFile {
+// Every module extension the TS compiler API can walk for class contexts:
+// TypeScript and JavaScript families, including the ESM/CJS variants. SFC
+// formats (.vue/.svelte/.astro) are NOT here — their script blocks are
+// carved out and parsed per-block with these same kinds.
+export const SOURCE_MODULE_PATTERN = /\.(?:[cm]?[jt]s|[jt]sx)$/;
+
+// Declaration files carry no runtime class contexts; the module filter and
+// the scans skip them so they never feed the parser.
+export const DECLARATION_PATTERN = /\.d\.[cm]?ts$/;
+
+export function scriptKindFor(filePath: string): ts.ScriptKind {
   // Strip Vite query suffixes (?pick=default&pick=$css) before choosing the
   // script kind: a queried id never ends with .tsx, and parsing picked JSX as
   // plain TS silently yields no rename contexts instead of a parse error.
   const clean = filePath.split("?")[0];
+  if (clean.endsWith(".tsx")) return ts.ScriptKind.TSX;
+  if (/\.[cm]?ts$/.test(clean)) return ts.ScriptKind.TS;
+  // The JS family parses as JSX: JSX mode is a parse superset of plain JS
+  // for every construct valid in a .js file (angle-bracket assertions are
+  // TS-only), and React-flavored projects legitimately put JSX in .js files
+  // (@vitejs/plugin-react compiles it). Parsing .js as plain JS instead
+  // would silently miss class attributes there.
+  return ts.ScriptKind.JSX;
+}
+
+export function parseSourceModule(
+  filePath: string,
+  text: string,
+): ts.SourceFile {
   return ts.createSourceFile(
     filePath,
     text,
     ts.ScriptTarget.Latest,
     true,
-    clean.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
+    scriptKindFor(filePath),
   );
 }
 
