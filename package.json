@@ -11,6 +11,14 @@
     "./measure": {
       "types": "./dist/measure/index.d.ts",
       "import": "./dist/measure/index.js"
+    },
+    "./webpack": {
+      "types": "./dist/webpack.d.ts",
+      "import": "./dist/webpack.js"
+    },
+    "./webpack/loader": {
+      "types": "./dist/webpack-loader.d.ts",
+      "import": "./dist/webpack-loader.js"
     }
   },
   "bin": {
