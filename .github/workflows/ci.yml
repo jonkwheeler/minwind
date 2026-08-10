@@ -38,5 +38,13 @@ jobs:
       - name: Comparison harness (builds the demo off + on, crawls, gates)
         run: pnpm run compare
 
+      # The harness leaves the demo's .output holding the ON build; the
+      # build-gated tests (golden, arm identity, inventory) expect OFF.
+      - name: Rebuild demo with MINWIND=off for gated tests
+        working-directory: examples/demo
+        run: pnpm build
+        env:
+          MINWIND: off
+
       - name: Unit tests (demo build now present, gated tests included)
         run: pnpm test

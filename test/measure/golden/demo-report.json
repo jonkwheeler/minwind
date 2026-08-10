@@ -1,6 +1,6 @@
 {
   "tool": {
-    "name": "tw-measure",
+    "name": "minwind",
     "version": "0.1.0"
   },
   "runtime": {
@@ -8,162 +8,44 @@
     "zlib": "1.3.0.1-motley-82a5fec",
     "brotli": "1.1.0"
   },
-  "buildDir": "/Users/jonwheeler/jon_code/jonkwheeler-dot-com-solidstart/dist",
+  "buildDir": "/Users/jonwheeler/jon_code/minwind/examples/demo/.output/public",
   "thresholdPercent": 5,
-  "htmlFiles": ["blog/comb-the-desert.html", "bookmarks.html", "index.html"],
-  "cssFiles": ["_build/assets/entry-client-myZvc0vZ.css"],
+  "htmlFiles": ["404/index.html", "about/index.html", "index.html"],
+  "cssFiles": [
+    "_build/assets/client-CTZZ5qDH.css",
+    "_server/assets/app-CTZZ5qDH.css",
+    "assets/ssr-CTZZ5qDH.css"
+  ],
   "jsFiles": [
-    "_build/assets/_...404_-CkQJ713r.js",
-    "_build/assets/blog-post-s965MdYR.js",
-    "_build/assets/bookmarks-CDgFJz3J.js",
-    "_build/assets/catalog-BDicbmr7.js",
-    "_build/assets/cn-Dg0kKLRy.js",
-    "_build/assets/comb-the-desert-D19U5kGE.js",
-    "_build/assets/components-BXtUvTKd.js",
-    "_build/assets/dissolve-A1MzeaMg.js",
-    "_build/assets/entry-client-B9KUWgOY.js",
-    "_build/assets/index-BXZBr--t.js",
-    "_build/assets/jam-switcher-Bt7ODHKh.js",
-    "_build/assets/meta-tags-CnjmiRE-.js",
-    "_build/assets/preload-helper-Czpn1I53.js",
-    "_build/assets/routing-BNCVYYjx.js",
-    "_build/assets/upgrading-to-tailwind-v4-oyIU7J6S.js",
-    "_build/assets/web-f_r5mBxc.js"
+    "_build/assets/_...404_-BVHiNPpb.js",
+    "_build/assets/about-mRXqu0qt.js",
+    "_build/assets/client-CvU1EccY.js",
+    "_build/assets/components-I1iEu2cH.js",
+    "_build/assets/index-BALttTvm.js",
+    "_build/assets/web-CL-KMgy-.js"
   ],
-  "warnings": [
-    "sitemap route has no HTML file: /blog/upgrading-to-tailwind-v4"
-  ],
+  "warnings": [],
   "classModel": {
     "entries": [
-      {
-        "token": "[&_pre]:overflow-x-auto",
-        "category": "css-only",
-        "excluded": true,
-        "htmlOccurrences": 0,
-        "htmlBytes": 0,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
-        "variantReferences": 0,
-        "jsReferenced": false
-      },
-      {
-        "token": "[&_pre]:p-4",
-        "category": "css-only",
-        "excluded": true,
-        "htmlOccurrences": 0,
-        "htmlBytes": 0,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
-        "variantReferences": 0,
-        "jsReferenced": false
-      },
-      {
-        "token": "[&_pre]:rounded-lg",
-        "category": "css-only",
-        "excluded": true,
-        "htmlOccurrences": 0,
-        "htmlBytes": 0,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
-        "variantReferences": 0,
-        "jsReferenced": false
-      },
-      {
-        "token": "[&_pre_code]:text-xs",
-        "category": "css-only",
-        "excluded": true,
-        "htmlOccurrences": 0,
-        "htmlBytes": 0,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
-        "variantReferences": 0,
-        "jsReferenced": false
-      },
-      {
-        "token": "accent-inline-button",
-        "category": "js-referenced",
-        "excluded": true,
-        "htmlOccurrences": 5,
-        "htmlBytes": 100,
-        "ruleCount": 4,
-        "utilityRuleCount": 2,
-        "variantReferences": 0,
-        "jsReferenced": true
-      },
-      {
-        "token": "accent-link",
-        "category": "js-referenced",
-        "excluded": true,
-        "htmlOccurrences": 1010,
-        "htmlBytes": 11110,
-        "ruleCount": 2,
-        "utilityRuleCount": 2,
-        "variantReferences": 0,
-        "jsReferenced": true
-      },
       {
         "token": "active",
         "category": "js-referenced",
         "excluded": true,
-        "htmlOccurrences": 2,
-        "htmlBytes": 12,
+        "htmlOccurrences": 6,
+        "htmlBytes": 36,
         "ruleCount": 0,
         "utilityRuleCount": 0,
         "variantReferences": 0,
         "jsReferenced": true
       },
       {
-        "token": "active:translate-y-px",
+        "token": "bg-white",
         "category": "js-referenced",
         "excluded": true,
-        "htmlOccurrences": 3448,
-        "htmlBytes": 72408,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
-        "variantReferences": 0,
-        "jsReferenced": true
-      },
-      {
-        "token": "bg-dark-secondary/40",
-        "category": "js-referenced",
-        "excluded": true,
-        "htmlOccurrences": 0,
-        "htmlBytes": 0,
-        "ruleCount": 2,
-        "utilityRuleCount": 2,
-        "variantReferences": 0,
-        "jsReferenced": true
-      },
-      {
-        "token": "bg-transparent",
-        "category": "js-referenced",
-        "excluded": true,
-        "htmlOccurrences": 1,
-        "htmlBytes": 14,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
-        "variantReferences": 0,
-        "jsReferenced": true
-      },
-      {
-        "token": "block",
-        "category": "js-referenced",
-        "excluded": true,
-        "htmlOccurrences": 16,
-        "htmlBytes": 80,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
-        "variantReferences": 0,
-        "jsReferenced": true
-      },
-      {
-        "token": "bookmark-empty-state",
-        "category": "js-referenced",
-        "excluded": true,
-        "htmlOccurrences": 0,
-        "htmlBytes": 0,
-        "ruleCount": 4,
-        "utilityRuleCount": 0,
+        "htmlOccurrences": 12,
+        "htmlBytes": 96,
+        "ruleCount": 3,
+        "utilityRuleCount": 3,
         "variantReferences": 0,
         "jsReferenced": true
       },
@@ -171,21 +53,10 @@
         "token": "border",
         "category": "js-referenced",
         "excluded": true,
-        "htmlOccurrences": 0,
-        "htmlBytes": 0,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
-        "variantReferences": 0,
-        "jsReferenced": true
-      },
-      {
-        "token": "border-accent",
-        "category": "js-referenced",
-        "excluded": true,
-        "htmlOccurrences": 0,
-        "htmlBytes": 0,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
+        "htmlOccurrences": 13,
+        "htmlBytes": 78,
+        "ruleCount": 3,
+        "utilityRuleCount": 3,
         "variantReferences": 0,
         "jsReferenced": true
       },
@@ -193,98 +64,98 @@
         "token": "border-b",
         "category": "js-referenced",
         "excluded": true,
-        "htmlOccurrences": 3449,
-        "htmlBytes": 27592,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
+        "htmlOccurrences": 3,
+        "htmlBytes": 24,
+        "ruleCount": 3,
+        "utilityRuleCount": 3,
         "variantReferences": 0,
         "jsReferenced": true
       },
       {
-        "token": "border-dark-border",
+        "token": "border-ink/10",
         "category": "js-referenced",
         "excluded": true,
-        "htmlOccurrences": 9,
-        "htmlBytes": 162,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
+        "htmlOccurrences": 19,
+        "htmlBytes": 247,
+        "ruleCount": 6,
+        "utilityRuleCount": 6,
         "variantReferences": 0,
         "jsReferenced": true
       },
       {
-        "token": "border-transparent",
+        "token": "border-t",
         "category": "js-referenced",
         "excluded": true,
-        "htmlOccurrences": 3440,
-        "htmlBytes": 61920,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
+        "htmlOccurrences": 3,
+        "htmlBytes": 24,
+        "ruleCount": 3,
+        "utilityRuleCount": 3,
         "variantReferences": 0,
         "jsReferenced": true
       },
       {
-        "token": "border-y",
-        "category": "js-referenced",
-        "excluded": true,
-        "htmlOccurrences": 0,
-        "htmlBytes": 0,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
-        "variantReferences": 0,
-        "jsReferenced": true
-      },
-      {
-        "token": "break-all",
-        "category": "js-referenced",
-        "excluded": true,
-        "htmlOccurrences": 1000,
-        "htmlBytes": 9000,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
-        "variantReferences": 0,
-        "jsReferenced": true
-      },
-      {
-        "token": "contrast-[0.9]",
-        "category": "js-referenced",
-        "excluded": true,
-        "htmlOccurrences": 1,
-        "htmlBytes": 14,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
-        "variantReferences": 0,
-        "jsReferenced": true
-      },
-      {
-        "token": "divide-dark-border/75",
-        "category": "js-referenced",
-        "excluded": true,
-        "htmlOccurrences": 1,
-        "htmlBytes": 21,
-        "ruleCount": 2,
-        "utilityRuleCount": 2,
-        "variantReferences": 0,
-        "jsReferenced": true
-      },
-      {
-        "token": "divide-y",
-        "category": "js-referenced",
-        "excluded": true,
-        "htmlOccurrences": 1,
-        "htmlBytes": 8,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
-        "variantReferences": 0,
-        "jsReferenced": true
-      },
-      {
-        "token": "filter",
+        "token": "dark",
         "category": "js-referenced",
         "excluded": true,
         "htmlOccurrences": 0,
         "htmlBytes": 0,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
+        "ruleCount": 3,
+        "utilityRuleCount": 0,
+        "variantReferences": 0,
+        "jsReferenced": true
+      },
+      {
+        "token": "demo-also-unused",
+        "category": "css-only",
+        "excluded": true,
+        "htmlOccurrences": 0,
+        "htmlBytes": 0,
+        "ruleCount": 3,
+        "utilityRuleCount": 0,
+        "variantReferences": 0,
+        "jsReferenced": false
+      },
+      {
+        "token": "demo-note",
+        "category": "js-referenced",
+        "excluded": true,
+        "htmlOccurrences": 1,
+        "htmlBytes": 9,
+        "ruleCount": 3,
+        "utilityRuleCount": 0,
+        "variantReferences": 0,
+        "jsReferenced": true
+      },
+      {
+        "token": "demo-unused",
+        "category": "css-only",
+        "excluded": true,
+        "htmlOccurrences": 0,
+        "htmlBytes": 0,
+        "ruleCount": 3,
+        "utilityRuleCount": 0,
+        "variantReferences": 0,
+        "jsReferenced": false
+      },
+      {
+        "token": "duration-150",
+        "category": "js-referenced",
+        "excluded": true,
+        "htmlOccurrences": 21,
+        "htmlBytes": 252,
+        "ruleCount": 3,
+        "utilityRuleCount": 3,
+        "variantReferences": 0,
+        "jsReferenced": true
+      },
+      {
+        "token": "ease-in-out",
+        "category": "js-referenced",
+        "excluded": true,
+        "htmlOccurrences": 12,
+        "htmlBytes": 132,
+        "ruleCount": 3,
+        "utilityRuleCount": 3,
         "variantReferences": 0,
         "jsReferenced": true
       },
@@ -292,10 +163,21 @@
         "token": "flex",
         "category": "js-referenced",
         "excluded": true,
-        "htmlOccurrences": 1013,
-        "htmlBytes": 4052,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
+        "htmlOccurrences": 37,
+        "htmlBytes": 148,
+        "ruleCount": 3,
+        "utilityRuleCount": 3,
+        "variantReferences": 0,
+        "jsReferenced": true
+      },
+      {
+        "token": "flex-1",
+        "category": "js-referenced",
+        "excluded": true,
+        "htmlOccurrences": 15,
+        "htmlBytes": 90,
+        "ruleCount": 3,
+        "utilityRuleCount": 3,
         "variantReferences": 0,
         "jsReferenced": true
       },
@@ -303,54 +185,10 @@
         "token": "flex-col",
         "category": "js-referenced",
         "excluded": true,
-        "htmlOccurrences": 0,
-        "htmlBytes": 0,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
-        "variantReferences": 0,
-        "jsReferenced": true
-      },
-      {
-        "token": "flex-wrap",
-        "category": "js-referenced",
-        "excluded": true,
-        "htmlOccurrences": 1002,
-        "htmlBytes": 9018,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
-        "variantReferences": 0,
-        "jsReferenced": true
-      },
-      {
-        "token": "focus-visible:border-accent",
-        "category": "js-referenced",
-        "excluded": true,
-        "htmlOccurrences": 8,
-        "htmlBytes": 216,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
-        "variantReferences": 0,
-        "jsReferenced": true
-      },
-      {
-        "token": "focus:border-accent",
-        "category": "js-referenced",
-        "excluded": true,
-        "htmlOccurrences": 1,
-        "htmlBytes": 19,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
-        "variantReferences": 0,
-        "jsReferenced": true
-      },
-      {
-        "token": "focus:outline-none",
-        "category": "js-referenced",
-        "excluded": true,
-        "htmlOccurrences": 8,
-        "htmlBytes": 144,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
+        "htmlOccurrences": 15,
+        "htmlBytes": 120,
+        "ruleCount": 3,
+        "utilityRuleCount": 3,
         "variantReferences": 0,
         "jsReferenced": true
       },
@@ -358,10 +196,10 @@
         "token": "font-bold",
         "category": "js-referenced",
         "excluded": true,
-        "htmlOccurrences": 1,
-        "htmlBytes": 9,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
+        "htmlOccurrences": 7,
+        "htmlBytes": 63,
+        "ruleCount": 3,
+        "utilityRuleCount": 3,
         "variantReferences": 0,
         "jsReferenced": true
       },
@@ -369,21 +207,21 @@
         "token": "font-medium",
         "category": "js-referenced",
         "excluded": true,
-        "htmlOccurrences": 1008,
-        "htmlBytes": 11088,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
+        "htmlOccurrences": 3,
+        "htmlBytes": 33,
+        "ruleCount": 3,
+        "utilityRuleCount": 3,
         "variantReferences": 0,
         "jsReferenced": true
       },
       {
-        "token": "font-mono",
+        "token": "font-semibold",
         "category": "js-referenced",
         "excluded": true,
-        "htmlOccurrences": 36,
-        "htmlBytes": 324,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
+        "htmlOccurrences": 12,
+        "htmlBytes": 156,
+        "ruleCount": 3,
+        "utilityRuleCount": 3,
         "variantReferences": 0,
         "jsReferenced": true
       },
@@ -391,21 +229,10 @@
         "token": "gap-2",
         "category": "js-referenced",
         "excluded": true,
-        "htmlOccurrences": 3,
-        "htmlBytes": 15,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
-        "variantReferences": 0,
-        "jsReferenced": true
-      },
-      {
-        "token": "gap-3",
-        "category": "js-referenced",
-        "excluded": true,
-        "htmlOccurrences": 8,
-        "htmlBytes": 40,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
+        "htmlOccurrences": 25,
+        "htmlBytes": 125,
+        "ruleCount": 3,
+        "utilityRuleCount": 3,
         "variantReferences": 0,
         "jsReferenced": true
       },
@@ -413,65 +240,21 @@
         "token": "gap-4",
         "category": "js-referenced",
         "excluded": true,
+        "htmlOccurrences": 1,
+        "htmlBytes": 5,
+        "ruleCount": 3,
+        "utilityRuleCount": 3,
+        "variantReferences": 0,
+        "jsReferenced": true
+      },
+      {
+        "token": "gap-5",
+        "category": "js-referenced",
+        "excluded": true,
         "htmlOccurrences": 3,
         "htmlBytes": 15,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
-        "variantReferences": 0,
-        "jsReferenced": true
-      },
-      {
-        "token": "gap-x-3",
-        "category": "js-referenced",
-        "excluded": true,
-        "htmlOccurrences": 1001,
-        "htmlBytes": 7007,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
-        "variantReferences": 0,
-        "jsReferenced": true
-      },
-      {
-        "token": "gap-x-8",
-        "category": "js-referenced",
-        "excluded": true,
-        "htmlOccurrences": 1,
-        "htmlBytes": 7,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
-        "variantReferences": 0,
-        "jsReferenced": true
-      },
-      {
-        "token": "gap-y-1",
-        "category": "js-referenced",
-        "excluded": true,
-        "htmlOccurrences": 1000,
-        "htmlBytes": 7000,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
-        "variantReferences": 0,
-        "jsReferenced": true
-      },
-      {
-        "token": "gap-y-2",
-        "category": "js-referenced",
-        "excluded": true,
-        "htmlOccurrences": 2,
-        "htmlBytes": 14,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
-        "variantReferences": 0,
-        "jsReferenced": true
-      },
-      {
-        "token": "grayscale-70",
-        "category": "js-referenced",
-        "excluded": true,
-        "htmlOccurrences": 1,
-        "htmlBytes": 12,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
+        "ruleCount": 3,
+        "utilityRuleCount": 3,
         "variantReferences": 0,
         "jsReferenced": true
       },
@@ -481,41 +264,19 @@
         "excluded": true,
         "htmlOccurrences": 1,
         "htmlBytes": 4,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
+        "ruleCount": 3,
+        "utilityRuleCount": 3,
         "variantReferences": 0,
         "jsReferenced": true
       },
       {
-        "token": "grow",
+        "token": "grid-cols-1",
         "category": "js-referenced",
         "excluded": true,
-        "htmlOccurrences": 0,
-        "htmlBytes": 0,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
-        "variantReferences": 0,
-        "jsReferenced": true
-      },
-      {
-        "token": "h-4",
-        "category": "js-referenced",
-        "excluded": true,
-        "htmlOccurrences": 2,
-        "htmlBytes": 6,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
-        "variantReferences": 0,
-        "jsReferenced": true
-      },
-      {
-        "token": "h-full",
-        "category": "js-referenced",
-        "excluded": true,
-        "htmlOccurrences": 8,
-        "htmlBytes": 48,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
+        "htmlOccurrences": 1,
+        "htmlBytes": 11,
+        "ruleCount": 3,
+        "utilityRuleCount": 3,
         "variantReferences": 0,
         "jsReferenced": true
       },
@@ -523,32 +284,43 @@
         "token": "hover:border-accent",
         "category": "js-referenced",
         "excluded": true,
-        "htmlOccurrences": 3448,
-        "htmlBytes": 65512,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
+        "htmlOccurrences": 17,
+        "htmlBytes": 323,
+        "ruleCount": 3,
+        "utilityRuleCount": 3,
         "variantReferences": 0,
         "jsReferenced": true
       },
       {
-        "token": "hover:text-accent",
+        "token": "hover:opacity-80",
         "category": "js-referenced",
         "excluded": true,
-        "htmlOccurrences": 3440,
-        "htmlBytes": 58480,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
+        "htmlOccurrences": 3,
+        "htmlBytes": 48,
+        "ruleCount": 3,
+        "utilityRuleCount": 3,
         "variantReferences": 0,
         "jsReferenced": true
       },
       {
-        "token": "hover:text-light",
+        "token": "hover:shadow-md",
         "category": "js-referenced",
         "excluded": true,
-        "htmlOccurrences": 1000,
-        "htmlBytes": 16000,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
+        "htmlOccurrences": 12,
+        "htmlBytes": 180,
+        "ruleCount": 3,
+        "utilityRuleCount": 3,
+        "variantReferences": 0,
+        "jsReferenced": true
+      },
+      {
+        "token": "hover:underline",
+        "category": "js-referenced",
+        "excluded": true,
+        "htmlOccurrences": 3,
+        "htmlBytes": 45,
+        "ruleCount": 3,
+        "utilityRuleCount": 3,
         "variantReferences": 0,
         "jsReferenced": true
       },
@@ -564,35 +336,13 @@
         "jsReferenced": true
       },
       {
-        "token": "inline",
+        "token": "isolate",
         "category": "js-referenced",
         "excluded": true,
-        "htmlOccurrences": 0,
-        "htmlBytes": 0,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
-        "variantReferences": 0,
-        "jsReferenced": true
-      },
-      {
-        "token": "inline-flex",
-        "category": "js-referenced",
-        "excluded": true,
-        "htmlOccurrences": 2,
-        "htmlBytes": 22,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
-        "variantReferences": 0,
-        "jsReferenced": true
-      },
-      {
-        "token": "items-baseline",
-        "category": "js-referenced",
-        "excluded": true,
-        "htmlOccurrences": 11,
-        "htmlBytes": 154,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
+        "htmlOccurrences": 12,
+        "htmlBytes": 84,
+        "ruleCount": 3,
+        "utilityRuleCount": 3,
         "variantReferences": 0,
         "jsReferenced": true
       },
@@ -600,21 +350,10 @@
         "token": "items-center",
         "category": "js-referenced",
         "excluded": true,
-        "htmlOccurrences": 2,
-        "htmlBytes": 24,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
-        "variantReferences": 0,
-        "jsReferenced": true
-      },
-      {
-        "token": "items-start",
-        "category": "js-referenced",
-        "excluded": true,
-        "htmlOccurrences": 0,
-        "htmlBytes": 0,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
+        "htmlOccurrences": 22,
+        "htmlBytes": 264,
+        "ruleCount": 3,
+        "utilityRuleCount": 3,
         "variantReferences": 0,
         "jsReferenced": true
       },
@@ -622,21 +361,10 @@
         "token": "justify-between",
         "category": "js-referenced",
         "excluded": true,
-        "htmlOccurrences": 10,
-        "htmlBytes": 150,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
-        "variantReferences": 0,
-        "jsReferenced": true
-      },
-      {
-        "token": "justify-center",
-        "category": "js-referenced",
-        "excluded": true,
-        "htmlOccurrences": 0,
-        "htmlBytes": 0,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
+        "htmlOccurrences": 6,
+        "htmlBytes": 90,
+        "ruleCount": 3,
+        "utilityRuleCount": 3,
         "variantReferences": 0,
         "jsReferenced": true
       },
@@ -644,10 +372,10 @@
         "token": "leading-6",
         "category": "js-referenced",
         "excluded": true,
-        "htmlOccurrences": 1008,
-        "htmlBytes": 9072,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
+        "htmlOccurrences": 12,
+        "htmlBytes": 108,
+        "ruleCount": 3,
+        "utilityRuleCount": 3,
         "variantReferences": 0,
         "jsReferenced": true
       },
@@ -655,43 +383,43 @@
         "token": "leading-7",
         "category": "js-referenced",
         "excluded": true,
-        "htmlOccurrences": 1000,
-        "htmlBytes": 9000,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
+        "htmlOccurrences": 4,
+        "htmlBytes": 36,
+        "ruleCount": 3,
+        "utilityRuleCount": 3,
         "variantReferences": 0,
         "jsReferenced": true
       },
       {
-        "token": "max-w-162.5",
+        "token": "lg:grid-cols-3",
+        "category": "js-referenced",
+        "excluded": true,
+        "htmlOccurrences": 1,
+        "htmlBytes": 14,
+        "ruleCount": 3,
+        "utilityRuleCount": 3,
+        "variantReferences": 0,
+        "jsReferenced": true
+      },
+      {
+        "token": "max-w-3xl",
         "category": "js-referenced",
         "excluded": true,
         "htmlOccurrences": 3,
-        "htmlBytes": 33,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
+        "htmlBytes": 27,
+        "ruleCount": 3,
+        "utilityRuleCount": 3,
         "variantReferences": 0,
         "jsReferenced": true
       },
       {
-        "token": "mb-0",
+        "token": "max-w-prose",
         "category": "js-referenced",
         "excluded": true,
-        "htmlOccurrences": 0,
-        "htmlBytes": 0,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
-        "variantReferences": 0,
-        "jsReferenced": true
-      },
-      {
-        "token": "mb-16",
-        "category": "js-referenced",
-        "excluded": true,
-        "htmlOccurrences": 9,
-        "htmlBytes": 45,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
+        "htmlOccurrences": 4,
+        "htmlBytes": 44,
+        "ruleCount": 3,
+        "utilityRuleCount": 3,
         "variantReferences": 0,
         "jsReferenced": true
       },
@@ -699,21 +427,21 @@
         "token": "mb-2",
         "category": "js-referenced",
         "excluded": true,
-        "htmlOccurrences": 9,
-        "htmlBytes": 36,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
+        "htmlOccurrences": 3,
+        "htmlBytes": 12,
+        "ruleCount": 3,
+        "utilityRuleCount": 3,
         "variantReferences": 0,
         "jsReferenced": true
       },
       {
-        "token": "mb-4",
+        "token": "mb-6",
         "category": "js-referenced",
         "excluded": true,
-        "htmlOccurrences": 0,
-        "htmlBytes": 0,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
+        "htmlOccurrences": 3,
+        "htmlBytes": 12,
+        "ruleCount": 3,
+        "utilityRuleCount": 3,
         "variantReferences": 0,
         "jsReferenced": true
       },
@@ -723,41 +451,8 @@
         "excluded": true,
         "htmlOccurrences": 2,
         "htmlBytes": 8,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
-        "variantReferences": 0,
-        "jsReferenced": true
-      },
-      {
-        "token": "min-h-10",
-        "category": "js-referenced",
-        "excluded": true,
-        "htmlOccurrences": 0,
-        "htmlBytes": 0,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
-        "variantReferences": 0,
-        "jsReferenced": true
-      },
-      {
-        "token": "min-h-12",
-        "category": "js-referenced",
-        "excluded": true,
-        "htmlOccurrences": 1,
-        "htmlBytes": 8,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
-        "variantReferences": 0,
-        "jsReferenced": true
-      },
-      {
-        "token": "min-h-[60vh]",
-        "category": "js-referenced",
-        "excluded": true,
-        "htmlOccurrences": 0,
-        "htmlBytes": 0,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
+        "ruleCount": 3,
+        "utilityRuleCount": 3,
         "variantReferences": 0,
         "jsReferenced": true
       },
@@ -767,41 +462,8 @@
         "excluded": true,
         "htmlOccurrences": 3,
         "htmlBytes": 36,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
-        "variantReferences": 0,
-        "jsReferenced": true
-      },
-      {
-        "token": "ml-1",
-        "category": "js-referenced",
-        "excluded": true,
-        "htmlOccurrences": 0,
-        "htmlBytes": 0,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
-        "variantReferences": 0,
-        "jsReferenced": true
-      },
-      {
-        "token": "ml-1.5",
-        "category": "js-referenced",
-        "excluded": true,
-        "htmlOccurrences": 28,
-        "htmlBytes": 168,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
-        "variantReferences": 0,
-        "jsReferenced": true
-      },
-      {
-        "token": "mr-1",
-        "category": "js-referenced",
-        "excluded": true,
-        "htmlOccurrences": 0,
-        "htmlBytes": 0,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
+        "ruleCount": 3,
+        "utilityRuleCount": 3,
         "variantReferences": 0,
         "jsReferenced": true
       },
@@ -809,65 +471,21 @@
         "token": "mt-1",
         "category": "js-referenced",
         "excluded": true,
-        "htmlOccurrences": 2,
-        "htmlBytes": 8,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
+        "htmlOccurrences": 13,
+        "htmlBytes": 52,
+        "ruleCount": 3,
+        "utilityRuleCount": 3,
         "variantReferences": 0,
         "jsReferenced": true
       },
       {
-        "token": "mt-12",
+        "token": "mt-8",
         "category": "js-referenced",
         "excluded": true,
-        "htmlOccurrences": 1,
-        "htmlBytes": 5,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
-        "variantReferences": 0,
-        "jsReferenced": true
-      },
-      {
-        "token": "mt-16",
-        "category": "js-referenced",
-        "excluded": true,
-        "htmlOccurrences": 1,
-        "htmlBytes": 5,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
-        "variantReferences": 0,
-        "jsReferenced": true
-      },
-      {
-        "token": "mt-2",
-        "category": "js-referenced",
-        "excluded": true,
-        "htmlOccurrences": 1000,
-        "htmlBytes": 4000,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
-        "variantReferences": 0,
-        "jsReferenced": true
-      },
-      {
-        "token": "mt-4",
-        "category": "js-referenced",
-        "excluded": true,
-        "htmlOccurrences": 0,
-        "htmlBytes": 0,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
-        "variantReferences": 0,
-        "jsReferenced": true
-      },
-      {
-        "token": "muted-text",
-        "category": "js-referenced",
-        "excluded": true,
-        "htmlOccurrences": 5,
-        "htmlBytes": 50,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
+        "htmlOccurrences": 3,
+        "htmlBytes": 12,
+        "ruleCount": 3,
+        "utilityRuleCount": 3,
         "variantReferences": 0,
         "jsReferenced": true
       },
@@ -875,21 +493,43 @@
         "token": "mx-auto",
         "category": "js-referenced",
         "excluded": true,
-        "htmlOccurrences": 6,
-        "htmlBytes": 42,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
+        "htmlOccurrences": 3,
+        "htmlBytes": 21,
+        "ruleCount": 3,
+        "utilityRuleCount": 3,
         "variantReferences": 0,
         "jsReferenced": true
       },
       {
-        "token": "opacity-65",
+        "token": "opacity-60",
         "category": "js-referenced",
         "excluded": true,
-        "htmlOccurrences": 28,
-        "htmlBytes": 280,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
+        "htmlOccurrences": 13,
+        "htmlBytes": 130,
+        "ruleCount": 3,
+        "utilityRuleCount": 3,
+        "variantReferences": 0,
+        "jsReferenced": true
+      },
+      {
+        "token": "opacity-70",
+        "category": "js-referenced",
+        "excluded": true,
+        "htmlOccurrences": 3,
+        "htmlBytes": 30,
+        "ruleCount": 3,
+        "utilityRuleCount": 3,
+        "variantReferences": 0,
+        "jsReferenced": true
+      },
+      {
+        "token": "opacity-80",
+        "category": "js-referenced",
+        "excluded": true,
+        "htmlOccurrences": 16,
+        "htmlBytes": 160,
+        "ruleCount": 3,
+        "utilityRuleCount": 3,
         "variantReferences": 0,
         "jsReferenced": true
       },
@@ -897,120 +537,109 @@
         "token": "outline-none",
         "category": "js-referenced",
         "excluded": true,
-        "htmlOccurrences": 1,
-        "htmlBytes": 12,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
+        "htmlOccurrences": 12,
+        "htmlBytes": 144,
+        "ruleCount": 3,
+        "utilityRuleCount": 3,
         "variantReferences": 0,
         "jsReferenced": true
       },
       {
-        "token": "p-4",
+        "token": "overflow-hidden",
         "category": "js-referenced",
         "excluded": true,
-        "htmlOccurrences": 0,
-        "htmlBytes": 0,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
+        "htmlOccurrences": 12,
+        "htmlBytes": 180,
+        "ruleCount": 3,
+        "utilityRuleCount": 3,
         "variantReferences": 0,
         "jsReferenced": true
       },
       {
-        "token": "pb-0",
+        "token": "p-5",
+        "category": "js-referenced",
+        "excluded": true,
+        "htmlOccurrences": 12,
+        "htmlBytes": 36,
+        "ruleCount": 3,
+        "utilityRuleCount": 3,
+        "variantReferences": 0,
+        "jsReferenced": true
+      },
+      {
+        "token": "pointer-events-none",
+        "category": "js-referenced",
+        "excluded": true,
+        "htmlOccurrences": 13,
+        "htmlBytes": 247,
+        "ruleCount": 3,
+        "utilityRuleCount": 3,
+        "variantReferences": 0,
+        "jsReferenced": true
+      },
+      {
+        "token": "px-2",
         "category": "js-referenced",
         "excluded": true,
         "htmlOccurrences": 3,
         "htmlBytes": 12,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
+        "ruleCount": 3,
+        "utilityRuleCount": 3,
         "variantReferences": 0,
         "jsReferenced": true
       },
       {
-        "token": "placeholder:text-light-dim",
-        "category": "js-referenced",
-        "excluded": true,
-        "htmlOccurrences": 1,
-        "htmlBytes": 26,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
-        "variantReferences": 0,
-        "jsReferenced": true
-      },
-      {
-        "token": "pt-24",
-        "category": "js-referenced",
-        "excluded": true,
-        "htmlOccurrences": 3,
-        "htmlBytes": 15,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
-        "variantReferences": 0,
-        "jsReferenced": true
-      },
-      {
-        "token": "px-0",
+        "token": "px-3",
         "category": "js-referenced",
         "excluded": true,
         "htmlOccurrences": 1,
         "htmlBytes": 4,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
+        "ruleCount": 3,
+        "utilityRuleCount": 3,
         "variantReferences": 0,
         "jsReferenced": true
       },
       {
-        "token": "px-8",
+        "token": "px-6",
+        "category": "js-referenced",
+        "excluded": true,
+        "htmlOccurrences": 3,
+        "htmlBytes": 12,
+        "ruleCount": 3,
+        "utilityRuleCount": 3,
+        "variantReferences": 0,
+        "jsReferenced": true
+      },
+      {
+        "token": "py-1",
+        "category": "js-referenced",
+        "excluded": true,
+        "htmlOccurrences": 4,
+        "htmlBytes": 16,
+        "ruleCount": 3,
+        "utilityRuleCount": 3,
+        "variantReferences": 0,
+        "jsReferenced": true
+      },
+      {
+        "token": "py-16",
+        "category": "js-referenced",
+        "excluded": true,
+        "htmlOccurrences": 1,
+        "htmlBytes": 5,
+        "ruleCount": 3,
+        "utilityRuleCount": 3,
+        "variantReferences": 0,
+        "jsReferenced": true
+      },
+      {
+        "token": "py-6",
         "category": "js-referenced",
         "excluded": true,
         "htmlOccurrences": 6,
         "htmlBytes": 24,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
-        "variantReferences": 0,
-        "jsReferenced": true
-      },
-      {
-        "token": "py-12",
-        "category": "js-referenced",
-        "excluded": true,
-        "htmlOccurrences": 3,
-        "htmlBytes": 15,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
-        "variantReferences": 0,
-        "jsReferenced": true
-      },
-      {
-        "token": "py-3",
-        "category": "js-referenced",
-        "excluded": true,
-        "htmlOccurrences": 8,
-        "htmlBytes": 32,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
-        "variantReferences": 0,
-        "jsReferenced": true
-      },
-      {
-        "token": "py-4",
-        "category": "js-referenced",
-        "excluded": true,
-        "htmlOccurrences": 0,
-        "htmlBytes": 0,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
-        "variantReferences": 0,
-        "jsReferenced": true
-      },
-      {
-        "token": "py-5",
-        "category": "js-referenced",
-        "excluded": true,
-        "htmlOccurrences": 1000,
-        "htmlBytes": 4000,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
+        "ruleCount": 3,
+        "utilityRuleCount": 3,
         "variantReferences": 0,
         "jsReferenced": true
       },
@@ -1018,21 +647,21 @@
         "token": "py-8",
         "category": "js-referenced",
         "excluded": true,
-        "htmlOccurrences": 0,
-        "htmlBytes": 0,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
+        "htmlOccurrences": 3,
+        "htmlBytes": 12,
+        "ruleCount": 3,
+        "utilityRuleCount": 3,
         "variantReferences": 0,
         "jsReferenced": true
       },
       {
-        "token": "rounded",
+        "token": "relative",
         "category": "js-referenced",
         "excluded": true,
-        "htmlOccurrences": 1,
-        "htmlBytes": 7,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
+        "htmlOccurrences": 12,
+        "htmlBytes": 96,
+        "ruleCount": 3,
+        "utilityRuleCount": 3,
         "variantReferences": 0,
         "jsReferenced": true
       },
@@ -1040,32 +669,54 @@
         "token": "rounded-lg",
         "category": "js-referenced",
         "excluded": true,
-        "htmlOccurrences": 0,
-        "htmlBytes": 0,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
+        "htmlOccurrences": 1,
+        "htmlBytes": 10,
+        "ruleCount": 3,
+        "utilityRuleCount": 3,
         "variantReferences": 0,
         "jsReferenced": true
       },
       {
-        "token": "section-description",
+        "token": "rounded-md",
         "category": "js-referenced",
         "excluded": true,
-        "htmlOccurrences": 5,
-        "htmlBytes": 95,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
+        "htmlOccurrences": 3,
+        "htmlBytes": 30,
+        "ruleCount": 3,
+        "utilityRuleCount": 3,
         "variantReferences": 0,
         "jsReferenced": true
       },
       {
-        "token": "section-title",
+        "token": "rounded-xl",
         "category": "js-referenced",
         "excluded": true,
-        "htmlOccurrences": 10,
-        "htmlBytes": 130,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
+        "htmlOccurrences": 12,
+        "htmlBytes": 120,
+        "ruleCount": 3,
+        "utilityRuleCount": 3,
+        "variantReferences": 0,
+        "jsReferenced": true
+      },
+      {
+        "token": "select-none",
+        "category": "js-referenced",
+        "excluded": true,
+        "htmlOccurrences": 13,
+        "htmlBytes": 143,
+        "ruleCount": 3,
+        "utilityRuleCount": 3,
+        "variantReferences": 0,
+        "jsReferenced": true
+      },
+      {
+        "token": "shadow-sm",
+        "category": "js-referenced",
+        "excluded": true,
+        "htmlOccurrences": 12,
+        "htmlBytes": 108,
+        "ruleCount": 3,
+        "utilityRuleCount": 3,
         "variantReferences": 0,
         "jsReferenced": true
       },
@@ -1075,52 +726,8 @@
         "excluded": true,
         "htmlOccurrences": 1,
         "htmlBytes": 14,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
-        "variantReferences": 0,
-        "jsReferenced": true
-      },
-      {
-        "token": "space-y-3",
-        "category": "js-referenced",
-        "excluded": true,
-        "htmlOccurrences": 2,
-        "htmlBytes": 18,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
-        "variantReferences": 0,
-        "jsReferenced": true
-      },
-      {
-        "token": "space-y-4",
-        "category": "js-referenced",
-        "excluded": true,
-        "htmlOccurrences": 12,
-        "htmlBytes": 108,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
-        "variantReferences": 0,
-        "jsReferenced": true
-      },
-      {
-        "token": "space-y-6",
-        "category": "js-referenced",
-        "excluded": true,
-        "htmlOccurrences": 1,
-        "htmlBytes": 9,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
-        "variantReferences": 0,
-        "jsReferenced": true
-      },
-      {
-        "token": "sr-only",
-        "category": "js-referenced",
-        "excluded": true,
-        "htmlOccurrences": 1,
-        "htmlBytes": 7,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
+        "ruleCount": 3,
+        "utilityRuleCount": 3,
         "variantReferences": 0,
         "jsReferenced": true
       },
@@ -1130,41 +737,8 @@
         "excluded": true,
         "htmlOccurrences": 0,
         "htmlBytes": 0,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
-        "variantReferences": 0,
-        "jsReferenced": true
-      },
-      {
-        "token": "table",
-        "category": "js-referenced",
-        "excluded": true,
-        "htmlOccurrences": 0,
-        "htmlBytes": 0,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
-        "variantReferences": 0,
-        "jsReferenced": true
-      },
-      {
-        "token": "tabular-nums",
-        "category": "js-referenced",
-        "excluded": true,
-        "htmlOccurrences": 36,
-        "htmlBytes": 432,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
-        "variantReferences": 0,
-        "jsReferenced": true
-      },
-      {
-        "token": "tag-index-panel",
-        "category": "js-referenced",
-        "excluded": true,
-        "htmlOccurrences": 0,
-        "htmlBytes": 0,
-        "ruleCount": 4,
-        "utilityRuleCount": 0,
+        "ruleCount": 3,
+        "utilityRuleCount": 3,
         "variantReferences": 0,
         "jsReferenced": true
       },
@@ -1172,21 +746,21 @@
         "token": "text-3xl",
         "category": "js-referenced",
         "excluded": true,
-        "htmlOccurrences": 1,
-        "htmlBytes": 8,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
+        "htmlOccurrences": 2,
+        "htmlBytes": 16,
+        "ruleCount": 3,
+        "utilityRuleCount": 3,
         "variantReferences": 0,
         "jsReferenced": true
       },
       {
-        "token": "text-8xl",
+        "token": "text-4xl",
         "category": "js-referenced",
         "excluded": true,
-        "htmlOccurrences": 0,
-        "htmlBytes": 0,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
+        "htmlOccurrences": 1,
+        "htmlBytes": 8,
+        "ruleCount": 3,
+        "utilityRuleCount": 3,
         "variantReferences": 0,
         "jsReferenced": true
       },
@@ -1194,10 +768,10 @@
         "token": "text-accent",
         "category": "js-referenced",
         "excluded": true,
-        "htmlOccurrences": 0,
-        "htmlBytes": 0,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
+        "htmlOccurrences": 1,
+        "htmlBytes": 11,
+        "ruleCount": 3,
+        "utilityRuleCount": 3,
         "variantReferences": 0,
         "jsReferenced": true
       },
@@ -1205,32 +779,32 @@
         "token": "text-base",
         "category": "js-referenced",
         "excluded": true,
-        "htmlOccurrences": 1001,
-        "htmlBytes": 9009,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
+        "htmlOccurrences": 12,
+        "htmlBytes": 108,
+        "ruleCount": 3,
+        "utilityRuleCount": 3,
         "variantReferences": 0,
         "jsReferenced": true
       },
       {
-        "token": "text-gold",
+        "token": "text-center",
         "category": "js-referenced",
         "excluded": true,
-        "htmlOccurrences": 2,
-        "htmlBytes": 18,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
+        "htmlOccurrences": 1,
+        "htmlBytes": 11,
+        "ruleCount": 3,
+        "utilityRuleCount": 3,
         "variantReferences": 0,
         "jsReferenced": true
       },
       {
-        "token": "text-left",
+        "token": "text-ink",
         "category": "js-referenced",
         "excluded": true,
-        "htmlOccurrences": 8,
-        "htmlBytes": 72,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
+        "htmlOccurrences": 12,
+        "htmlBytes": 96,
+        "ruleCount": 3,
+        "utilityRuleCount": 3,
         "variantReferences": 0,
         "jsReferenced": true
       },
@@ -1238,54 +812,21 @@
         "token": "text-lg",
         "category": "js-referenced",
         "excluded": true,
-        "htmlOccurrences": 0,
-        "htmlBytes": 0,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
+        "htmlOccurrences": 3,
+        "htmlBytes": 21,
+        "ruleCount": 3,
+        "utilityRuleCount": 3,
         "variantReferences": 0,
         "jsReferenced": true
       },
       {
-        "token": "text-light",
+        "token": "text-pretty",
         "category": "js-referenced",
         "excluded": true,
-        "htmlOccurrences": 9,
-        "htmlBytes": 90,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
-        "variantReferences": 0,
-        "jsReferenced": true
-      },
-      {
-        "token": "text-light-dim",
-        "category": "js-referenced",
-        "excluded": true,
-        "htmlOccurrences": 1001,
-        "htmlBytes": 14014,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
-        "variantReferences": 0,
-        "jsReferenced": true
-      },
-      {
-        "token": "text-light-secondary",
-        "category": "js-referenced",
-        "excluded": true,
-        "htmlOccurrences": 3456,
-        "htmlBytes": 69120,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
-        "variantReferences": 0,
-        "jsReferenced": true
-      },
-      {
-        "token": "text-right",
-        "category": "js-referenced",
-        "excluded": true,
-        "htmlOccurrences": 1,
-        "htmlBytes": 10,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
+        "htmlOccurrences": 12,
+        "htmlBytes": 132,
+        "ruleCount": 3,
+        "utilityRuleCount": 3,
         "variantReferences": 0,
         "jsReferenced": true
       },
@@ -1293,32 +834,10 @@
         "token": "text-sm",
         "category": "js-referenced",
         "excluded": true,
-        "htmlOccurrences": 42,
-        "htmlBytes": 294,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
-        "variantReferences": 0,
-        "jsReferenced": true
-      },
-      {
-        "token": "text-wrap",
-        "category": "js-referenced",
-        "excluded": true,
-        "htmlOccurrences": 0,
-        "htmlBytes": 0,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
-        "variantReferences": 0,
-        "jsReferenced": true
-      },
-      {
-        "token": "text-xl",
-        "category": "js-referenced",
-        "excluded": true,
-        "htmlOccurrences": 0,
-        "htmlBytes": 0,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
+        "htmlOccurrences": 19,
+        "htmlBytes": 133,
+        "ruleCount": 3,
+        "utilityRuleCount": 3,
         "variantReferences": 0,
         "jsReferenced": true
       },
@@ -1326,32 +845,32 @@
         "token": "text-xs",
         "category": "js-referenced",
         "excluded": true,
-        "htmlOccurrences": 4421,
-        "htmlBytes": 30947,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
+        "htmlOccurrences": 13,
+        "htmlBytes": 91,
+        "ruleCount": 3,
+        "utilityRuleCount": 3,
         "variantReferences": 0,
         "jsReferenced": true
       },
       {
-        "token": "tracking-[0.15em]",
+        "token": "tracking-tight",
         "category": "js-referenced",
         "excluded": true,
-        "htmlOccurrences": 0,
-        "htmlBytes": 0,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
+        "htmlOccurrences": 21,
+        "htmlBytes": 294,
+        "ruleCount": 3,
+        "utilityRuleCount": 3,
         "variantReferences": 0,
         "jsReferenced": true
       },
       {
-        "token": "transform",
+        "token": "tracking-wide",
         "category": "js-referenced",
         "excluded": true,
-        "htmlOccurrences": 0,
-        "htmlBytes": 0,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
+        "htmlOccurrences": 12,
+        "htmlBytes": 156,
+        "ruleCount": 3,
+        "utilityRuleCount": 3,
         "variantReferences": 0,
         "jsReferenced": true
       },
@@ -1359,21 +878,32 @@
         "token": "transition",
         "category": "js-referenced",
         "excluded": true,
-        "htmlOccurrences": 3449,
-        "htmlBytes": 34490,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
+        "htmlOccurrences": 21,
+        "htmlBytes": 210,
+        "ruleCount": 3,
+        "utilityRuleCount": 3,
         "variantReferences": 0,
         "jsReferenced": true
       },
       {
-        "token": "transition-colors",
+        "token": "underline",
         "category": "js-referenced",
         "excluded": true,
-        "htmlOccurrences": 1000,
-        "htmlBytes": 17000,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
+        "htmlOccurrences": 2,
+        "htmlBytes": 18,
+        "ruleCount": 3,
+        "utilityRuleCount": 3,
+        "variantReferences": 0,
+        "jsReferenced": true
+      },
+      {
+        "token": "underline-offset-4",
+        "category": "js-referenced",
+        "excluded": true,
+        "htmlOccurrences": 8,
+        "htmlBytes": 144,
+        "ruleCount": 3,
+        "utilityRuleCount": 3,
         "variantReferences": 0,
         "jsReferenced": true
       },
@@ -1381,43 +911,10 @@
         "token": "uppercase",
         "category": "js-referenced",
         "excluded": true,
-        "htmlOccurrences": 0,
-        "htmlBytes": 0,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
-        "variantReferences": 0,
-        "jsReferenced": true
-      },
-      {
-        "token": "w-4",
-        "category": "js-referenced",
-        "excluded": true,
-        "htmlOccurrences": 2,
-        "htmlBytes": 6,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
-        "variantReferences": 0,
-        "jsReferenced": true
-      },
-      {
-        "token": "w-full",
-        "category": "js-referenced",
-        "excluded": true,
-        "htmlOccurrences": 9,
-        "htmlBytes": 54,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
-        "variantReferences": 0,
-        "jsReferenced": true
-      },
-      {
-        "token": "wrap-break-word",
-        "category": "js-referenced",
-        "excluded": true,
-        "htmlOccurrences": 1000,
-        "htmlBytes": 15000,
-        "ruleCount": 1,
-        "utilityRuleCount": 1,
+        "htmlOccurrences": 12,
+        "htmlBytes": 108,
+        "ruleCount": 3,
+        "utilityRuleCount": 3,
         "variantReferences": 0,
         "jsReferenced": true
       }
@@ -1425,36 +922,92 @@
     "skippedFiles": [],
     "parseWarnings": [
       {
-        "filePath": "_build/assets/entry-client-myZvc0vZ.css",
-        "reason": "CSS parse error at line 2: Identifier is expected"
+        "filePath": "_build/assets/client-CTZZ5qDH.css",
+        "reason": "CSS parse error at line 1: Identifier is expected"
       },
       {
-        "filePath": "_build/assets/entry-client-myZvc0vZ.css",
-        "reason": "CSS parse error at line 2: Identifier is expected"
+        "filePath": "_build/assets/client-CTZZ5qDH.css",
+        "reason": "CSS parse error at line 1: Identifier is expected"
       },
       {
-        "filePath": "_build/assets/entry-client-myZvc0vZ.css",
-        "reason": "CSS parse error at line 2: Colon is expected"
+        "filePath": "_build/assets/client-CTZZ5qDH.css",
+        "reason": "CSS parse error at line 1: Colon is expected"
       },
       {
-        "filePath": "_build/assets/entry-client-myZvc0vZ.css",
-        "reason": "CSS parse error at line 2: Identifier is expected"
+        "filePath": "_build/assets/client-CTZZ5qDH.css",
+        "reason": "CSS parse error at line 1: Identifier is expected"
       },
       {
-        "filePath": "_build/assets/entry-client-myZvc0vZ.css",
-        "reason": "CSS parse error at line 2: Colon is expected"
+        "filePath": "_build/assets/client-CTZZ5qDH.css",
+        "reason": "CSS parse error at line 1: Colon is expected"
       },
       {
-        "filePath": "_build/assets/entry-client-myZvc0vZ.css",
-        "reason": "CSS parse error at line 2: Colon is expected"
+        "filePath": "_build/assets/client-CTZZ5qDH.css",
+        "reason": "CSS parse error at line 1: Colon is expected"
       },
       {
-        "filePath": "_build/assets/entry-client-myZvc0vZ.css",
-        "reason": "CSS parse error at line 2: Identifier is expected"
+        "filePath": "_build/assets/client-CTZZ5qDH.css",
+        "reason": "CSS parse error at line 1: Identifier is expected"
+      },
+      {
+        "filePath": "_server/assets/app-CTZZ5qDH.css",
+        "reason": "CSS parse error at line 1: Identifier is expected"
+      },
+      {
+        "filePath": "_server/assets/app-CTZZ5qDH.css",
+        "reason": "CSS parse error at line 1: Identifier is expected"
+      },
+      {
+        "filePath": "_server/assets/app-CTZZ5qDH.css",
+        "reason": "CSS parse error at line 1: Colon is expected"
+      },
+      {
+        "filePath": "_server/assets/app-CTZZ5qDH.css",
+        "reason": "CSS parse error at line 1: Identifier is expected"
+      },
+      {
+        "filePath": "_server/assets/app-CTZZ5qDH.css",
+        "reason": "CSS parse error at line 1: Colon is expected"
+      },
+      {
+        "filePath": "_server/assets/app-CTZZ5qDH.css",
+        "reason": "CSS parse error at line 1: Colon is expected"
+      },
+      {
+        "filePath": "_server/assets/app-CTZZ5qDH.css",
+        "reason": "CSS parse error at line 1: Identifier is expected"
+      },
+      {
+        "filePath": "assets/ssr-CTZZ5qDH.css",
+        "reason": "CSS parse error at line 1: Identifier is expected"
+      },
+      {
+        "filePath": "assets/ssr-CTZZ5qDH.css",
+        "reason": "CSS parse error at line 1: Identifier is expected"
+      },
+      {
+        "filePath": "assets/ssr-CTZZ5qDH.css",
+        "reason": "CSS parse error at line 1: Colon is expected"
+      },
+      {
+        "filePath": "assets/ssr-CTZZ5qDH.css",
+        "reason": "CSS parse error at line 1: Identifier is expected"
+      },
+      {
+        "filePath": "assets/ssr-CTZZ5qDH.css",
+        "reason": "CSS parse error at line 1: Colon is expected"
+      },
+      {
+        "filePath": "assets/ssr-CTZZ5qDH.css",
+        "reason": "CSS parse error at line 1: Colon is expected"
+      },
+      {
+        "filePath": "assets/ssr-CTZZ5qDH.css",
+        "reason": "CSS parse error at line 1: Identifier is expected"
       }
     ],
-    "totalClassTokenBytes": 579725,
-    "excludedClassTokenBytes": 579725,
+    "totalClassTokenBytes": 6190,
+    "excludedClassTokenBytes": 6190,
     "excludedByteShareByCategory": {
       "js-referenced": 1,
       "css-only": 0
@@ -1463,7 +1016,7 @@
   "arms": [
     {
       "arm": "baseline",
-      "filesSimulated": 4,
+      "filesSimulated": 6,
       "filesChanged": 0,
       "classesRenamed": 0,
       "listsConsolidated": 0,
@@ -1473,7 +1026,7 @@
     },
     {
       "arm": "rename",
-      "filesSimulated": 4,
+      "filesSimulated": 6,
       "filesChanged": 0,
       "classesRenamed": 0,
       "listsConsolidated": 0,
@@ -1483,40 +1036,29 @@
     },
     {
       "arm": "consolidate",
-      "filesSimulated": 4,
+      "filesSimulated": 6,
       "filesChanged": 0,
       "classesRenamed": 0,
       "listsConsolidated": 0,
       "byteDelta": 0,
       "unmodelableTokens": [],
       "unmodelableLists": [
-        "accent-inline-button",
-        "accent-inline-button text-sm",
-        "accent-link",
-        "accent-link inactive",
-        "accent-link mb-8 inline-flex items-center gap-2 active",
-        "accent-link text-base leading-7 font-medium wrap-break-word",
-        "border-b text-xs transition active:translate-y-px text-light-secondary hover:border-accent hover:text-accent border-transparent",
-        "border-b transition active:translate-y-px text-sm text-light-secondary hover:border-accent hover:text-accent border-transparent",
-        "border-dark-border block h-full w-full border-b py-3 text-left transition active:translate-y-px focus-visible:border-accent focus:outline-none hover:border-accent",
-        "font-medium text-light",
-        "h-4 w-4",
-        "mb-16",
-        "mb-2 flex items-baseline justify-between gap-3",
-        "ml-1.5 font-mono tabular-nums opacity-65",
-        "mt-2 flex flex-wrap gap-x-3 gap-y-1",
-        "muted-text text-sm",
-        "mx-auto min-h-screen max-w-162.5",
-        "mx-auto px-8 pt-24 pb-0",
-        "px-8 py-12",
-        "py-5",
-        "section-description",
-        "section-title",
-        "section-title text-gold",
-        "space-y-4",
-        "text-light-dim hover:text-light text-xs leading-6 break-all transition-colors",
-        "text-light-secondary block text-sm leading-6",
-        "text-light-secondary font-mono text-xs tabular-nums"
+        "flex items-center gap-5 text-sm font-medium",
+        "flex items-center justify-between border-b border-ink/10 py-6",
+        "flex-1 py-8",
+        "flex-1 text-pretty text-sm leading-6 opacity-80",
+        "mb-2 text-3xl font-bold tracking-tight",
+        "mt-1 flex items-center gap-2 text-xs opacity-60",
+        "mt-8 flex items-center justify-between border-t border-ink/10 py-6 text-sm opacity-70",
+        "mx-auto flex min-h-screen max-w-3xl flex-col px-6",
+        "relative isolate flex flex-col gap-2 overflow-hidden rounded-xl border border-ink/10 bg-white p-5 shadow-sm outline-none transition duration-150 ease-in-out hover:border-accent hover:shadow-md",
+        "rounded-md px-2 py-1 transition duration-150 hover:opacity-80",
+        "select-none pointer-events-none",
+        "text-base font-semibold tracking-tight text-ink",
+        "text-lg font-bold tracking-tight underline-offset-4 transition duration-150 hover:border-accent active",
+        "tracking-tight",
+        "underline-offset-4 transition duration-150 hover:underline inactive",
+        "uppercase tracking-wide"
       ]
     }
   ],
@@ -1524,81 +1066,78 @@
     "thresholdPercent": 5,
     "routes": [
       {
-        "route": "blog/comb-the-desert.html",
-        "files": [
-          "blog/comb-the-desert.html",
-          "_build/assets/entry-client-myZvc0vZ.css"
-        ],
+        "route": "404/index.html",
+        "files": ["404/index.html", "_build/assets/client-CTZZ5qDH.css"],
         "baseline": {
-          "rawBytes": 36499,
-          "gzipBytes": 9170,
-          "brotliBytes": 7913
+          "rawBytes": 16684,
+          "gzipBytes": 4756,
+          "brotliBytes": 4034
         },
         "rename": {
-          "rawBytes": 36499,
-          "gzipBytes": 9170,
-          "brotliBytes": 7913
+          "rawBytes": 16684,
+          "gzipBytes": 4756,
+          "brotliBytes": 4034
         },
         "consolidate": {
-          "rawBytes": 36499,
-          "gzipBytes": 9170,
-          "brotliBytes": 7913
+          "rawBytes": 16684,
+          "gzipBytes": 4756,
+          "brotliBytes": 4034
         }
       },
       {
-        "route": "bookmarks.html",
-        "files": ["bookmarks.html", "_build/assets/entry-client-myZvc0vZ.css"],
+        "route": "about/index.html",
+        "files": ["about/index.html", "_build/assets/client-CTZZ5qDH.css"],
         "baseline": {
-          "rawBytes": 1688670,
-          "gzipBytes": 112635,
-          "brotliBytes": 86403
+          "rawBytes": 17335,
+          "gzipBytes": 5055,
+          "brotliBytes": 4262
         },
         "rename": {
-          "rawBytes": 1688670,
-          "gzipBytes": 112635,
-          "brotliBytes": 86403
+          "rawBytes": 17335,
+          "gzipBytes": 5055,
+          "brotliBytes": 4262
         },
         "consolidate": {
-          "rawBytes": 1688670,
-          "gzipBytes": 112635,
-          "brotliBytes": 86403
+          "rawBytes": 17335,
+          "gzipBytes": 5055,
+          "brotliBytes": 4262
         }
       },
       {
         "route": "index.html",
-        "files": ["index.html", "_build/assets/entry-client-myZvc0vZ.css"],
+        "files": ["index.html", "_build/assets/client-CTZZ5qDH.css"],
         "baseline": {
-          "rawBytes": 37857,
-          "gzipBytes": 9730,
-          "brotliBytes": 8313
+          "rawBytes": 23960,
+          "gzipBytes": 5510,
+          "brotliBytes": 4633
         },
         "rename": {
-          "rawBytes": 37857,
-          "gzipBytes": 9730,
-          "brotliBytes": 8313
+          "rawBytes": 23960,
+          "gzipBytes": 5510,
+          "brotliBytes": 4633
         },
         "consolidate": {
-          "rawBytes": 37857,
-          "gzipBytes": 9730,
-          "brotliBytes": 8313
+          "rawBytes": 23960,
+          "gzipBytes": 5510,
+          "brotliBytes": 4633
         }
       }
     ],
     "wholeSite": {
       "baseline": {
-        "rawBytes": 1706544,
-        "gzipBytes": 119341,
-        "brotliBytes": 91877
+        "rawBytes": 57979,
+        "gzipBytes": 15321,
+        "brotliBytes": 12929
       },
       "rename": {
-        "rawBytes": 1706544,
-        "gzipBytes": 119341,
-        "brotliBytes": 91877
+        "rawBytes": 57979,
+        "gzipBytes": 15321,
+        "brotliBytes": 12929
       },
       "consolidate": {
-        "rawBytes": 1706544,
-        "gzipBytes": 119341,
-        "brotliBytes": 91877
+        "rawBytes": 57979,
+        "gzipBytes": 15321,
+        "brotliBytes": 12929
       }
     },
     "arms": [
@@ -1619,39 +1158,51 @@
     ],
     "upperBoundRename": {
       "wholeSite": {
-        "rawBytes": 1216052,
-        "gzipBytes": 114207,
-        "brotliBytes": 86656
+        "rawBytes": 51486,
+        "gzipBytes": 14386,
+        "brotliBytes": 12166
       },
-      "brotliDeltaBytes": -5221,
-      "brotliDeltaPercent": -5.682597385635143
+      "brotliDeltaBytes": -763,
+      "brotliDeltaPercent": -5.901461829994585
     },
     "coverage": {
-      "utilitySelectors": 126,
-      "mappedSelectors": 90,
-      "unmappedSelectors": 36,
-      "parseWarnings": 7,
-      "qualifiedStylesheets": ["_build/assets/entry-client-myZvc0vZ.css"],
+      "utilitySelectors": 228,
+      "mappedSelectors": 225,
+      "unmappedSelectors": 3,
+      "parseWarnings": 21,
+      "qualifiedStylesheets": [
+        "_build/assets/client-CTZZ5qDH.css",
+        "_server/assets/app-CTZZ5qDH.css",
+        "assets/ssr-CTZZ5qDH.css"
+      ],
       "confidence": "partial"
     },
     "inputHashes": [
       {
-        "file": "_build/assets/entry-client-myZvc0vZ.css",
-        "sha256": "75e85d532e7cee524a0f190b562c45fdb3e6d6bab40b62bbccef725f788d9832"
+        "file": "404/index.html",
+        "sha256": "b1b302c8a08760b2c48fe9b5ec3d00d8b25c02f73e6e1217dbb7beed1ce060f5"
       },
       {
-        "file": "blog/comb-the-desert.html",
-        "sha256": "91f0d884eb8913b50aaf81224aab78f660d7c87ff087f5e8b2a23b97a41cda49"
+        "file": "_build/assets/client-CTZZ5qDH.css",
+        "sha256": "d31a9106c96e3efa76b453be0137eedbe285e3b75eaff158419e373bf48a6f6c"
       },
       {
-        "file": "bookmarks.html",
-        "sha256": "c2e46850d88a83c48b1924471a960d10895cc7771a99d447d9095119a7207380"
+        "file": "_server/assets/app-CTZZ5qDH.css",
+        "sha256": "d31a9106c96e3efa76b453be0137eedbe285e3b75eaff158419e373bf48a6f6c"
+      },
+      {
+        "file": "about/index.html",
+        "sha256": "5a9f5bb84166590018721b4e41f5652a6a6eedcff579805e76b68c59e726a122"
+      },
+      {
+        "file": "assets/ssr-CTZZ5qDH.css",
+        "sha256": "d31a9106c96e3efa76b453be0137eedbe285e3b75eaff158419e373bf48a6f6c"
       },
       {
         "file": "index.html",
-        "sha256": "f589817f0204d398ad309f5499a4352511687b2b739aea0f0f4a98134d34ed15"
+        "sha256": "3fa27095d89bfe998b2967832a99da83d674b887cec2813ca19766748c733d52"
       }
     ],
-    "jsFilesOutOfScope": 16
+    "jsFilesOutOfScope": 6
   }
 }
