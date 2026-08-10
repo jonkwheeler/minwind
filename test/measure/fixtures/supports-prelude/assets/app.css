@@ -1,5 +1,5 @@
-@supports (((-webkit-hyphens:none)) and (not (margin-trim:inline))) or
-  ((-moz-orient:inline) and (not (color:rgb(from red r g b)))) {
+@supports (((-webkit-hyphens: none)) and (not (margin-trim: inline))) or
+  ((-moz-orient: inline) and (not (color: rgb(from red r g b)))) {
   .supports-rule {
     color: red;
   }

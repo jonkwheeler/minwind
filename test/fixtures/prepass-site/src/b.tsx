@@ -1,6 +1,6 @@
 export function runtimeClasses(el: HTMLElement): void {
-  el.classList.add('dissolve-reduced')
-  el.className = 'js-assigned'
+  el.classList.add("dissolve-reduced");
+  el.className = "js-assigned";
 }
 
 export function Footer() {
@@ -10,5 +10,5 @@ export function Footer() {
       <p class="ghost-token">ghost</p>
       <ul class="flex-col space-y-4">first</ul>
     </footer>
-  )
+  );
 }

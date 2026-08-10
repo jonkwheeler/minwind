@@ -1,91 +1,91 @@
-import { Buffer } from 'node:buffer'
-import { createHash } from 'node:crypto'
-import path from 'node:path'
-import { brotliCompressSync, constants, gzipSync } from 'node:zlib'
-import { simulateRename } from './arms/rename.js'
+import { Buffer } from "node:buffer";
+import { createHash } from "node:crypto";
+import path from "node:path";
+import { brotliCompressSync, constants, gzipSync } from "node:zlib";
+import { simulateRename } from "./arms/rename.js";
 import type {
   ClassCategory,
   ClassInventoryEntry,
   ClassModel,
-} from './exclusions.js'
-import { EXCLUDED_CATEGORIES, categorize } from './exclusions.js'
-import type { ArmResult, SimulationInput } from './span-edit.js'
-import { compareCodeUnits } from './util.js'
+} from "./exclusions.js";
+import { EXCLUDED_CATEGORIES, categorize } from "./exclusions.js";
+import type { ArmResult, SimulationInput } from "./span-edit.js";
+import { compareCodeUnits } from "./util.js";
 
 // KTD3 compression profile: gzip level 9 and Brotli quality 11, one-shot
 // node:zlib calls on whole-file Buffers, every file compressed independently.
 // The resulting numbers are static precompression estimates, not CDN wire
 // truth; the JSON report pins the runtime compression versions alongside.
-export const GZIP_LEVEL = 9
-export const BROTLI_QUALITY = 11
+export const GZIP_LEVEL = 9;
+export const BROTLI_QUALITY = 11;
 
 // KTD4: whole-site Brotli savings percent required for a "potentially worth
 // it" verdict; --threshold overrides.
-export const DEFAULT_THRESHOLD_PERCENT = 5
+export const DEFAULT_THRESHOLD_PERCENT = 5;
 
 export interface FileSizes {
-  rawBytes: number
-  gzipBytes: number
-  brotliBytes: number
+  rawBytes: number;
+  gzipBytes: number;
+  brotliBytes: number;
 }
 
 export interface RouteMeasurement {
-  route: string
-  files: Array<string>
-  baseline: FileSizes
-  rename: FileSizes
-  consolidate: FileSizes
+  route: string;
+  files: Array<string>;
+  baseline: FileSizes;
+  rename: FileSizes;
+  consolidate: FileSizes;
 }
 
-export type Verdict = 'not-worth-it' | 'potentially-worth-it'
+export type Verdict = "not-worth-it" | "potentially-worth-it";
 
 export interface ArmMeasurement {
-  arm: 'rename' | 'consolidate'
-  brotliDeltaBytes: number
-  brotliDeltaPercent: number
-  verdict: Verdict
-  lowConfidence: boolean
+  arm: "rename" | "consolidate";
+  brotliDeltaBytes: number;
+  brotliDeltaPercent: number;
+  verdict: Verdict;
+  lowConfidence: boolean;
 }
 
 export interface UpperBoundRenameMeasurement {
-  wholeSite: FileSizes
-  brotliDeltaBytes: number
-  brotliDeltaPercent: number
+  wholeSite: FileSizes;
+  brotliDeltaBytes: number;
+  brotliDeltaPercent: number;
 }
 
 export interface StylesheetCoverage {
-  utilitySelectors: number
-  mappedSelectors: number
-  unmappedSelectors: number
-  parseWarnings: number
-  qualifiedStylesheets: Array<string>
-  confidence: 'full' | 'partial'
+  utilitySelectors: number;
+  mappedSelectors: number;
+  unmappedSelectors: number;
+  parseWarnings: number;
+  qualifiedStylesheets: Array<string>;
+  confidence: "full" | "partial";
 }
 
 export interface InputFileHash {
-  file: string
-  sha256: string
+  file: string;
+  sha256: string;
 }
 
 export interface Measurement {
-  thresholdPercent: number
-  routes: Array<RouteMeasurement>
+  thresholdPercent: number;
+  routes: Array<RouteMeasurement>;
   wholeSite: {
-    baseline: FileSizes
-    rename: FileSizes
-    consolidate: FileSizes
-  }
-  arms: Array<ArmMeasurement>
-  upperBoundRename: UpperBoundRenameMeasurement
-  coverage: StylesheetCoverage
-  inputHashes: Array<InputFileHash>
-  jsFilesOutOfScope: number
+    baseline: FileSizes;
+    rename: FileSizes;
+    consolidate: FileSizes;
+  };
+  arms: Array<ArmMeasurement>;
+  upperBoundRename: UpperBoundRenameMeasurement;
+  coverage: StylesheetCoverage;
+  inputHashes: Array<InputFileHash>;
+  jsFilesOutOfScope: number;
 }
 
 export interface ArmResults {
-  baseline: ArmResult
-  rename: ArmResult
-  consolidate: ArmResult
+  baseline: ArmResult;
+  rename: ArmResult;
+  consolidate: ArmResult;
 }
 
 // The qualification gate (Risks & Dependencies): verdicts are only computed
@@ -96,24 +96,24 @@ export interface ArmResults {
 export class NoQualifiedStylesheetError extends Error {
   constructor(public readonly coverage: StylesheetCoverage) {
     super(
-      'no stylesheet qualifies for measurement: none of the discovered ' +
-        'stylesheets has a parseable, populated @layer utilities with at ' +
-        'least one selector mapping exactly to an HTML-used class; ' +
-        'withholding all verdicts',
-    )
-    this.name = 'NoQualifiedStylesheetError'
+      "no stylesheet qualifies for measurement: none of the discovered " +
+        "stylesheets has a parseable, populated @layer utilities with at " +
+        "least one selector mapping exactly to an HTML-used class; " +
+        "withholding all verdicts",
+    );
+    this.name = "NoQualifiedStylesheetError";
   }
 }
 
 export function compressSizes(text: string): FileSizes {
-  const buffer = Buffer.from(text, 'utf8')
+  const buffer = Buffer.from(text, "utf8");
   return {
     rawBytes: buffer.length,
     gzipBytes: gzipSync(buffer, { level: GZIP_LEVEL }).length,
     brotliBytes: brotliCompressSync(buffer, {
       params: { [constants.BROTLI_PARAM_QUALITY]: BROTLI_QUALITY },
     }).length,
-  }
+  };
 }
 
 // Arms leave most file contents identical, so compression results are cached
@@ -123,40 +123,40 @@ function measureFileMap(
   files: Map<string, string>,
   cache: Map<string, FileSizes>,
 ): Map<string, FileSizes> {
-  const sizes = new Map<string, FileSizes>()
+  const sizes = new Map<string, FileSizes>();
   for (const [filePath, contents] of files) {
-    let size = cache.get(contents)
+    let size = cache.get(contents);
     if (size === undefined) {
-      size = compressSizes(contents)
-      cache.set(contents, size)
+      size = compressSizes(contents);
+      cache.set(contents, size);
     }
-    sizes.set(filePath, size)
+    sizes.set(filePath, size);
   }
-  return sizes
+  return sizes;
 }
 
 function sumSizesFor(
   sizes: Map<string, FileSizes>,
   files: Array<string>,
 ): FileSizes {
-  const total: FileSizes = { rawBytes: 0, gzipBytes: 0, brotliBytes: 0 }
+  const total: FileSizes = { rawBytes: 0, gzipBytes: 0, brotliBytes: 0 };
   for (const file of files) {
-    const size = sizes.get(file)
+    const size = sizes.get(file);
     // Arms measure every discovered HTML and CSS file, and association only
     // accepts discovered CSS files, so a miss here is a pipeline bug — never
     // user input to skip past.
     if (size === undefined) {
-      throw new Error(`missing measured size: ${file}`)
+      throw new Error(`missing measured size: ${file}`);
     }
-    total.rawBytes += size.rawBytes
-    total.gzipBytes += size.gzipBytes
-    total.brotliBytes += size.brotliBytes
+    total.rawBytes += size.rawBytes;
+    total.gzipBytes += size.gzipBytes;
+    total.brotliBytes += size.brotliBytes;
   }
-  return total
+  return total;
 }
 
 function relativePath(input: SimulationInput, file: string): string {
-  return path.relative(input.build.buildDir, file).split(path.sep).join('/')
+  return path.relative(input.build.buildDir, file).split(path.sep).join("/");
 }
 
 // Coverage per KTD6: every selector arm inside a utilities-layer rule is a
@@ -169,39 +169,39 @@ export function computeStylesheetCoverage(
 ): StylesheetCoverage {
   const entryByToken = new Map(
     input.model.entries.map(function (entry) {
-      return [entry.token, entry] as const
+      return [entry.token, entry] as const;
     }),
-  )
-  let utilitySelectors = 0
-  let mappedSelectors = 0
-  let parseWarnings = 0
-  const qualifiedStylesheets: Array<string> = []
+  );
+  let utilitySelectors = 0;
+  let mappedSelectors = 0;
+  let parseWarnings = 0;
+  const qualifiedStylesheets: Array<string> = [];
   // A stylesheet in cssModels parsed by definition — an unrecoverable parse
   // would have thrown at model time — so only layer population and selector
   // mapping gate qualification here.
   for (const [filePath, model] of input.cssModels) {
-    parseWarnings += model.parseWarnings.length
-    let layerRuleCount = 0
-    let fileMapped = 0
+    parseWarnings += model.parseWarnings.length;
+    let layerRuleCount = 0;
+    let fileMapped = 0;
     for (const rule of model.rules) {
-      if (!rule.inUtilitiesLayer) continue
-      layerRuleCount += 1
+      if (!rule.inUtilitiesLayer) continue;
+      layerRuleCount += 1;
       for (const arm of rule.arms) {
-        utilitySelectors += 1
-        const candidate = arm.candidates[0]
+        utilitySelectors += 1;
+        const candidate = arm.candidates[0];
         const entry =
-          candidate === undefined ? undefined : entryByToken.get(candidate)
+          candidate === undefined ? undefined : entryByToken.get(candidate);
         if (entry !== undefined && entry.htmlOccurrences > 0) {
-          mappedSelectors += 1
-          fileMapped += 1
+          mappedSelectors += 1;
+          fileMapped += 1;
         }
       }
     }
     if (layerRuleCount > 0 && fileMapped > 0) {
-      qualifiedStylesheets.push(relativePath(input, filePath))
+      qualifiedStylesheets.push(relativePath(input, filePath));
     }
   }
-  const unmappedSelectors = utilitySelectors - mappedSelectors
+  const unmappedSelectors = utilitySelectors - mappedSelectors;
   return {
     utilitySelectors,
     mappedSelectors,
@@ -209,8 +209,8 @@ export function computeStylesheetCoverage(
     parseWarnings,
     qualifiedStylesheets,
     confidence:
-      unmappedSelectors === 0 && parseWarnings === 0 ? 'full' : 'partial',
-  }
+      unmappedSelectors === 0 && parseWarnings === 0 ? "full" : "partial",
+  };
 }
 
 // Re-runs the category decision for a js-referenced entry as if JS had not
@@ -219,7 +219,7 @@ export function computeStylesheetCoverage(
 function recategorizeWithoutJsReference(
   entry: ClassInventoryEntry,
 ): ClassCategory {
-  return categorize(entry, false)
+  return categorize(entry, false);
 }
 
 // The upper-bound counterfactual's model: identical to the real model except
@@ -227,24 +227,26 @@ function recategorizeWithoutJsReference(
 // what JS-reference exclusions cost.
 export function withoutJsReferenceExclusions(model: ClassModel): ClassModel {
   const entries = model.entries.map(function (entry) {
-    if (entry.category !== 'js-referenced') return entry
-    const category = recategorizeWithoutJsReference(entry)
-    return { ...entry, category, excluded: EXCLUDED_CATEGORIES.has(category) }
-  })
-  let excludedClassTokenBytes = 0
-  const excludedBytesByCategory = new Map<ClassCategory, number>()
+    if (entry.category !== "js-referenced") return entry;
+    const category = recategorizeWithoutJsReference(entry);
+    return { ...entry, category, excluded: EXCLUDED_CATEGORIES.has(category) };
+  });
+  let excludedClassTokenBytes = 0;
+  const excludedBytesByCategory = new Map<ClassCategory, number>();
   for (const entry of entries) {
-    if (!entry.excluded) continue
-    excludedClassTokenBytes += entry.htmlBytes
+    if (!entry.excluded) continue;
+    excludedClassTokenBytes += entry.htmlBytes;
     excludedBytesByCategory.set(
       entry.category,
       (excludedBytesByCategory.get(entry.category) ?? 0) + entry.htmlBytes,
-    )
+    );
   }
-  const excludedByteShareByCategory: Partial<Record<ClassCategory, number>> = {}
+  const excludedByteShareByCategory: Partial<Record<ClassCategory, number>> =
+    {};
   if (model.totalClassTokenBytes > 0) {
     for (const [category, bytes] of excludedBytesByCategory) {
-      excludedByteShareByCategory[category] = bytes / model.totalClassTokenBytes
+      excludedByteShareByCategory[category] =
+        bytes / model.totalClassTokenBytes;
     }
   }
   return {
@@ -252,19 +254,19 @@ export function withoutJsReferenceExclusions(model: ClassModel): ClassModel {
     entries,
     excludedClassTokenBytes,
     excludedByteShareByCategory,
-  }
+  };
 }
 
 export function simulateUpperBoundRename(input: SimulationInput): ArmResult {
   return simulateRename({
     ...input,
     model: withoutJsReferenceExclusions(input.model),
-  })
+  });
 }
 
 export function deltaPercent(simulated: number, baseline: number): number {
-  if (baseline === 0) return 0
-  return ((simulated - baseline) / baseline) * 100
+  if (baseline === 0) return 0;
+  return ((simulated - baseline) / baseline) * 100;
 }
 
 // KTD4 verdict asymmetry: savings below the threshold are a confident "not
@@ -273,8 +275,8 @@ export function deltaPercent(simulated: number, baseline: number): number {
 // (consolidation appends rules) reports as-is and is never worth it.
 function verdictFor(savedPercent: number, thresholdPercent: number): Verdict {
   return savedPercent >= thresholdPercent
-    ? 'potentially-worth-it'
-    : 'not-worth-it'
+    ? "potentially-worth-it"
+    : "not-worth-it";
 }
 
 // Low confidence (KTD6): the measured delta and the upper-bound
@@ -284,9 +286,9 @@ function straddlesThreshold(
   upperBoundSavedPercent: number,
   thresholdPercent: number,
 ): boolean {
-  const measuredAbove = savedPercent >= thresholdPercent
-  const upperAbove = upperBoundSavedPercent >= thresholdPercent
-  return measuredAbove !== upperAbove
+  const measuredAbove = savedPercent >= thresholdPercent;
+  const upperAbove = upperBoundSavedPercent >= thresholdPercent;
+  return measuredAbove !== upperAbove;
 }
 
 export function measureBuild(
@@ -294,98 +296,99 @@ export function measureBuild(
   armResults: ArmResults,
   options: { thresholdPercent?: number },
 ): Measurement {
-  const thresholdPercent = options.thresholdPercent ?? DEFAULT_THRESHOLD_PERCENT
-  const coverage = computeStylesheetCoverage(input)
+  const thresholdPercent =
+    options.thresholdPercent ?? DEFAULT_THRESHOLD_PERCENT;
+  const coverage = computeStylesheetCoverage(input);
   if (coverage.qualifiedStylesheets.length === 0) {
-    throw new NoQualifiedStylesheetError(coverage)
+    throw new NoQualifiedStylesheetError(coverage);
   }
-  const upperBound = simulateUpperBoundRename(input)
+  const upperBound = simulateUpperBoundRename(input);
 
-  const compressionCache = new Map<string, FileSizes>()
+  const compressionCache = new Map<string, FileSizes>();
   const baselineSizes = measureFileMap(
     armResults.baseline.files,
     compressionCache,
-  )
-  const renameSizes = measureFileMap(armResults.rename.files, compressionCache)
+  );
+  const renameSizes = measureFileMap(armResults.rename.files, compressionCache);
   const consolidateSizes = measureFileMap(
     armResults.consolidate.files,
     compressionCache,
-  )
-  const upperBoundSizes = measureFileMap(upperBound.files, compressionCache)
+  );
+  const upperBoundSizes = measureFileMap(upperBound.files, compressionCache);
 
   // Per-route rows (KTD4): the page's HTML plus its full associated
   // stylesheets — informational cold-cache figures, never summed into the
   // whole-site totals because routes share stylesheets.
-  const routes: Array<RouteMeasurement> = []
+  const routes: Array<RouteMeasurement> = [];
   for (const htmlFile of input.build.htmlFiles) {
     const files = [
       htmlFile,
       ...(input.build.stylesheetsByHtml.get(htmlFile) ?? []),
-    ]
+    ];
     routes.push({
       route: relativePath(input, htmlFile),
       files: files.map(function (file) {
-        return relativePath(input, file)
+        return relativePath(input, file);
       }),
       baseline: sumSizesFor(baselineSizes, files),
       rename: sumSizesFor(renameSizes, files),
       consolidate: sumSizesFor(consolidateSizes, files),
-    })
+    });
   }
 
   // Whole-site totals count each unique simulated file once (HTML + CSS
   // only; arms never simulate JS, so JS is out of measurement scope).
-  const uniqueFiles = Array.from(armResults.baseline.files.keys())
+  const uniqueFiles = Array.from(armResults.baseline.files.keys());
   const wholeSite = {
     baseline: sumSizesFor(baselineSizes, uniqueFiles),
     rename: sumSizesFor(renameSizes, uniqueFiles),
     consolidate: sumSizesFor(consolidateSizes, uniqueFiles),
-  }
-  const upperBoundWholeSite = sumSizesFor(upperBoundSizes, uniqueFiles)
+  };
+  const upperBoundWholeSite = sumSizesFor(upperBoundSizes, uniqueFiles);
 
-  const baselineBrotli = wholeSite.baseline.brotliBytes
-  const upperBoundDeltaBytes = upperBoundWholeSite.brotliBytes - baselineBrotli
+  const baselineBrotli = wholeSite.baseline.brotliBytes;
+  const upperBoundDeltaBytes = upperBoundWholeSite.brotliBytes - baselineBrotli;
   const upperBoundDeltaPercent = deltaPercent(
     upperBoundWholeSite.brotliBytes,
     baselineBrotli,
-  )
+  );
 
-  const arms: Array<ArmMeasurement> = []
-  for (const arm of ['rename', 'consolidate'] as const) {
-    const deltaBytes = wholeSite[arm].brotliBytes - baselineBrotli
-    const percent = deltaPercent(wholeSite[arm].brotliBytes, baselineBrotli)
-    const savedPercent = -percent
+  const arms: Array<ArmMeasurement> = [];
+  for (const arm of ["rename", "consolidate"] as const) {
+    const deltaBytes = wholeSite[arm].brotliBytes - baselineBrotli;
+    const percent = deltaPercent(wholeSite[arm].brotliBytes, baselineBrotli);
+    const savedPercent = -percent;
     arms.push({
       arm,
       brotliDeltaBytes: deltaBytes,
       brotliDeltaPercent: percent,
       verdict: verdictFor(savedPercent, thresholdPercent),
       lowConfidence:
-        arm === 'rename' &&
+        arm === "rename" &&
         straddlesThreshold(
           savedPercent,
           -upperBoundDeltaPercent,
           thresholdPercent,
         ),
-    })
+    });
   }
 
-  const inputHashes: Array<InputFileHash> = []
+  const inputHashes: Array<InputFileHash> = [];
   const analyzedSources = new Map<string, string>([
     ...input.htmlSources,
     ...input.cssSources,
-  ])
+  ]);
   const analyzedFiles = Array.from(analyzedSources.keys()).sort(
     compareCodeUnits,
-  )
+  );
   for (const filePath of analyzedFiles) {
-    const source = analyzedSources.get(filePath) ?? ''
+    const source = analyzedSources.get(filePath) ?? "";
     inputHashes.push({
       file: relativePath(input, filePath),
-      sha256: createHash('sha256')
-        .update(Buffer.from(source, 'utf8'))
-        .digest('hex'),
-    })
+      sha256: createHash("sha256")
+        .update(Buffer.from(source, "utf8"))
+        .digest("hex"),
+    });
   }
 
   return {
@@ -401,5 +404,5 @@ export function measureBuild(
     coverage,
     inputHashes,
     jsFilesOutOfScope: input.build.jsFiles.length,
-  }
+  };
 }

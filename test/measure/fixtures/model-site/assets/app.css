@@ -18,7 +18,7 @@
   .peer:checked ~ .peer-checked\:x {
     color: blue;
   }
-  :where(.space-y-3>:not(:last-child)) {
+  :where(.space-y-3 > :not(:last-child)) {
     margin-top: 0;
   }
   .js-toggled {

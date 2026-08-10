@@ -1,9 +1,9 @@
-import { cn } from '../lib/cn'
+import { cn } from "../lib/cn";
 
 export interface CardProps {
-  title: string
-  blurb: string
-  featured?: boolean
+  title: string;
+  blurb: string;
+  featured?: boolean;
 }
 
 // The article's static eleven-token list repeats for every card, so the
@@ -22,14 +22,14 @@ export function Card(props: CardProps) {
         <span class="select-none pointer-events-none">
           <span
             class={cn(
-              'uppercase tracking-wide',
-              props.featured === true && 'font-bold text-accent',
+              "uppercase tracking-wide",
+              props.featured === true && "font-bold text-accent",
             )}
           >
-            {props.featured === true ? 'featured' : 'entry'}
+            {props.featured === true ? "featured" : "entry"}
           </span>
         </span>
       </div>
     </article>
-  )
+  );
 }

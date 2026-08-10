@@ -1,4 +1,4 @@
-import * as ts from 'typescript'
+import * as ts from "typescript";
 
 // Shared KTD4 class-context detection. One AST walk classifies every
 // class-position node so the U2 pre-pass scan (which tokens exist) and the U3
@@ -13,9 +13,7 @@ import * as ts from 'typescript'
 // everywhere through the runtime channel (KTD4).
 
 export type RenameContextKind =
-  | 'class-attribute'
-  | 'classList-key'
-  | 'cn-argument'
+  "class-attribute" | "classList-key" | "cn-argument";
 
 // Detection-only contexts, plus the unprovable class-position expressions:
 // 'class-expression' / 'classList-expression' mark the nested string
@@ -24,12 +22,12 @@ export type RenameContextKind =
 // position. Those literals poison the token everywhere (KTD4); identifiers
 // and member expressions themselves contribute no tokens.
 export type RuntimeContextKind =
-  | 'classList-method'
-  | 'className-assignment'
-  | 'class-expression'
-  | 'classList-expression'
+  | "classList-method"
+  | "className-assignment"
+  | "class-expression"
+  | "classList-expression";
 
-export type ClassContextKind = RenameContextKind | RuntimeContextKind
+export type ClassContextKind = RenameContextKind | RuntimeContextKind;
 
 // A literal found in a class position. start/end are absolute offsets of the
 // literal's content (inside the quotes/backticks; the whole span for
@@ -39,11 +37,11 @@ export type ClassContextKind = RenameContextKind | RuntimeContextKind
 // binding. quoted is false exactly for those identifier keys, whose span
 // carries no surrounding quote bytes.
 export interface LiteralOccurrence {
-  text: string
-  start: number
-  end: number
-  shorthand: boolean
-  quoted: boolean
+  text: string;
+  start: number;
+  end: number;
+  shorthand: boolean;
+  quoted: boolean;
 }
 
 // Rename groups bracket the literals that form one logical class list: one
@@ -56,21 +54,21 @@ export interface LiteralOccurrence {
 // requires every value to be the literal `true`, since conditional values
 // render a runtime-chosen subset.
 export interface ClassContextVisitor {
-  enterRenameGroup?: (kind: RenameContextKind) => void
-  renameLiteral?: (literal: LiteralOccurrence, kind: RenameContextKind) => void
+  enterRenameGroup?: (kind: RenameContextKind) => void;
+  renameLiteral?: (literal: LiteralOccurrence, kind: RenameContextKind) => void;
   exitRenameGroup?: (
     kind: RenameContextKind,
     fullyLiteral: boolean,
     staticList: boolean,
-  ) => void
+  ) => void;
   unprovableTemplate?: (
     node: ts.TemplateExpression,
     kind: ClassContextKind,
-  ) => void
+  ) => void;
   runtimeLiteral?: (
     literal: LiteralOccurrence,
     kind: RuntimeContextKind,
-  ) => void
+  ) => void;
 }
 
 // HTML5 ASCII whitespace only — exactly the set the DOM classList splits on
@@ -80,8 +78,8 @@ export interface ClassContextVisitor {
 // classes the element never had.
 export function tokenize(text: string): Array<string> {
   return text.split(/[ \t\n\f\r]+/).filter(function (token) {
-    return token !== ''
-  })
+    return token !== "";
+  });
 }
 
 export function parseSourceModule(
@@ -91,14 +89,14 @@ export function parseSourceModule(
   // Strip Vite query suffixes (?pick=default&pick=$css) before choosing the
   // script kind: a queried id never ends with .tsx, and parsing picked JSX as
   // plain TS silently yields no rename contexts instead of a parse error.
-  const clean = filePath.split('?')[0]
+  const clean = filePath.split("?")[0];
   return ts.createSourceFile(
     filePath,
     text,
     ts.ScriptTarget.Latest,
     true,
-    clean.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
-  )
+    clean.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
+  );
 }
 
 export function walkClassContexts(
@@ -107,24 +105,24 @@ export function walkClassContexts(
 ): void {
   // Identify cn by its import-traced binding; fall back to a bare-name match
   // so an unimported global-style helper still counts (KTD4).
-  const cnNames = new Set<string>()
+  const cnNames = new Set<string>();
   for (const statement of sourceFile.statements) {
-    if (!ts.isImportDeclaration(statement)) continue
-    const namedBindings = statement.importClause?.namedBindings
+    if (!ts.isImportDeclaration(statement)) continue;
+    const namedBindings = statement.importClause?.namedBindings;
     if (namedBindings === undefined || !ts.isNamedImports(namedBindings)) {
-      continue
+      continue;
     }
     for (const element of namedBindings.elements) {
-      const imported = element.propertyName?.text ?? element.name.text
-      if (imported === 'cn') cnNames.add(element.name.text)
+      const imported = element.propertyName?.text ?? element.name.text;
+      if (imported === "cn") cnNames.add(element.name.text);
     }
   }
 
   function isCnCall(node: ts.CallExpression): boolean {
     return (
       ts.isIdentifier(node.expression) &&
-      (cnNames.has(node.expression.text) || node.expression.text === 'cn')
-    )
+      (cnNames.has(node.expression.text) || node.expression.text === "cn")
+    );
   }
 
   function occurrence(
@@ -138,7 +136,7 @@ export function walkClassContexts(
         end: node.getEnd(),
         shorthand,
         quoted: false,
-      }
+      };
     }
     return {
       text: node.text,
@@ -146,16 +144,16 @@ export function walkClassContexts(
       end: node.getEnd() - 1,
       shorthand,
       quoted: true,
-    }
+    };
   }
 
   function emitLiteralList(
     node: ts.StringLiteral | ts.NoSubstitutionTemplateLiteral,
     kind: RenameContextKind,
   ): void {
-    visitor.enterRenameGroup?.(kind)
-    visitor.renameLiteral?.(occurrence(node, false), kind)
-    visitor.exitRenameGroup?.(kind, true, true)
+    visitor.enterRenameGroup?.(kind);
+    visitor.renameLiteral?.(occurrence(node, false), kind);
+    visitor.exitRenameGroup?.(kind, true, true);
   }
 
   // Inside a provable class context, nested string literals are still class
@@ -163,47 +161,47 @@ export function walkClassContexts(
   // unprovable.
   function collectNested(node: ts.Node, kind: RenameContextKind): void {
     if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
-      visitor.renameLiteral?.(occurrence(node, false), kind)
-      return
+      visitor.renameLiteral?.(occurrence(node, false), kind);
+      return;
     }
     if (ts.isTemplateExpression(node)) {
-      visitor.unprovableTemplate?.(node, kind)
-      return
+      visitor.unprovableTemplate?.(node, kind);
+      return;
     }
     ts.forEachChild(node, function (child) {
-      collectNested(child, kind)
-    })
+      collectNested(child, kind);
+    });
   }
 
   function handleCnCall(node: ts.CallExpression): void {
-    visitor.enterRenameGroup?.('cn-argument')
-    let fullyLiteral = node.arguments.length > 0
+    visitor.enterRenameGroup?.("cn-argument");
+    let fullyLiteral = node.arguments.length > 0;
     for (const argument of node.arguments) {
       if (
         ts.isStringLiteral(argument) ||
         ts.isNoSubstitutionTemplateLiteral(argument)
       ) {
-        visitor.renameLiteral?.(occurrence(argument, false), 'cn-argument')
+        visitor.renameLiteral?.(occurrence(argument, false), "cn-argument");
       } else {
-        fullyLiteral = false
-        collectNested(argument, 'cn-argument')
+        fullyLiteral = false;
+        collectNested(argument, "cn-argument");
       }
     }
-    visitor.exitRenameGroup?.('cn-argument', fullyLiteral, fullyLiteral)
+    visitor.exitRenameGroup?.("cn-argument", fullyLiteral, fullyLiteral);
   }
 
   function isClassListMethod(name: string): boolean {
-    return name === 'add' || name === 'remove' || name === 'toggle'
+    return name === "add" || name === "remove" || name === "toggle";
   }
 
   function isClassListMethodCall(node: ts.CallExpression): boolean {
-    const callee = node.expression
+    const callee = node.expression;
     return (
       ts.isPropertyAccessExpression(callee) &&
       isClassListMethod(callee.name.text) &&
       ts.isPropertyAccessExpression(callee.expression) &&
-      callee.expression.name.text === 'classList'
-    )
+      callee.expression.name.text === "classList"
+    );
   }
 
   // Detection-only (KTD4): el.classList.add/remove/toggle('...') literals
@@ -216,20 +214,20 @@ export function walkClassContexts(
       ) {
         visitor.runtimeLiteral?.(
           occurrence(argument, false),
-          'classList-method',
-        )
+          "classList-method",
+        );
       } else if (ts.isTemplateExpression(argument)) {
-        visitor.unprovableTemplate?.(argument, 'classList-method')
+        visitor.unprovableTemplate?.(argument, "classList-method");
       }
     }
   }
 
   function handleCall(node: ts.CallExpression): void {
     if (isCnCall(node)) {
-      handleCnCall(node)
-      return
+      handleCnCall(node);
+      return;
     }
-    if (isClassListMethodCall(node)) reportClassListMethodArguments(node)
+    if (isClassListMethodCall(node)) reportClassListMethodArguments(node);
   }
 
   // An unprovable class-position expression (a conditional, a non-cn call
@@ -242,19 +240,19 @@ export function walkClassContexts(
   // poison too.
   function collectUnprovable(
     node: ts.Node,
-    kind: 'class-expression' | 'classList-expression',
+    kind: "class-expression" | "classList-expression",
   ): void {
     if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
-      visitor.runtimeLiteral?.(occurrence(node, false), kind)
-      return
+      visitor.runtimeLiteral?.(occurrence(node, false), kind);
+      return;
     }
     if (ts.isTemplateExpression(node)) {
-      visitor.unprovableTemplate?.(node, kind)
-      return
+      visitor.unprovableTemplate?.(node, kind);
+      return;
     }
     ts.forEachChild(node, function (child) {
-      collectUnprovable(child, kind)
-    })
+      collectUnprovable(child, kind);
+    });
   }
 
   function handleClassExpression(expression: ts.Expression): void {
@@ -262,46 +260,46 @@ export function walkClassContexts(
       ts.isStringLiteral(expression) ||
       ts.isNoSubstitutionTemplateLiteral(expression)
     ) {
-      emitLiteralList(expression, 'class-attribute')
-      return
+      emitLiteralList(expression, "class-attribute");
+      return;
     }
     if (ts.isTemplateExpression(expression)) {
-      visitor.unprovableTemplate?.(expression, 'class-attribute')
-      return
+      visitor.unprovableTemplate?.(expression, "class-attribute");
+      return;
     }
     if (ts.isCallExpression(expression)) {
       if (isCnCall(expression)) {
-        handleCnCall(expression)
-        return
+        handleCnCall(expression);
+        return;
       }
       if (isClassListMethodCall(expression)) {
-        reportClassListMethodArguments(expression)
-        return
+        reportClassListMethodArguments(expression);
+        return;
       }
-      collectUnprovable(expression, 'class-expression')
-      return
+      collectUnprovable(expression, "class-expression");
+      return;
     }
-    collectUnprovable(expression, 'class-expression')
+    collectUnprovable(expression, "class-expression");
   }
 
   function handleClassListExpression(expression: ts.Expression): void {
     if (!ts.isObjectLiteralExpression(expression)) {
       // A non-object classList expression (an identifier, conditional, or
       // call) is unprovable; poison any nested string literals (KTD4).
-      collectUnprovable(expression, 'classList-expression')
-      return
+      collectUnprovable(expression, "classList-expression");
+      return;
     }
-    visitor.enterRenameGroup?.('classList-key')
-    let fullyStatic = true
+    visitor.enterRenameGroup?.("classList-key");
+    let fullyStatic = true;
     // classList values are per-key conditions: only an all-`true` object
     // provably renders exactly its keys (R3 consolidation eligibility).
-    let allValuesTrue = true
+    let allValuesTrue = true;
     for (const property of expression.properties) {
       if (
         ts.isPropertyAssignment(property) ||
         ts.isShorthandPropertyAssignment(property)
       ) {
-        const name = property.name
+        const name = property.name;
         if (
           ts.isStringLiteral(name) ||
           ts.isIdentifier(name) ||
@@ -309,82 +307,82 @@ export function walkClassContexts(
         ) {
           visitor.renameLiteral?.(
             occurrence(name, ts.isShorthandPropertyAssignment(property)),
-            'classList-key',
-          )
+            "classList-key",
+          );
         } else {
-          fullyStatic = false
+          fullyStatic = false;
         }
         if (
           ts.isShorthandPropertyAssignment(property) ||
           property.initializer.kind !== ts.SyntaxKind.TrueKeyword
         ) {
-          allValuesTrue = false
+          allValuesTrue = false;
         }
       } else {
-        fullyStatic = false
-        allValuesTrue = false
+        fullyStatic = false;
+        allValuesTrue = false;
       }
     }
     visitor.exitRenameGroup?.(
-      'classList-key',
+      "classList-key",
       fullyStatic,
       fullyStatic && allValuesTrue,
-    )
+    );
   }
 
   function visit(node: ts.Node): void {
     if (ts.isJsxAttribute(node)) {
       // Namespaced attribute names (a:b) are never class contexts.
-      const attribute = ts.isIdentifier(node.name) ? node.name.text : ''
-      const initializer = node.initializer
-      if (attribute === 'class' && initializer !== undefined) {
+      const attribute = ts.isIdentifier(node.name) ? node.name.text : "";
+      const initializer = node.initializer;
+      if (attribute === "class" && initializer !== undefined) {
         if (ts.isStringLiteral(initializer)) {
-          emitLiteralList(initializer, 'class-attribute')
+          emitLiteralList(initializer, "class-attribute");
         } else if (
           ts.isJsxExpression(initializer) &&
           initializer.expression !== undefined
         ) {
-          handleClassExpression(initializer.expression)
+          handleClassExpression(initializer.expression);
         }
       } else if (
-        attribute === 'classList' &&
+        attribute === "classList" &&
         initializer !== undefined &&
         ts.isJsxExpression(initializer) &&
         initializer.expression !== undefined
       ) {
-        handleClassListExpression(initializer.expression)
+        handleClassListExpression(initializer.expression);
       }
-      return
+      return;
     }
     if (ts.isCallExpression(node)) {
-      handleCall(node)
+      handleCall(node);
       // Descend: arguments of a non-cn call may themselves contain cn calls.
-      ts.forEachChild(node, visit)
-      return
+      ts.forEachChild(node, visit);
+      return;
     }
     if (
       ts.isBinaryExpression(node) &&
       node.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
       ts.isPropertyAccessExpression(node.left) &&
-      node.left.name.text === 'className'
+      node.left.name.text === "className"
     ) {
       // Detection-only (KTD4): el.className = '...' assignments.
-      const right = node.right
+      const right = node.right;
       if (
         ts.isStringLiteral(right) ||
         ts.isNoSubstitutionTemplateLiteral(right)
       ) {
         visitor.runtimeLiteral?.(
           occurrence(right, false),
-          'className-assignment',
-        )
+          "className-assignment",
+        );
       } else if (ts.isTemplateExpression(right)) {
-        visitor.unprovableTemplate?.(right, 'className-assignment')
+        visitor.unprovableTemplate?.(right, "className-assignment");
       }
-      return
+      return;
     }
-    ts.forEachChild(node, visit)
+    ts.forEachChild(node, visit);
   }
 
-  visit(sourceFile)
+  visit(sourceFile);
 }

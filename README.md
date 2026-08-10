@@ -8,11 +8,12 @@ builds only — your source and your dev server stay readable.
 ```html
 <!-- before -->
 <div class="mx-auto flex min-h-screen max-w-3xl flex-col px-6">
-<span class="flex items-center gap-5 text-sm font-medium">
-
-<!-- after -->
-<div class="quill willow north lark ember ljaa">
-<span class="willow glen brook dog drift">
+  <span class="flex items-center gap-5 text-sm font-medium">
+    <!-- after -->
+    <div class="quill willow north lark ember ljaa">
+      <span class="willow glen brook dog drift"></span></div
+  ></span>
+</div>
 ```
 
 ## Why
@@ -24,18 +25,18 @@ cost bytes on the wire, and they dominate the DOM you read in devtools.
 Measured on a real SolidStart site ([jonkwheeler.com](https://jonkwheeler.com),
 ~40 prerendered routes):
 
-|                              | before    | after     | delta   |
-| ---------------------------- | --------- | --------- | ------- |
-| HTML + CSS, raw              | 1,768 KB  | 1,356 KB  | -23.3%  |
-| HTML + CSS, Brotli 11        | 100.9 KB  | 96.9 KB   | -4.0%   |
-| median class attribute       | 106 chars | 26 chars  | -75%    |
+|                        | before    | after    | delta  |
+| ---------------------- | --------- | -------- | ------ |
+| HTML + CSS, raw        | 1,768 KB  | 1,356 KB | -23.3% |
+| HTML + CSS, Brotli 11  | 100.9 KB  | 96.9 KB  | -4.0%  |
+| median class attribute | 106 chars | 26 chars | -75%   |
 
 And on the tiny demo app in `examples/demo` (3 routes):
 
-|                              | before    | after     | delta   |
-| ---------------------------- | --------- | --------- | ------- |
-| HTML + CSS, raw              | 58.0 KB   | 53.4 KB   | -8.0%   |
-| median class attribute       | 47 chars  | 23 chars  | -51%    |
+|                        | before   | after    | delta |
+| ---------------------- | -------- | -------- | ----- |
+| HTML + CSS, raw        | 58.0 KB  | 53.4 KB  | -8.0% |
+| median class attribute | 47 chars | 23 chars | -51%  |
 
 Every claim above is gated by the comparison harness: it builds your site with
 the plugin off and on, crawls both outputs, and fails unless the rendered
@@ -54,14 +55,14 @@ npm install minwind
 
 ```ts
 // vite.config.ts (or app.config.ts for SolidStart)
-import { minwind } from 'minwind'
+import { minwind } from "minwind";
 
 export default defineConfig({
   plugins: [
     minwind(),
     // ...
   ],
-})
+});
 ```
 
 Build. That's it. The plugin only runs on `vite build`; dev is untouched.
@@ -94,11 +95,11 @@ corpus:
 ```ts
 minwind({
   naming: {
-    strategy: 'quotes',
-    corpus: ['the quick brown fox jumps over the lazy dog'],
-    vocabulary: ['quill', 'willow', 'ember', 'lark', 'glen', 'harbor'],
+    strategy: "quotes",
+    corpus: ["the quick brown fox jumps over the lazy dog"],
+    vocabulary: ["quill", "willow", "ember", "lark", "glen", "harbor"],
   },
-})
+});
 ```
 
 With `quotes`, the classes on a single element spell out fragments of your
@@ -115,9 +116,9 @@ into one generated rule and replace every occurrence with a single class:
 ```html
 <!-- before, in 12 components -->
 <span class="select-none pointer-events-none">
-
-<!-- after -->
-<span class="ckqw">
+  <!-- after -->
+  <span class="ckqw"></span
+></span>
 ```
 
 Consolidation is conservative. A list only folds when it is static, repeated,
@@ -138,10 +139,10 @@ untouched and listed in the report:
 ```ts
 minwind({
   exclusions: {
-    names: ['active', 'inactive'], // e.g. Solid Router's <A> link classes
-    prefixes: ['shiki'],           // e.g. syntax highlighter themes
+    names: ["active", "inactive"], // e.g. Solid Router's <A> link classes
+    prefixes: ["shiki"], // e.g. syntax highlighter themes
   },
-})
+});
 ```
 
 Every build writes `.output/minwind/report.json` with the full rename map,

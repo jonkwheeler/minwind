@@ -1,3 +1,3 @@
-import { cn } from './cn'
+import { cn } from "./cn";
 
-export const cardClass = cn('fade-in', 'site-card')
+export const cardClass = cn("fade-in", "site-card");

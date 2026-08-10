@@ -1,0 +1,2 @@
+# Intentionally malformed fixture used to test broken-CSS handling
+test/fixtures/prepass-site/src/broken.css

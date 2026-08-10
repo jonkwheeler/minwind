@@ -423,14 +423,14 @@ tools/minwind/
 
 ## Verification Contract
 
-| Gate                        | Command                                                                  | Proves                                            |
-| --------------------------- | ------------------------------------------------------------------------ | ------------------------------------------------- |
+| Gate                        | Command                                                                | Proves                                         |
+| --------------------------- | ---------------------------------------------------------------------- | ---------------------------------------------- |
 | Setup                       | clean root `pnpm install`, then `pnpm install` inside `tools/minwind/` | toolchain baseline (mirrors the minwind setup) |
-| Unit and integration suites | `pnpm tsx --test "tools/minwind/test/**/*.test.ts"` from the repo root | U1–U7 test scenarios                              |
-| Repo checks                 | `pnpm check` (typecheck + lint + format, covers `tools/**`)              | Implementation Constraints                        |
-| Comparison gate             | root harness script (added in U6/U7)                                     | R6, R7, AE3                                       |
-| Dogfood run                 | `pnpm build` with the plugin registered, then the harness                | R8, AE1, AE2, AE5                                 |
-| Byte delta                  | `pnpm tw:measure .output/public` on the transformed build                | Success Criteria                                  |
+| Unit and integration suites | `pnpm tsx --test "tools/minwind/test/**/*.test.ts"` from the repo root | U1–U7 test scenarios                           |
+| Repo checks                 | `pnpm check` (typecheck + lint + format, covers `tools/**`)            | Implementation Constraints                     |
+| Comparison gate             | root harness script (added in U6/U7)                                   | R6, R7, AE3                                    |
+| Dogfood run                 | `pnpm build` with the plugin registered, then the harness              | R8, AE1, AE2, AE5                              |
+| Byte delta                  | `pnpm tw:measure .output/public` on the transformed build              | Success Criteria                               |
 
 The test gate uses a quoted glob, not a directory argument — tsx 4.21 treats a directory as an entry point and fails, and Node 22's directory scan does not match `.ts` files (both verified against the repo's toolchain).
 

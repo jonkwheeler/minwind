@@ -1,5 +1,5 @@
-import assert from 'node:assert'
-import { describe, it } from 'node:test'
+import assert from "node:assert";
+import { describe, it } from "node:test";
 import {
   DEFAULT_EXCLUSIONS,
   NAME_LENGTH,
@@ -8,21 +8,21 @@ import {
   hashClassName,
   type ExclusionConfig,
   type RegistryInput,
-} from '../src/names.js'
+} from "../src/names.js";
 
 const KNOWN_TOKENS = [
-  'flex',
-  'hover:border-accent',
-  '[&_pre]:p-4',
-  'max-w-162.5',
-]
+  "flex",
+  "hover:border-accent",
+  "[&_pre]:p-4",
+  "max-w-162.5",
+];
 
 function inputFor(overrides: {
-  universe?: Array<string>
-  sourceTokens?: Array<string>
-  runtimeTokens?: Array<string>
-  exclusions?: ExclusionConfig
-  hash?: (token: string) => string
+  universe?: Array<string>;
+  sourceTokens?: Array<string>;
+  runtimeTokens?: Array<string>;
+  exclusions?: ExclusionConfig;
+  hash?: (token: string) => string;
 }): RegistryInput {
   return {
     universe: new Set(overrides.universe ?? []),
@@ -30,305 +30,305 @@ function inputFor(overrides: {
     runtimeTokens: new Set(overrides.runtimeTokens ?? []),
     exclusions: overrides.exclusions,
     hash: overrides.hash,
-  }
+  };
 }
 
 // A site-style exclusion contract, passed explicitly: the package default
 // excludes nothing.
 const SITE_EXCLUSIONS: ExclusionConfig = {
-  names: ['shiki', 'line', 'min-dark'],
-  prefixes: ['dissolve-'],
-}
+  names: ["shiki", "line", "min-dark"],
+  prefixes: ["dissolve-"],
+};
 
-describe('hashClassName', () => {
-  it('produces ident-safe fixed-length names for known tokens', function () {
+describe("hashClassName", () => {
+  it("produces ident-safe fixed-length names for known tokens", function () {
     for (const token of KNOWN_TOKENS) {
-      const name = hashClassName(token)
-      assert.match(name, NAME_PATTERN, `name for ${token}`)
-      assert.strictEqual(name.length, NAME_LENGTH, `length for ${token}`)
+      const name = hashClassName(token);
+      assert.match(name, NAME_PATTERN, `name for ${token}`);
+      assert.strictEqual(name.length, NAME_LENGTH, `length for ${token}`);
     }
-  })
+  });
 
-  it('is a pure function of the whole token', function () {
+  it("is a pure function of the whole token", function () {
     for (const token of KNOWN_TOKENS) {
-      assert.strictEqual(hashClassName(token), hashClassName(token), token)
+      assert.strictEqual(hashClassName(token), hashClassName(token), token);
     }
-  })
+  });
 
-  it('hashes the variant as part of the token', function () {
+  it("hashes the variant as part of the token", function () {
     assert.notStrictEqual(
-      hashClassName('border-accent'),
-      hashClassName('hover:border-accent'),
-    )
-  })
+      hashClassName("border-accent"),
+      hashClassName("hover:border-accent"),
+    );
+  });
 
-  it('rejects an empty token', function () {
+  it("rejects an empty token", function () {
     assert.throws(function () {
-      hashClassName('')
-    }, /empty/)
-  })
-})
+      hashClassName("");
+    }, /empty/);
+  });
+});
 
-describe('createNameRegistry happy path', function () {
+describe("createNameRegistry happy path", function () {
   const registry = createNameRegistry(
     inputFor({ universe: KNOWN_TOKENS, sourceTokens: KNOWN_TOKENS }),
-  )
+  );
 
-  it('renames every provable token to an ident-safe name', function () {
+  it("renames every provable token to an ident-safe name", function () {
     for (const token of KNOWN_TOKENS) {
-      const name = registry.nameFor(token)
-      assert.ok(name !== undefined, `expected a name for ${token}`)
-      assert.match(name, NAME_PATTERN, `name for ${token}`)
-      assert.strictEqual(name, hashClassName(token))
+      const name = registry.nameFor(token);
+      assert.ok(name !== undefined, `expected a name for ${token}`);
+      assert.match(name, NAME_PATTERN, `name for ${token}`);
+      assert.strictEqual(name, hashClassName(token));
     }
-  })
+  });
 
-  it('round-trips name -> token', function () {
+  it("round-trips name -> token", function () {
     for (const token of KNOWN_TOKENS) {
-      const name = registry.nameFor(token)
-      assert.ok(name !== undefined)
-      assert.strictEqual(registry.tokenFor(name), token)
+      const name = registry.nameFor(token);
+      assert.ok(name !== undefined);
+      assert.strictEqual(registry.tokenFor(name), token);
     }
-  })
+  });
 
-  it('gives tokens differing only in variant distinct names', function () {
+  it("gives tokens differing only in variant distinct names", function () {
     const pair = createNameRegistry(
       inputFor({
-        universe: ['border-accent', 'hover:border-accent'],
-        sourceTokens: ['border-accent', 'hover:border-accent'],
+        universe: ["border-accent", "hover:border-accent"],
+        sourceTokens: ["border-accent", "hover:border-accent"],
       }),
-    )
+    );
     assert.notStrictEqual(
-      pair.nameFor('border-accent'),
-      pair.nameFor('hover:border-accent'),
-    )
-  })
+      pair.nameFor("border-accent"),
+      pair.nameFor("hover:border-accent"),
+    );
+  });
 
-  it('produces an identical map regardless of insertion order', function () {
+  it("produces an identical map regardless of insertion order", function () {
     const forward = createNameRegistry(
       inputFor({ universe: KNOWN_TOKENS, sourceTokens: KNOWN_TOKENS }),
-    )
-    const reversed = [...KNOWN_TOKENS].reverse()
+    );
+    const reversed = [...KNOWN_TOKENS].reverse();
     const backward = createNameRegistry(
       inputFor({ universe: reversed, sourceTokens: reversed }),
-    )
-    assert.deepStrictEqual(backward.entries(), forward.entries())
-  })
+    );
+    assert.deepStrictEqual(backward.entries(), forward.entries());
+  });
 
-  it('produces an identical map in a second independent instance', function () {
+  it("produces an identical map in a second independent instance", function () {
     const again = createNameRegistry(
       inputFor({ universe: KNOWN_TOKENS, sourceTokens: KNOWN_TOKENS }),
-    )
-    assert.deepStrictEqual(again.entries(), registry.entries())
-  })
+    );
+    assert.deepStrictEqual(again.entries(), registry.entries());
+  });
 
-  it('keeps the bijection over the full name set', function () {
+  it("keeps the bijection over the full name set", function () {
     assert.doesNotThrow(function () {
-      registry.assertBijection()
-    })
-  })
-})
+      registry.assertBijection();
+    });
+  });
+});
 
-describe('createNameRegistry exclusion classification', function () {
-  it('excludes configured prefix and exact-name tokens', function () {
+describe("createNameRegistry exclusion classification", function () {
+  it("excludes configured prefix and exact-name tokens", function () {
     const tokens = [
-      'dissolve-reduced',
-      'dissolve-night-mask',
-      'shiki',
-      'line',
-      'min-dark',
-    ]
+      "dissolve-reduced",
+      "dissolve-night-mask",
+      "shiki",
+      "line",
+      "min-dark",
+    ];
     const registry = createNameRegistry(
       inputFor({
         universe: tokens,
         sourceTokens: tokens,
         exclusions: SITE_EXCLUSIONS,
       }),
-    )
+    );
     for (const token of tokens) {
       assert.strictEqual(
         registry.nameFor(token),
         undefined,
         `${token} must not be renamed`,
-      )
+      );
     }
     const byToken = new Map(
       registry.exclusions().map(function (entry) {
-        return [entry.token, entry.reason]
+        return [entry.token, entry.reason];
       }),
-    )
+    );
     for (const token of tokens) {
-      assert.strictEqual(byToken.get(token), 'excluded-prefix', token)
+      assert.strictEqual(byToken.get(token), "excluded-prefix", token);
     }
-  })
+  });
 
-  it('excludes nothing by default: exclusions are a site contract', function () {
+  it("excludes nothing by default: exclusions are a site contract", function () {
     assert.deepStrictEqual(DEFAULT_EXCLUSIONS, {
       names: [],
       prefixes: [],
-    })
-  })
+    });
+  });
 
-  it('excludes source tokens that are not in the universe', function () {
+  it("excludes source tokens that are not in the universe", function () {
     const registry = createNameRegistry(
-      inputFor({ universe: ['flex'], sourceTokens: ['flex', 'mystery-token'] }),
-    )
-    assert.strictEqual(registry.nameFor('mystery-token'), undefined)
+      inputFor({ universe: ["flex"], sourceTokens: ["flex", "mystery-token"] }),
+    );
+    assert.strictEqual(registry.nameFor("mystery-token"), undefined);
     const exclusion = registry.exclusions().find(function (entry) {
-      return entry.token === 'mystery-token'
-    })
-    assert.ok(exclusion)
-    assert.strictEqual(exclusion.reason, 'not-in-universe')
-  })
+      return entry.token === "mystery-token";
+    });
+    assert.ok(exclusion);
+    assert.strictEqual(exclusion.reason, "not-in-universe");
+  });
 
-  it('excludes tokens seen in runtime contexts even when provable elsewhere', function () {
+  it("excludes tokens seen in runtime contexts even when provable elsewhere", function () {
     const registry = createNameRegistry(
       inputFor({
-        universe: ['flex'],
-        sourceTokens: ['flex'],
-        runtimeTokens: ['flex'],
+        universe: ["flex"],
+        sourceTokens: ["flex"],
+        runtimeTokens: ["flex"],
       }),
-    )
-    assert.strictEqual(registry.nameFor('flex'), undefined)
+    );
+    assert.strictEqual(registry.nameFor("flex"), undefined);
     const exclusion = registry.exclusions().find(function (entry) {
-      return entry.token === 'flex'
-    })
-    assert.ok(exclusion)
-    assert.strictEqual(exclusion.reason, 'runtime-context')
-  })
+      return entry.token === "flex";
+    });
+    assert.ok(exclusion);
+    assert.strictEqual(exclusion.reason, "runtime-context");
+  });
 
-  it('keeps runtime-toggled universe classes out of the rename side', function () {
+  it("keeps runtime-toggled universe classes out of the rename side", function () {
     const registry = createNameRegistry(
-      inputFor({ universe: ['theme-dark'], runtimeTokens: ['theme-dark'] }),
-    )
-    assert.strictEqual(registry.nameFor('theme-dark'), undefined)
+      inputFor({ universe: ["theme-dark"], runtimeTokens: ["theme-dark"] }),
+    );
+    assert.strictEqual(registry.nameFor("theme-dark"), undefined);
     const exclusion = registry.exclusions().find(function (entry) {
-      return entry.token === 'theme-dark'
-    })
-    assert.ok(exclusion)
-    assert.strictEqual(exclusion.reason, 'runtime-context')
-  })
+      return entry.token === "theme-dark";
+    });
+    assert.ok(exclusion);
+    assert.strictEqual(exclusion.reason, "runtime-context");
+  });
 
-  it('excludes universe classes absent from source tokens as css-only', function () {
+  it("excludes universe classes absent from source tokens as css-only", function () {
     const registry = createNameRegistry(
-      inputFor({ universe: ['flex', 'sr-only'], sourceTokens: ['flex'] }),
-    )
-    assert.strictEqual(registry.nameFor('sr-only'), undefined)
+      inputFor({ universe: ["flex", "sr-only"], sourceTokens: ["flex"] }),
+    );
+    assert.strictEqual(registry.nameFor("sr-only"), undefined);
     const exclusion = registry.exclusions().find(function (entry) {
-      return entry.token === 'sr-only'
-    })
-    assert.ok(exclusion)
-    assert.strictEqual(exclusion.reason, 'css-only')
-  })
+      return entry.token === "sr-only";
+    });
+    assert.ok(exclusion);
+    assert.strictEqual(exclusion.reason, "css-only");
+  });
 
-  it('prefers the configured-prefix reason over runtime-context', function () {
+  it("prefers the configured-prefix reason over runtime-context", function () {
     const registry = createNameRegistry(
       inputFor({
-        universe: ['dissolve-reduced'],
-        sourceTokens: ['dissolve-reduced'],
-        runtimeTokens: ['dissolve-reduced'],
+        universe: ["dissolve-reduced"],
+        sourceTokens: ["dissolve-reduced"],
+        runtimeTokens: ["dissolve-reduced"],
         exclusions: SITE_EXCLUSIONS,
       }),
-    )
+    );
     const exclusion = registry.exclusions().find(function (entry) {
-      return entry.token === 'dissolve-reduced'
-    })
-    assert.ok(exclusion)
-    assert.strictEqual(exclusion.reason, 'excluded-prefix')
-  })
+      return entry.token === "dissolve-reduced";
+    });
+    assert.ok(exclusion);
+    assert.strictEqual(exclusion.reason, "excluded-prefix");
+  });
 
-  it('honors a custom exclusion config over the default', function () {
+  it("honors a custom exclusion config over the default", function () {
     const registry = createNameRegistry({
-      universe: new Set(['shiki', 'xyz-widget']),
-      sourceTokens: new Set(['shiki', 'xyz-widget']),
-      exclusions: { names: [], prefixes: ['xyz-'] },
-    })
+      universe: new Set(["shiki", "xyz-widget"]),
+      sourceTokens: new Set(["shiki", "xyz-widget"]),
+      exclusions: { names: [], prefixes: ["xyz-"] },
+    });
     assert.ok(
-      registry.nameFor('shiki') !== undefined,
-      'shiki is renamed once the default config is replaced',
-    )
-    assert.strictEqual(registry.nameFor('xyz-widget'), undefined)
+      registry.nameFor("shiki") !== undefined,
+      "shiki is renamed once the default config is replaced",
+    );
+    assert.strictEqual(registry.nameFor("xyz-widget"), undefined);
     const exclusion = registry.exclusions().find(function (entry) {
-      return entry.token === 'xyz-widget'
-    })
-    assert.ok(exclusion)
-    assert.strictEqual(exclusion.reason, 'excluded-prefix')
-  })
-})
+      return entry.token === "xyz-widget";
+    });
+    assert.ok(exclusion);
+    assert.strictEqual(exclusion.reason, "excluded-prefix");
+  });
+});
 
-describe('createNameRegistry collision policy (R10)', function () {
-  it('fails loudly when two tokens hash to the same name', function () {
+describe("createNameRegistry collision policy (R10)", function () {
+  it("fails loudly when two tokens hash to the same name", function () {
     assert.throws(function () {
       createNameRegistry(
         inputFor({
-          universe: ['flex', 'grid'],
-          sourceTokens: ['flex', 'grid'],
+          universe: ["flex", "grid"],
+          sourceTokens: ["flex", "grid"],
           hash: function () {
-            return 'aaaa'
+            return "aaaa";
           },
         }),
-      )
-    }, /collision.*flex.*grid|collision.*grid.*flex/)
-  })
+      );
+    }, /collision.*flex.*grid|collision.*grid.*flex/);
+  });
 
-  it('fails loudly when a generated name collides with an excluded name', function () {
+  it("fails loudly when a generated name collides with an excluded name", function () {
     // Only ident-safe excluded names can collide with a generated name; the
     // default config's ident-safe members are the Shiki classes.
     assert.throws(function () {
       createNameRegistry(
         inputFor({
-          universe: ['flex', 'shiki'],
-          sourceTokens: ['flex', 'shiki'],
+          universe: ["flex", "shiki"],
+          sourceTokens: ["flex", "shiki"],
           hash: function () {
-            return 'shiki'
+            return "shiki";
           },
         }),
-      )
-    }, /collision.*shiki/)
-  })
+      );
+    }, /collision.*shiki/);
+  });
 
-  it('fails loudly even for an excluded name outside the ident alphabet', function () {
+  it("fails loudly even for an excluded name outside the ident alphabet", function () {
     // A hash could never return dissolve-reduced (hyphens are outside the
     // alphabet), but a stubbed hash must still die loudly — here via the
     // identifier guard, never silently.
     assert.throws(function () {
       createNameRegistry(
         inputFor({
-          universe: ['flex', 'dissolve-reduced'],
-          sourceTokens: ['flex', 'dissolve-reduced'],
+          universe: ["flex", "dissolve-reduced"],
+          sourceTokens: ["flex", "dissolve-reduced"],
           hash: function () {
-            return 'dissolve-reduced'
+            return "dissolve-reduced";
           },
         }),
-      )
-    })
-  })
+      );
+    });
+  });
 
-  it('fails loudly when a generated name collides with a css-only name', function () {
+  it("fails loudly when a generated name collides with a css-only name", function () {
     assert.throws(function () {
       createNameRegistry(
         inputFor({
-          universe: ['flex', 'ab12'],
-          sourceTokens: ['flex'],
+          universe: ["flex", "ab12"],
+          sourceTokens: ["flex"],
           hash: function () {
-            return 'ab12'
+            return "ab12";
           },
         }),
-      )
-    }, /collision.*ab12/)
-  })
+      );
+    }, /collision.*ab12/);
+  });
 
-  it('fails loudly when a hash produces a non-ident-safe name', function () {
+  it("fails loudly when a hash produces a non-ident-safe name", function () {
     assert.throws(function () {
       createNameRegistry(
         inputFor({
-          universe: ['flex'],
-          sourceTokens: ['flex'],
+          universe: ["flex"],
+          sourceTokens: ["flex"],
           hash: function () {
-            return '9ab'
+            return "9ab";
           },
         }),
-      )
-    }, /identifier/)
-  })
-})
+      );
+    }, /identifier/);
+  });
+});

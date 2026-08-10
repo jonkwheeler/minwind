@@ -1,1 +1,1 @@
-console.log('client bundle')
+console.log("client bundle");

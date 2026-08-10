@@ -6,5 +6,5 @@ export function Poisoned(props: { extra: string }) {
       <button class="focus:underline mb-2">two</button>
       <ul class="space-y-4 flex-col">second</ul>
     </div>
-  )
+  );
 }

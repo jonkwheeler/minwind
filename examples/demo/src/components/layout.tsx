@@ -1,11 +1,11 @@
-import { A } from '@solidjs/router'
-import type { ParentProps } from 'solid-js'
+import { A } from "@solidjs/router";
+import type { ParentProps } from "solid-js";
 
 function toggleTheme() {
   // Runtime-only class: 'dark' never appears in a static class attribute,
   // so minwind's pre-pass excludes it (runtime-context) and the toggle
   // keeps working against the renamed stylesheet.
-  document.documentElement.classList.toggle('dark')
+  document.documentElement.classList.toggle("dark");
 }
 
 export function Layout(props: ParentProps) {
@@ -38,5 +38,5 @@ export function Layout(props: ParentProps) {
         </button>
       </footer>
     </div>
-  )
+  );
 }
