@@ -8,11 +8,12 @@ builds only — your source and your dev server stay readable.
 ```html
 <!-- before -->
 <div class="mx-auto flex min-h-screen max-w-3xl flex-col px-6">
-  <span class="flex items-center gap-5 text-sm font-medium">
-    <!-- after -->
-    <div class="quill willow north lark ember ljaa">
-      <span class="willow glen brook dog drift"></span></div
-  ></span>
+  <span class="flex items-center gap-5 text-sm font-medium"></span>
+</div>
+
+<!-- after -->
+<div class="quill willow north lark ember ljaa">
+  <span class="willow glen brook dog drift"></span>
 </div>
 ```
 
@@ -250,10 +251,10 @@ into one generated rule and replace every occurrence with a single class:
 
 ```html
 <!-- before, in 12 components -->
-<span class="select-none pointer-events-none">
-  <!-- after -->
-  <span class="ckqw"></span
-></span>
+<span class="select-none pointer-events-none"></span>
+
+<!-- after -->
+<span class="ckqw"></span>
 ```
 
 Consolidation is conservative. A list only folds when it is static, repeated,
