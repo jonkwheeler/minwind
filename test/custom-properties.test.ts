@@ -23,6 +23,18 @@ describe("owned custom properties", function () {
     });
   });
 
+  it("uses explicit aliases while generating names for unmapped owned properties", function () {
+    const registry = createCustomPropertyRegistry({
+      owned: ["--surface", "--content-width"],
+      aliases: { "--surface": "--s" },
+    });
+    assert.strictEqual(registry.nameFor("--surface"), "--s");
+    assert.match(
+      registry.nameFor("--content-width") ?? "",
+      /^--[a-z][a-z0-9]{3}$/,
+    );
+  });
+
   it("rejects malformed and duplicate ownership declarations", function () {
     assert.throws(function () {
       createCustomPropertyRegistry({ owned: ["color-accent"] });
@@ -30,6 +42,47 @@ describe("owned custom properties", function () {
     assert.throws(function () {
       createCustomPropertyRegistry({ owned: ["--accent", "--accent"] });
     }, /duplicate/);
+  });
+
+  it("rejects invalid, unowned, duplicate, and reserved aliases", function () {
+    assert.throws(function () {
+      createCustomPropertyRegistry({
+        owned: ["--accent"],
+        aliases: { "--missing": "--m" },
+      });
+    }, /alias.*--missing.*owned/);
+    assert.throws(function () {
+      createCustomPropertyRegistry({
+        owned: ["--accent"],
+        aliases: { "--accent": "accent" },
+      });
+    }, /alias.*accent.*start with --/);
+    assert.throws(function () {
+      createCustomPropertyRegistry({
+        owned: ["--accent", "--surface"],
+        aliases: { "--accent": "--a", "--surface": "--a" },
+      });
+    }, /alias.*--a.*more than once/);
+    assert.throws(function () {
+      createCustomPropertyRegistry(
+        { owned: ["--accent"], aliases: { "--accent": "--public" } },
+        new Set(),
+        new Set(["--public"]),
+      );
+    }, /alias.*--public.*already in use/);
+  });
+
+  it("probes generated names past an explicit alias", function () {
+    const generatedAccent = createCustomPropertyRegistry({
+      owned: ["--accent"],
+    }).nameFor("--accent");
+    assert.ok(generatedAccent !== undefined);
+    const registry = createCustomPropertyRegistry({
+      owned: ["--accent", "--surface"],
+      aliases: { "--surface": generatedAccent },
+    });
+    assert.strictEqual(registry.nameFor("--surface"), generatedAccent);
+    assert.notStrictEqual(registry.nameFor("--accent"), generatedAccent);
   });
 
   it("poisons dynamic or otherwise unrecognized source occurrences", function () {

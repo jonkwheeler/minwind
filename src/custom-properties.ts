@@ -8,6 +8,7 @@ export interface CustomPropertiesConfig {
   // Explicit ownership is the safety contract: minwind never infers that a
   // property is private merely because it sees a declaration for it.
   owned: ReadonlyArray<string>;
+  aliases?: Readonly<Record<string, string>>;
 }
 
 export interface CustomPropertyEntry {
@@ -49,12 +50,50 @@ export function createCustomPropertyRegistry(
     owned.add(property);
   }
 
+  const configuredAliases = new Set<string>();
+  for (const [property, alias] of Object.entries(config.aliases ?? {})) {
+    if (!owned.has(property)) {
+      throw new Error(
+        `minwind: custom-property alias key "${property}" must appear in owned`,
+      );
+    }
+    if (!alias.startsWith("--")) {
+      throw new Error(
+        `minwind: custom-property alias "${alias}" for "${property}" must start with --`,
+      );
+    }
+    if (!CUSTOM_PROPERTY.test(alias)) {
+      throw new Error(
+        `minwind: custom-property alias "${alias}" for "${property}" is not a supported CSS identifier`,
+      );
+    }
+    if (configuredAliases.has(alias)) {
+      throw new Error(
+        `minwind: custom-property alias "${alias}" is configured more than once`,
+      );
+    }
+    configuredAliases.add(alias);
+  }
+
   const names = new Map<string, string>();
   const inverse = new Map<string, string>();
   const unavailable = new Set<string>(reserved);
   for (const property of owned) unavailable.add(property);
   for (const property of Array.from(owned).sort(compareCodeUnits)) {
     if (unsafe.has(property)) continue;
+    const name = config.aliases?.[property];
+    if (name === undefined) continue;
+    if (unavailable.has(name)) {
+      throw new Error(
+        `minwind: custom-property alias "${name}" for "${property}" is already in use`,
+      );
+    }
+    names.set(property, name);
+    inverse.set(name, property);
+    unavailable.add(name);
+  }
+  for (const property of Array.from(owned).sort(compareCodeUnits)) {
+    if (unsafe.has(property) || names.has(property)) continue;
     let attempt = 0;
     let name: string;
     do {

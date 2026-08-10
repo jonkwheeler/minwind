@@ -24,7 +24,8 @@ violates one is not a valid optimization.
 Owned CSS custom properties use a separate registry at the same seam. They
 share the global-poison rule but not the classname universe or naming
 configuration: custom properties are an explicit application-owned interface,
-and their generated names always retain the required `--` prefix.
+and their generated or explicitly aliased names always retain the required
+`--` prefix. Alias selection never expands the owned set.
 
 ## Pipeline
 
