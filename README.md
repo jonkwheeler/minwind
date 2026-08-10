@@ -131,13 +131,25 @@ pnpm build
 ```
 
 ```ts
-import manifest from "./minwind.prominence.json" with { type: "json" };
+import { readFileSync } from "node:fs";
+
+// The manifest is a build artifact; read it leniently so a missing file
+// means "no prominence deal" rather than a config-load error. (A static
+// `import ... with { type: "json" }` would hard-fail without the file, and
+// config bundlers like esbuild may not support import attributes.)
+function loadProminence(): Record<string, number> | undefined {
+  try {
+    return JSON.parse(readFileSync("minwind.prominence.json", "utf8")).tokens;
+  } catch {
+    return undefined;
+  }
+}
 
 minwind({
   naming: {
     strategy: "words",
     vocabulary: SPACEBALLS_VOCABULARY, // curation order = iconic-first
-    prominence: manifest.tokens,
+    prominence: loadProminence(),
   },
 });
 ```
@@ -181,25 +193,11 @@ export const SPACEBALLS_VOCABULARY: ReadonlyArray<string> = [
 ];
 ```
 
-**2. Wire the strategy with prominence.** The manifest is a build artifact;
-load it if it's there, fall back to the plain length-weighted deal if not.
+**2. Wire the strategy with prominence**, using the lenient
+`loadProminence()` from the section above:
 
 ```ts
 // app.config.ts
-import { readFileSync } from "node:fs";
-import { SPACEBALLS_VOCABULARY } from "./spaceballs";
-
-function loadProminence(): Record<string, number> | undefined {
-  try {
-    const manifest = JSON.parse(
-      readFileSync("minwind.prominence.json", "utf8"),
-    );
-    return manifest.tokens;
-  } catch {
-    return undefined;
-  }
-}
-
 minwind({
   naming: {
     strategy: "words",
