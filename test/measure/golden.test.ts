@@ -428,9 +428,21 @@ describe("golden run on the demo build (AE3)", function () {
     assert.deepStrictEqual(routes, htmlFiles);
   });
 
-  it("reproduces the stored golden numbers exactly (R10)", gate, function () {
+  it("reproduces the stored golden numbers exactly (R10)", gate, function (t) {
     assert.ok(report);
     const fixture = readGoldenFixture();
+    // Exact byte reproduction is only meaningful under the runtime that
+    // captured the fixture: node/zlib/brotli versions change compression
+    // output, and the demo build's content hashes are platform-dependent.
+    // Version drift is the detectable proxy for "different machine", so
+    // skip rather than fail — same-machine runs still enforce exactly.
+    const runtimeWarnings = diffRuntime(fixture.runtime, report.runtime);
+    if (runtimeWarnings.length > 0) {
+      t.skip(
+        `fixture captured under a different runtime:\n  ${runtimeWarnings.join("\n  ")}`,
+      );
+      return;
+    }
     const diff = diffGoldenReports(fixture, report);
     assert.deepStrictEqual(
       diff,
