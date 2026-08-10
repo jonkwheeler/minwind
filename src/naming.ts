@@ -17,7 +17,17 @@ import { compareCodeUnits } from "./util.js";
 
 export type NamingConfig =
   | { strategy: "hash" }
-  | { strategy: "words"; vocabulary: ReadonlyArray<string> }
+  | {
+      strategy: "words";
+      vocabulary: ReadonlyArray<string>;
+      // Prominence manifest (minwind prominence): original token -> the
+      // document-order index of the first class-bearing element carrying
+      // it. Tokens in the map draw the vocabulary in curation order — the
+      // most iconic names first — ahead of the length-weighted deal, so
+      // the DOM shell reads on-theme; unmapped tokens keep the
+      // byte-optimal shortest-word deal.
+      prominence?: Readonly<Record<string, number>>;
+    }
   | {
       strategy: "quotes";
       corpus: ReadonlyArray<string>;
@@ -40,6 +50,11 @@ export interface NamingResult {
   order: Map<string, Array<string>>;
   quotedLists: number;
   totalLists: number;
+  // Tokens dealt a vocabulary word via the prominence manifest (words
+  // strategy only). Zero with a manifest provided means the manifest
+  // matched nothing — usually a sign it was generated from a renamed
+  // build instead of a minwind-off one.
+  prominent: number;
 }
 
 // Words become CSS class names, so they must satisfy the registry's ident
@@ -228,10 +243,36 @@ export function resolveNaming(
     return !tokenForWord.has(word);
   });
 
+  const names = new Map<string, string>(assigned);
+
+  // Prominence dealing: tokens first-seen near the top of the prerendered
+  // DOM — the shell a devtools inspector meets first — draw the vocabulary
+  // in curation order, so the most iconic names land where they are seen.
+  // The shell renders once per page, so spending longer names there costs
+  // almost nothing; everything else keeps the length-weighted deal below.
+  let prominent = 0;
+  const prominence =
+    config.strategy === "words" ? config.prominence : undefined;
+  if (prominence !== undefined) {
+    const shell = tokens
+      .filter(function (token) {
+        return prominence[token] !== undefined && !names.has(token);
+      })
+      .sort(function (a, b) {
+        return prominence[a] - prominence[b] || compareCodeUnits(a, b);
+      });
+    for (const token of shell) {
+      if (prominent >= vocabulary.length) break;
+      names.set(token, vocabulary[prominent]);
+      prominent += 1;
+    }
+  }
+
   // Deal the shortest words to the hottest tokens: a token's render weight
   // is the summed count of every list carrying it, and short names cost the
   // fewest bytes where they render most. Weight ties keep token code-unit
-  // order; word length ties keep the vocabulary's curation order.
+  // order; word length ties keep the vocabulary's curation order. Words
+  // already spent (quote fragments, prominence deals) leave the pool.
   const weight = new Map<string, number>();
   for (const list of lists) {
     for (const token of list.tokens) {
@@ -243,11 +284,15 @@ export function resolveNaming(
       (weight.get(b) ?? 0) - (weight.get(a) ?? 0) || compareCodeUnits(a, b)
     );
   });
-  const shortestFirst = vocabulary.slice().sort(function (a, b) {
-    return a.length - b.length;
-  });
+  const spent = new Set<string>(names.values());
+  const shortestFirst = vocabulary
+    .filter(function (word) {
+      return !spent.has(word);
+    })
+    .sort(function (a, b) {
+      return a.length - b.length;
+    });
 
-  const names = new Map<string, string>(assigned);
   let dealt = 0;
   for (const token of dealOrder) {
     if (names.has(token)) continue;
@@ -259,5 +304,11 @@ export function resolveNaming(
     }
   }
 
-  return { names, order, quotedLists, totalLists: sortedLists.length };
+  return {
+    names,
+    order,
+    quotedLists,
+    totalLists: sortedLists.length,
+    prominent,
+  };
 }

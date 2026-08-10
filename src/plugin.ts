@@ -254,6 +254,19 @@ export function minwind(options: MinwindOptions = {}): Array<Plugin> {
             prepass.consolidationVerdicts,
           );
         }
+        if (
+          options.naming !== undefined &&
+          options.naming.strategy === "words" &&
+          options.naming.prominence !== undefined &&
+          prepass.naming !== undefined &&
+          prepass.naming.prominent === 0
+        ) {
+          this.warn(
+            "minwind: the prominence manifest matched zero renamed" +
+              " tokens — regenerate it from a MINWIND=off build" +
+              " (minwind prominence <build-output-directory>)",
+          );
+        }
         state = {
           root,
           flags: active,

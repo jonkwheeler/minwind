@@ -101,6 +101,63 @@ describe("resolveNaming words strategy", function () {
     assert.strictEqual(result.names.get("mb-16"), "mo");
     assert.strictEqual(result.names.get("flex"), "schwartz");
   });
+
+  it("deals prominent tokens the vocabulary in curation order by rank", function () {
+    const result = resolveNaming(
+      {
+        strategy: "words",
+        vocabulary: ["schwartz", "plaid", "mo"],
+        prominence: { "p-4": 0, flex: 2 },
+      },
+      ["flex", "p-4", "mb-16"],
+      [list(100, "mb-16")],
+      new Set(),
+    );
+    assert.ok(result !== undefined);
+    // Rank order beats both word length and render weight: p-4 (rank 0)
+    // takes the first curated word even though it is the longest.
+    assert.strictEqual(result.names.get("p-4"), "schwartz");
+    assert.strictEqual(result.names.get("flex"), "plaid");
+    // mb-16 has no rank: it keeps the length-weighted deal and takes the
+    // shortest word left in the pool.
+    assert.strictEqual(result.names.get("mb-16"), "mo");
+    assert.strictEqual(result.prominent, 2);
+  });
+
+  it("breaks prominence rank ties in code-unit order", function () {
+    const result = resolveNaming(
+      {
+        strategy: "words",
+        vocabulary: ["aa", "bb"],
+        prominence: { "p-4": 3, flex: 3 },
+      },
+      ["flex", "p-4"],
+      [],
+      new Set(),
+    );
+    assert.ok(result !== undefined);
+    assert.strictEqual(result.names.get("flex"), "aa");
+    assert.strictEqual(result.names.get("p-4"), "bb");
+    assert.strictEqual(result.prominent, 2);
+  });
+
+  it("ignores prominence entries for tokens outside the renamed set", function () {
+    const result = resolveNaming(
+      {
+        strategy: "words",
+        vocabulary: ["schwartz", "plaid"],
+        prominence: { "ghost-token": 0 },
+      },
+      ["flex", "p-4"],
+      [],
+      new Set(),
+    );
+    assert.ok(result !== undefined);
+    assert.strictEqual(result.prominent, 0);
+    // No prominent deals, so the length-weighted pool is unspent.
+    assert.strictEqual(result.names.get("flex"), "plaid");
+    assert.strictEqual(result.names.get("p-4"), "schwartz");
+  });
 });
 
 describe("resolveNaming quotes strategy", function () {

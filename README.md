@@ -116,6 +116,41 @@ long, distinctive class lists; if your DOM is mostly short lists of common
 utilities, `words` reads better. Single-token lists never take quote words
 for this reason — a lone word is mid-quote residue.
 
+### Prominence-aware dealing
+
+With `words`, the default deal is purely byte-driven: the shortest words go
+to the most-rendered tokens, blind to where a class sits in the DOM. If
+you'd rather the document shell — the elements someone meets first in
+devtools — wear the most iconic names, generate a prominence manifest from
+a minwind-off build and pass it in:
+
+```bash
+MINWIND=off pnpm build
+npx minwind prominence .output/public   # writes minwind.prominence.json
+pnpm build
+```
+
+```ts
+import manifest from "./minwind.prominence.json" with { type: "json" };
+
+minwind({
+  naming: {
+    strategy: "words",
+    vocabulary: SPACEBALLS_VOCABULARY, // curation order = iconic-first
+    prominence: manifest.tokens,
+  },
+});
+```
+
+Tokens first-seen within the window (default: the first 32 class-bearing
+elements) draw the vocabulary in curation order, so `vocabulary[0]` lands on
+the earliest classed element in the document. Everything else keeps the
+length-weighted deal. Shell elements render once per page, so spending
+longer names there costs almost nothing. Regenerate the manifest when your
+above-the-fold markup changes; if a build warns that the manifest matched
+zero tokens, it was generated from a renamed build — regenerate it with
+`MINWIND=off`.
+
 ## Consolidation
 
 When the exact same class list appears in several places, minwind can fold it
