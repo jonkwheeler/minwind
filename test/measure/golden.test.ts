@@ -208,11 +208,17 @@ function collectValueMismatches(
 }
 
 // buildDir is absolute and machine-specific, runtime versions are compared
-// separately as warnings, and input hashes separately as stale inputs.
+// separately as warnings, input hashes separately as stale inputs, and the
+// tool version changes with every release without affecting measurements.
 function stripEnvironmentFields(report: JsonReport): Record<string, unknown> {
   const clone: Record<string, unknown> = { ...report };
   delete clone.buildDir;
   delete clone.runtime;
+  const tool: Record<string, unknown> = {
+    ...(report.tool as Record<string, unknown>),
+  };
+  delete tool.version;
+  clone.tool = tool;
   if (report.measurement !== null) {
     const measurement: Record<string, unknown> = { ...report.measurement };
     delete measurement.inputHashes;

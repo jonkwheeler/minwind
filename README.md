@@ -1,9 +1,12 @@
 # minwind
 
-A Vite plugin that shrinks Tailwind CSS classnames at build time. It renames
-every utility class to a short generated name, rewrites your HTML, JS, and CSS
-together, and consolidates repeated class lists into single rules. Production
-builds only — your source and your dev server stay readable.
+Shrinks Tailwind CSS classnames at build time. It renames every utility class
+to a short generated name, rewrites your HTML, JS, and CSS together, and
+consolidates repeated class lists into single rules. Production builds only —
+your source and your dev server stay readable.
+
+Ships as a Vite plugin, a webpack/rspack plugin + loader, and a post-build
+CLI for bundlers without a plugin hook (Turbopack, esbuild, Parcel).
 
 ```html
 <!-- before -->
@@ -49,10 +52,12 @@ toggles) behave the same.
 
 ```bash
 npm install minwind
-# peer deps: vite, tailwindcss v4
+# peer deps: tailwindcss v4, plus vite for the Vite plugin
 ```
 
 ## Use
+
+### Vite (and SolidStart, Astro-on-Vite, SvelteKit, ...)
 
 ```ts
 // vite.config.ts (or app.config.ts for SolidStart)
@@ -67,6 +72,66 @@ export default defineConfig({
 ```
 
 Build. That's it. The plugin only runs on `vite build`; dev is untouched.
+
+### webpack / rspack (including Next.js on webpack)
+
+```ts
+// webpack.config.ts
+import { MinwindWebpackPlugin } from "minwind/webpack";
+
+export default {
+  module: {
+    rules: [
+      {
+        test: /\.(?:[cm]?[jt]s|[jt]sx|vue|svelte|astro)$/,
+        enforce: "pre", // required: minwind must run before any JSX/TS compiler
+        use: [MinwindWebpackPlugin.loader],
+      },
+    ],
+  },
+  plugins: [new MinwindWebpackPlugin()],
+};
+```
+
+The loader rewrites class contexts per module; the plugin runs the pre-pass
+in `beforeCompile` and rewrites emitted CSS after minification (before
+content hashing, so hashes reflect the final bytes). The same zero-rename
+tripwire as the Vite plugin fails the build if the loader ordering breaks.
+Works with rspack unchanged — same hooks, same stage constants.
+
+### Turbopack, esbuild, Parcel — anything else: `minwind apply`
+
+Turbopack has no equivalent of "run before the framework compiler, rewrite
+emitted CSS after minification", so for plugin-less bundlers minwind rewrites
+the build output directory instead:
+
+```bash
+pnpm build                          # your normal production build
+npx minwind apply .output/public    # rewrites HTML, CSS, and JS in place
+```
+
+`apply` computes the same rename registry from your source, then rewrites
+emitted `.html` (class attributes), `.css` (selectors plus consolidation),
+and `.js` bundles — conservatively: only provable class lists in bundles
+(markup-template `class="..."` spans and `class`/`className` property
+literals). A token that shows up anywhere the rewriter can't prove — a
+minified call argument, an SSR payload in an inline script — keeps its
+original name everywhere, stylesheet included, and the report lists it as a
+`runtime-context` exclusion. That is the trade-off of post-build rewriting:
+slightly less compression than a source-level plugin, never a broken
+runtime reference. Flags: `--root`, `--css-entry`, `--no-consolidate`,
+`--dry-run`. Themed naming (`words`/`quotes`) needs plugin options, so
+`apply` is hash-naming only.
+
+### Supported sources
+
+The source transform walks `ts`, `tsx`, `js`, `jsx`, `mts`, `cts`, `mjs`,
+`cjs`, and the single-file-component formats `.vue`, `.svelte`, and `.astro`
+(template class attributes, framework bindings like `:class` /
+`class:list` / `class:foo`, and `<script>` blocks all classify through the
+same walker, so the pre-pass and the transform can never disagree). The JS
+family parses `.js`/`.mjs`/`.cjs` as JSX — a safe superset for valid JS, and
+React-flavored projects legitimately put JSX in `.js` files.
 
 ### Measure first, before installing anything
 
@@ -304,16 +369,19 @@ mismatches, the build fails and you keep the untransformed output.
 
 ## How it works
 
-1. **Pre-pass** (`buildStart`): compiles your CSS with Tailwind once, scans
-   your content, and builds the class universe — every token, where it came
-   from, and whether it is excludable.
-2. **Source transform** (`transform`): parses each JS/TS module with the
-   TypeScript compiler API and rewrites class strings in JSX attributes,
-   `classList` objects, and `cn()` calls with span-precise edits (sourcemaps
-   intact).
-3. **CSS transform** (`generateBundle`): parses the emitted stylesheet with
-   css-tree and rewrites selectors to the same generated names, appending
-   consolidated rules.
+1. **Pre-pass** (Vite `buildStart`, webpack `beforeCompile`, CLI startup):
+   compiles your CSS with Tailwind once, scans your content, and builds the
+   class universe — every token, where it came from, and whether it is
+   excludable.
+2. **Source transform** (Vite `transform`, webpack loader): parses each
+   JS/TS module with the TypeScript compiler API and rewrites class strings
+   in JSX attributes, `classList` objects, and `cn()` calls with
+   span-precise edits (sourcemaps intact). SFC files walk their template
+   class attributes and bindings through the same classifier; `minwind
+apply` rewrites emitted HTML and, conservatively, compiled bundles.
+3. **CSS transform** (Vite `generateBundle`, webpack `processAssets`, CLI
+   in place): parses the emitted stylesheet with css-tree and rewrites
+   selectors to the same generated names, appending consolidated rules.
 
 One global bijection — original token to generated name — is shared by all
 three phases, so HTML, JS, and CSS always agree.

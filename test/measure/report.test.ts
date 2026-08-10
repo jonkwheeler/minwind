@@ -35,6 +35,12 @@ const STRADDLE_SITE = path.join(FIXTURES_DIR, "measure-straddle");
 const NEGATIVE_SITE = path.join(FIXTURES_DIR, "measure-negative");
 const PLAIN_SITE = path.join(FIXTURES_DIR, "site");
 
+const PACKAGE_VERSION = (
+  JSON.parse(
+    fs.readFileSync(path.resolve(TEST_DIR, "../../package.json"), "utf8"),
+  ) as { version: string }
+).version;
+
 interface RunResult {
   code: number;
   stdout: string;
@@ -180,7 +186,7 @@ describe("json report", () => {
     const meta = readToolMeta();
     const report = buildJsonReport(context, measurement, meta);
     assert.strictEqual(report.tool.name, "minwind");
-    assert.strictEqual(report.tool.version, "0.1.0");
+    assert.strictEqual(report.tool.version, PACKAGE_VERSION);
     assert.strictEqual(report.runtime.node, process.versions.node);
     assert.strictEqual(typeof report.runtime.zlib, "string");
     assert.strictEqual(typeof report.runtime.brotli, "string");
@@ -269,7 +275,7 @@ describe("runtime version check", () => {
   it("reads the tool metadata from the package manifest", () => {
     const meta = readToolMeta();
     assert.strictEqual(meta.name, "minwind");
-    assert.strictEqual(meta.version, "0.1.0");
+    assert.strictEqual(meta.version, PACKAGE_VERSION);
     assert.strictEqual(meta.enginesNode, ">=20");
   });
 
@@ -293,7 +299,7 @@ describe("cli report output", () => {
     assert.strictEqual(result.code, 0);
     const report = JSON.parse(result.stdout);
     assert.strictEqual(report.tool.name, "minwind");
-    assert.strictEqual(report.tool.version, "0.1.0");
+    assert.strictEqual(report.tool.version, PACKAGE_VERSION);
     assert.strictEqual(report.runtime.node, process.versions.node);
     assert.strictEqual(typeof report.runtime.zlib, "string");
     assert.strictEqual(typeof report.runtime.brotli, "string");
