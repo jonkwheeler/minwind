@@ -190,7 +190,12 @@ interface MockLifecycleResult {
 // Modules/css are only fed when the simulated router would see them.
 async function driveLifecycle(
   plugins: ReadonlyArray<Plugin>,
-  options: { withModules: boolean; withCss: boolean },
+  options: {
+    withModules: boolean;
+    withCss: boolean;
+    cssText?: string;
+    extraModule?: { id: string; code: string };
+  },
 ): Promise<MockLifecycleResult> {
   const source = findHook(plugins, "minwind:source");
   const cssPlugin = findHook(plugins, "minwind:css");
@@ -217,6 +222,14 @@ async function driveLifecycle(
       } | null;
       if (result !== null) jsOutputs.push(result.code);
     }
+    if (options.extraModule !== undefined) {
+      const result = (await transform.call(
+        mock.context,
+        options.extraModule.code,
+        options.extraModule.id,
+      )) as { code: string } | null;
+      if (result !== null) jsOutputs.push(result.code);
+    }
   }
 
   const cssOutputs: Array<string> = [];
@@ -230,10 +243,9 @@ async function driveLifecycle(
       "assets/app.css": {
         type: "asset",
         fileName: "assets/app.css",
-        source: await readFile(
-          path.join(FIXTURE, "src", "emitted.css"),
-          "utf8",
-        ),
+        source:
+          options.cssText ??
+          (await readFile(path.join(FIXTURE, "src", "emitted.css"), "utf8")),
       },
     };
     await generateBundle.call(mock.context, {}, bundle);
@@ -531,6 +543,52 @@ describe("minwind production build (R1, R3, R8, R11)", function () {
       assert.deepStrictEqual(report.consolidation.verdicts, []);
       assert.strictEqual(report.summary.consolidatedRules, 0);
 
+      await cleanOutputs();
+    });
+  });
+});
+
+describe("minwind owned custom properties", function () {
+  it("wires one property registry through source, CSS, report, and map", async function () {
+    await withFlags({}, async function () {
+      await cleanOutputs();
+      const plugins = minwind({
+        root: FIXTURE,
+        cssEntry: CSS_ENTRY,
+        customProperties: { owned: ["--fixture-accent"] },
+      });
+      const result = await driveLifecycle(plugins, {
+        withModules: true,
+        withCss: true,
+        extraModule: {
+          id: path.join(FIXTURE, "src", "custom-property-runtime.ts"),
+          code: `element.style.setProperty("--fixture-accent", value);`,
+        },
+        cssText:
+          ":root{--fixture-accent:red}" +
+          (await readFile(path.join(FIXTURE, "src", "emitted.css"), "utf8")) +
+          ".uses-property{color:var(--fixture-accent)}",
+      });
+      const generated = `--${hashClassName("custom-property:--fixture-accent")}`;
+      assert.ok(result.cssOutputs[0].includes(`${generated}:red`));
+      assert.ok(result.cssOutputs[0].includes(`var(${generated})`));
+      assert.ok(
+        result.jsOutputs.some(function (code) {
+          return code.includes(`style.setProperty("${generated}", value)`);
+        }),
+      );
+      const report = JSON.parse(
+        await readFile(path.join(ARTIFACT_DIR, "report.json"), "utf8"),
+      );
+      assert.deepStrictEqual(report.customProperties.renames, [
+        { property: "--fixture-accent", name: generated },
+      ]);
+      const map = JSON.parse(
+        await readFile(path.join(ARTIFACT_DIR, "map.json"), "utf8"),
+      );
+      assert.deepStrictEqual(map.customProperties, {
+        [generated]: "--fixture-accent",
+      });
       await cleanOutputs();
     });
   });

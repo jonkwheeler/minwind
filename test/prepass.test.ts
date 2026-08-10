@@ -147,6 +147,49 @@ describe("runPrepass registry (R1, R5, KTD3, KTD4)", function () {
   });
 });
 
+describe("runPrepass owned custom properties", function () {
+  it("creates a custom-property registry for explicitly owned names", async function () {
+    const result = await runPrepass({
+      root: siteRoot(),
+      cssEntry: cssEntry(),
+      customProperties: { owned: ["--application-accent"] },
+    });
+    assert.match(
+      result.customProperties?.nameFor("--application-accent") ?? "",
+      /^--[a-z][a-z0-9]{3}$/,
+    );
+  });
+
+  it("does not assign a generated name already used by public CSS", async function () {
+    const result = await runPrepass({
+      root: siteRoot(),
+      cssEntry: cssEntry(),
+      customProperties: { owned: ["--accent"] },
+    });
+    assert.notStrictEqual(
+      result.customProperties?.nameFor("--accent"),
+      "--b8xg",
+    );
+  });
+
+  it("keeps an owned property unchanged when source uses it outside a provable CSSOM call", async function () {
+    const result = await runPrepass({
+      root: siteRoot(),
+      cssEntry: cssEntry(),
+      // This literal appears in the fixture as article/demo content rather
+      // than a CSSOM property-name argument.
+      customProperties: { owned: ["--fixture-unprovable"] },
+    });
+    assert.strictEqual(
+      result.customProperties?.nameFor("--fixture-unprovable"),
+      undefined,
+    );
+    assert.deepStrictEqual(result.customProperties?.excluded(), [
+      "--fixture-unprovable",
+    ]);
+  });
+});
+
 describe("runPrepass list frequencies (R3, KTD3)", function () {
   it("counts a repeated list across modules, order-insensitively", async function () {
     const result = await prepassSite();

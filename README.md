@@ -1,12 +1,11 @@
 # minwind
 
-Shrinks Tailwind CSS classnames at build time. It renames every utility class
-to a short generated name, rewrites your HTML, JS, and CSS together, and
-consolidates repeated class lists into single rules. Production builds only —
-your source and your dev server stay readable.
+Build-time Tailwind classname compression.
 
-Ships as a Vite plugin, a webpack/rspack plugin + loader, and a post-build
-CLI for bundlers without a plugin hook (Turbopack, esbuild, Parcel).
+minwind renames utility classes to short, stable names and consolidates repeated
+class lists. It rewrites HTML, JavaScript, and CSS together so every reference
+stays consistent. It runs only in production builds; source files and the dev
+server remain readable.
 
 ```html
 <!-- before -->
@@ -15,52 +14,76 @@ CLI for bundlers without a plugin hook (Turbopack, esbuild, Parcel).
 </div>
 
 <!-- after -->
-<div class="quill willow north lark ember ljaa">
-  <span class="willow glen brook dog drift"></span>
+<div class="xkzu au6h p9ql g3n1 c4vt w7mf">
+  <span class="au6h h2jk r8ds m5zp t1bx"></span>
 </div>
 ```
 
-## Why
+Measured on [jonkwheeler.com](https://jonkwheeler.com), across roughly 40
+prerendered routes:
 
-Tailwind class attributes are long, repeated on every element, and shipped in
-every HTML page. Brotli hides some of it, but not all: the class strings still
-cost bytes on the wire, and they dominate the DOM you read in devtools.
-
-Measured on a real SolidStart site ([jonkwheeler.com](https://jonkwheeler.com),
-~40 prerendered routes):
-
-|                        | before    | after    | delta  |
+| Metric                 | Before    | After    | Delta  |
 | ---------------------- | --------- | -------- | ------ |
 | HTML + CSS, raw        | 1,768 KB  | 1,356 KB | -23.3% |
 | HTML + CSS, Brotli 11  | 100.9 KB  | 96.9 KB  | -4.0%  |
-| median class attribute | 106 chars | 26 chars | -75%   |
+| Median class attribute | 106 chars | 26 chars | -75%   |
 
-And on the tiny demo app in `examples/demo` (3 routes):
+## Is minwind a fit?
 
-|                        | before   | after    | delta |
-| ---------------------- | -------- | -------- | ----- |
-| HTML + CSS, raw        | 58.0 KB  | 53.4 KB  | -8.0% |
-| median class attribute | 47 chars | 23 chars | -51%  |
+Use minwind when all of these are true:
 
-Every claim above is gated by the comparison harness: it builds your site with
-the plugin off and on, crawls both outputs, and fails unless the rendered
-styles match element-for-element, screenshots are pixel-identical, there are
-zero console errors, and interactions (clicks, client-side navigation, theme
-toggles) behave the same.
+- You use Tailwind CSS v4.
+- You ship a production build containing HTML, CSS, and JavaScript.
+- Shorter shipped markup or a cleaner production DOM is worth adding a build
+  transform.
+- Runtime-generated or third-party classes can remain unchanged or be listed as
+  exclusions.
+
+minwind is not a CSS minifier, a runtime library, or a source-code formatter.
+It does not rename classes in development and never guesses about dynamic class
+references.
+
+Unsure whether the savings justify it? Measure an existing build first. This is
+read-only and does not require adding minwind to your project:
+
+```bash
+npx minwind measure .output/public
+```
+
+The report separates projected rename savings, consolidation savings, and the
+theoretical upper bound, with gzip and Brotli estimates.
+
+## Choose an integration
+
+| Build system                                    | Integration     | Coverage                                    | Trade-off                                 |
+| ----------------------------------------------- | --------------- | ------------------------------------------- | ----------------------------------------- |
+| Vite, SolidStart, Astro on Vite, SvelteKit      | `minwind()`     | Source modules and emitted CSS              | Best coverage; production builds only     |
+| webpack or rspack, including Next.js on webpack | Plugin + loader | Source modules and emitted CSS              | Loader must run before JSX/TS compilation |
+| Turbopack, esbuild, Parcel, or another bundler  | `minwind apply` | Emitted HTML, CSS, and provable JS literals | Conservative; may rename fewer tokens     |
+
+All three routes share the same contract:
+
+1. One global registry maps each original class to one generated name.
+2. Every output surface uses that same registry.
+3. If a reference cannot be proven safe, the original token is preserved
+   everywhere.
+4. Internal inconsistency fails the build instead of shipping partial output.
+
+See [Architecture and safety](./docs/architecture.md) for the complete model.
 
 ## Install
 
 ```bash
 npm install minwind
-# peer deps: tailwindcss v4, plus vite for the Vite plugin
 ```
 
-## Use
+Requirements: Node.js 20 or newer and Tailwind CSS v4. Vite is an optional peer
+dependency used only by the Vite integration.
 
-### Vite (and SolidStart, Astro-on-Vite, SvelteKit, ...)
+## Vite
 
 ```ts
-// vite.config.ts (or app.config.ts for SolidStart)
+// vite.config.ts, or app.config.ts for SolidStart
 import { minwind } from "minwind";
 
 export default defineConfig({
@@ -71,9 +94,9 @@ export default defineConfig({
 });
 ```
 
-Build. That's it. The plugin only runs on `vite build`; dev is untouched.
+Run the normal production build. The plugin does nothing during development.
 
-### webpack / rspack (including Next.js on webpack)
+## webpack and rspack
 
 ```ts
 // webpack.config.ts
@@ -84,7 +107,7 @@ export default {
     rules: [
       {
         test: /\.(?:[cm]?[jt]s|[jt]sx|vue|svelte|astro)$/,
-        enforce: "pre", // required: minwind must run before any JSX/TS compiler
+        enforce: "pre",
         use: [MinwindWebpackPlugin.loader],
       },
     ],
@@ -93,116 +116,108 @@ export default {
 };
 ```
 
-The loader rewrites class contexts per module; the plugin runs the pre-pass
-in `beforeCompile` and rewrites emitted CSS after minification (before
-content hashing, so hashes reflect the final bytes). The same zero-rename
-tripwire as the Vite plugin fails the build if the loader ordering breaks.
-Works with rspack unchanged — same hooks, same stage constants.
+`enforce: "pre"` is required. The loader rewrites class contexts before the
+framework compiler consumes them; the plugin rewrites emitted CSS before
+content hashes are finalized. A zero-rename tripwire fails the build when loader
+ordering is wrong. The same configuration works with rspack.
 
-### Turbopack, esbuild, Parcel — anything else: `minwind apply`
+## Post-build apply
 
-Turbopack has no equivalent of "run before the framework compiler, rewrite
-emitted CSS after minification", so for plugin-less bundlers minwind rewrites
-the build output directory instead:
+For bundlers without the necessary plugin hooks, rewrite the completed output
+directory in place:
 
 ```bash
-pnpm build                          # your normal production build
-npx minwind apply .output/public    # rewrites HTML, CSS, and JS in place
+pnpm build
+npx minwind apply .output/public
 ```
 
-`apply` computes the same rename registry from your source, then rewrites
-emitted `.html` (class attributes), `.css` (selectors plus consolidation),
-and `.js` bundles — conservatively: only provable class lists in bundles
-(markup-template `class="..."` spans and `class`/`className` property
-literals). A token that shows up anywhere the rewriter can't prove — a
-minified call argument, an SSR payload in an inline script — keeps its
-original name everywhere, stylesheet included, and the report lists it as a
-`runtime-context` exclusion. That is the trade-off of post-build rewriting:
-slightly less compression than a source-level plugin, never a broken
-runtime reference. Flags: `--root`, `--css-entry`, `--no-consolidate`,
-`--dry-run`. Themed naming (`words`/`quotes`) needs plugin options, so
-`apply` is hash-naming only.
+`apply` handles HTML class attributes, CSS selectors and consolidation, and
+provable class lists in JavaScript bundles. A token found in an ambiguous
+runtime context keeps its original name everywhere and appears in the report as
+a `runtime-context` exclusion.
 
-### Supported sources
+```text
+minwind apply <build-directory> [options]
 
-The source transform walks `ts`, `tsx`, `js`, `jsx`, `mts`, `cts`, `mjs`,
-`cjs`, and the single-file-component formats `.vue`, `.svelte`, and `.astro`
-(template class attributes, framework bindings like `:class` /
-`class:list` / `class:foo`, and `<script>` blocks all classify through the
-same walker, so the pre-pass and the transform can never disagree). The JS
-family parses `.js`/`.mjs`/`.cjs` as JSX — a safe superset for valid JS, and
-React-flavored projects legitimately put JSX in `.js` files.
+--root <directory>     Project root used to discover source and write reports
+--css-entry <file>     Tailwind CSS entrypoint
+--no-consolidate       Rename only
+--dry-run              Report the result without changing the build
+```
 
-### Measure first, before installing anything
+Post-build apply uses stable hash names. Themed naming requires a source-level
+plugin because it depends on the complete source class-list context.
 
-Point the read-only CLI at an existing production build to project the savings:
+## Verify the result
+
+Every plugin or apply build writes:
+
+- `.output/minwind/report.json` — flags, rename summary, exclusions,
+  consolidation verdicts, and warnings.
+- `.output/minwind/map.json` — original-to-generated classname map.
+
+Print a human-readable summary:
 
 ```bash
-npx minwind measure .output/public
+npx minwind report
 ```
 
-It reports the projected gzip/Brotli delta for the rename arm, the consolidate
-arm, and the theoretical upper bound, without modifying anything.
-
-After a plugin build, summarize what happened:
+For end-to-end verification, the repository harness builds a site with minwind
+off and on, crawls every prerendered route, compares computed styles and
+screenshots, replays interactions, and checks byte deltas:
 
 ```bash
-npx minwind report        # reads .output/minwind/report.json
+pnpm compare --site path/to/your/site
 ```
+
+The harness fails on a visual, console, navigation, theme, or interaction
+mismatch.
 
 ## Naming strategies
 
-The default is content-hash naming: each class maps to a short stable hash
-(`xkzu`, `au6h`), identical across builds, so long-term caching works.
+The default strategy uses stable four-character content hashes. An unchanged
+Tailwind token keeps the same name across builds, which preserves long-term
+caching.
 
-If you want the DOM to have some personality, provide a vocabulary or a quote
-corpus:
+You can instead provide a vocabulary or quote corpus:
 
 ```ts
 minwind({
   naming: {
-    strategy: "quotes",
-    corpus: ["the quick brown fox jumps over the lazy dog"],
+    strategy: "words",
     vocabulary: ["quill", "willow", "ember", "lark", "glen", "harbor"],
   },
 });
 ```
 
-With `quotes`, the classes on a single element spell out fragments of your
-corpus — `class="the quick brown"` — and leftover tokens fall back to
-vocabulary words, then hashes. With `words`, every token draws from the
-vocabulary. Names are always valid CSS identifiers and never collide with
-classes you excluded.
+Available strategies:
 
-A fair warning about `quotes`: names are a global bijection, so a quote word
-appears everywhere its token appears — the one list that assembles
-`"everything that happens now"` is outnumbered by the elements where
-`everything` sits next to unrelated words. Quotes land best on sites with
-long, distinctive class lists; if your DOM is mostly short lists of common
-utilities, `words` reads better. Single-token lists never take quote words
-for this reason — a lone word is mid-quote residue.
+- `hash` — stable content hashes; the default and smallest predictable option.
+- `words` — generated names drawn from your vocabulary.
+- `quotes` — class lists can spell fragments from a quote corpus, then fall
+  back to vocabulary words and hashes.
 
-### Prominence-aware dealing
+Names are sanitized as CSS identifiers and never collide with excluded classes.
+Quote words participate only in multi-token lists; isolated words otherwise
+read like fragments detached from their sentence.
 
-With `words`, the default deal is purely byte-driven: the shortest words go
-to the most-rendered tokens, blind to where a class sits in the DOM. If
-you'd rather the document shell — the elements someone meets first in
-devtools — wear the most iconic names, generate a prominence manifest from
-a minwind-off build and pass it in:
+### Prominence-aware words
+
+The `words` strategy normally assigns shorter words to more frequently rendered
+tokens. To give the earliest document-shell elements the most recognizable
+vocabulary, generate a prominence manifest from a minwind-off build:
 
 ```bash
 MINWIND=off pnpm build
-npx minwind prominence .output/public   # writes minwind.prominence.json
+npx minwind prominence .output/public
 pnpm build
 ```
+
+Then pass the manifest to the naming configuration:
 
 ```ts
 import { readFileSync } from "node:fs";
 
-// The manifest is a build artifact; read it leniently so a missing file
-// means "no prominence deal" rather than a config-load error. (A static
-// `import ... with { type: "json" }` would hard-fail without the file, and
-// config bundlers like esbuild may not support import attributes.)
 function loadProminence(): Record<string, number> | undefined {
   try {
     return JSON.parse(readFileSync("minwind.prominence.json", "utf8")).tokens;
@@ -214,186 +229,133 @@ function loadProminence(): Record<string, number> | undefined {
 minwind({
   naming: {
     strategy: "words",
-    vocabulary: SPACEBALLS_VOCABULARY, // curation order = iconic-first
+    vocabulary: MY_VOCABULARY,
     prominence: loadProminence(),
   },
 });
 ```
 
-Tokens first-seen within the window (default: the first 32 class-bearing
-elements) draw the vocabulary in curation order, so `vocabulary[0]` lands on
-the earliest classed element in the document. Everything else keeps the
-length-weighted deal. Shell elements render once per page, so spending
-longer names there costs almost nothing. Regenerate the manifest when your
-above-the-fold markup changes; if a build warns that the manifest matched
-zero tokens, it was generated from a renamed build — regenerate it with
-`MINWIND=off`.
-
-### Case study: Spaceballs-themed classnames
-
-The `words` strategy exists because of
-[jonkwheeler.com](https://jonkwheeler.com), which ships class names drawn
-from Spaceballs — open devtools there and read the DOM. The whole setup,
-lessons included:
-
-**1. Curate a vocabulary.** Every word must stand alone in a class
-attribute — single words, no phrases, nothing that reads as mid-sentence
-residue. Order the list iconic-first; curation order is the prominence
-priority.
-
-```ts
-// spaceballs.ts
-export const SPACEBALLS_VOCABULARY: ReadonlyArray<string> = [
-  // the greatest hits — the DOM shell wears these
-  "schwartz",
-  "lonestar",
-  "darkhelmet",
-  "vespa",
-  "barf",
-  "dotmatrix",
-  "yogurt",
-  "megamaid",
-  "winnebago",
-  "ludicrous",
-  // ...~150 words total: characters, planets, ships, props, bits
-];
-```
-
-**2. Wire the strategy with prominence**, using the lenient
-`loadProminence()` from the section above:
-
-```ts
-// app.config.ts
-minwind({
-  naming: {
-    strategy: "words",
-    vocabulary: SPACEBALLS_VOCABULARY,
-    prominence: loadProminence(),
-  },
-});
-```
-
-**3. Generate the manifest** once, and again after above-the-fold markup
-changes:
-
-```bash
-MINWIND=off pnpm build && npx minwind prominence .output/public && pnpm build
-```
-
-The result: open devtools and the document shell reads like the cast list —
-
-```html
-<div class="darkhelmet lonestar schwartz">
-  <header class="darkhelmet dotmatrix barf vespa">
-    <nav class="eagle5 sandurz"></nav>
-  </header>
-</div>
-```
-
-— while the hot, deeply-nested elements keep the shortest remaining words
-(`dot`, `jam`, `vega`), which is where the bytes actually are. With this
-exact setup the site's gate reports: median class attribute 77 → 36 chars
-(-53%), whole-site raw -21.9%, Brotli -3.6%, pixel-identical rendering.
-
-What the exercise taught:
-
-- **The window is a budget.** A 32-element window spent so many short words
-  on the shell that the median class-length drop fell under the site's 50%
-  gate. Eight elements — root, header, nav — reads just as iconic and costs
-  nothing measurable. Tune with `--window`.
-- **Long names are nearly free on the shell.** `megamaid` on an element that
-  renders once per page costs less than `jam` on a card that renders fifty
-  times. Prominence and byte-optimality only conflict where an element is
-  both early and hot, which is rare in practice.
-- **Quotes didn't survive contact with a real DOM** (see the warning above);
-  single themed words did. Curate for words that still make sense next to a
-  random neighbor, because every pairing happens somewhere.
+See the [Spaceballs naming case study](./docs/spaceballs-case-study.md) for a
+real deployment, including why themed words worked better than quotes and how
+the prominence window affected compression.
 
 ## Consolidation
 
-When the exact same class list appears in several places, minwind can fold it
-into one generated rule and replace every occurrence with a single class:
+When an exact static class list occurs repeatedly, minwind can replace it with
+one generated rule:
 
 ```html
-<!-- before, in 12 components -->
+<!-- before, repeated in several components -->
 <span class="select-none pointer-events-none"></span>
 
 <!-- after -->
 <span class="ckqw"></span>
 ```
 
-Consolidation is conservative. A list only folds when it is static, repeated,
-variant-free, and provably cascade-safe; otherwise the report says exactly why
-it was skipped (`intervening-cascade`, `has-variants`, ...).
+Consolidation occurs only when the list is repeated, variant-free, static, and
+provably cascade-safe. Skipped candidates remain individually renamed, and the
+report records reasons such as `intervening-cascade` or `has-variants`.
 
-## Safety model
+## Dynamic and third-party classes
 
-minwind only renames what it can prove safe. Anything it cannot prove is left
-untouched and listed in the report:
-
-- Classes constructed dynamically at runtime (`cn()` with non-literal parts)
-  are transformed literal-by-literal; unprovable parts pass through.
-- Classes that appear in CSS but never in source (`css-only`) are kept.
-- Classes you list in `exclusions` are never renamed or assigned as generated
-  names — important for classes injected by third-party scripts or routers:
+minwind transforms literal portions of dynamic expressions and preserves
+anything it cannot prove. CSS-only tokens are also preserved. Configure known
+runtime or third-party names explicitly:
 
 ```ts
 minwind({
   exclusions: {
-    names: ["active", "inactive"], // e.g. Solid Router's <A> link classes
-    prefixes: ["shiki"], // e.g. syntax highlighter themes
+    names: ["active", "inactive"],
+    prefixes: ["shiki"],
   },
 });
 ```
 
-Every build writes `.output/minwind/report.json` with the full rename map,
-exclusion reasons, consolidation verdicts, and warnings.
+An exclusion is global: an excluded original token cannot be assigned as a
+generated name, and that token remains unchanged across HTML, JavaScript, and
+CSS.
 
-### Verify it yourself
+## Owned CSS custom properties
 
-The same harness that gates this repo works against any site using the plugin:
+minwind can also shorten CSS custom-property names when your application owns
+their complete interface. Ownership is explicit—minwind never infers that a
+variable is private merely because it sees a declaration:
 
-```bash
-pnpm compare --site path/to/your/site
+```ts
+minwind({
+  customProperties: {
+    owned: ["--color-accent", "--surface", "--content-width"],
+  },
+});
 ```
 
-It builds with `MINWIND=off` and `MINWIND=on`, crawls every prerendered route
-in headless Chromium, diffs computed styles and screenshots, replays
-interactions, and checks the byte and class-length deltas. If anything
-mismatches, the build fails and you keep the untransformed output.
+Declarations, `var()` references, and `@property` registrations use the same
+stable generated name. Static property-name arguments to
+`element.style.setProperty()`, `element.style.removeProperty()`, and
+`getComputedStyle(element).getPropertyValue()` are rewritten too.
+
+```css
+/* before */
+:root {
+  --color-accent: #d946ef;
+}
+.button {
+  color: var(--color-accent);
+}
+
+/* after */
+:root {
+  --h4sh: #d946ef;
+}
+.button {
+  color: var(--h4sh);
+}
+```
+
+If an owned name appears anywhere in source outside those provable CSSOM
+contexts—dynamic construction, `cssText`, serialization, framework style
+objects, or application content—it keeps its original name globally and is
+listed under `customProperties.excluded` in the build report. SFC script usage
+is currently conservative and therefore excluded; `<style>` content is handled
+later as emitted CSS. Do not opt in variables that form a public theming
+interface for third-party code.
+
+This option is available through the Vite and webpack/rspack integrations.
+`minwind apply` does not accept it because the post-build CLI has no project
+configuration surface on which to declare ownership.
+
+## Supported source files
+
+The source transform supports:
+
+- TypeScript and JavaScript: `ts`, `tsx`, `js`, `jsx`, `mts`, `cts`, `mjs`,
+  and `cjs`.
+- Single-file components: `.vue`, `.svelte`, and `.astro`.
+- JSX/template class attributes, framework bindings such as `:class`,
+  `class:list`, and `class:foo`, script blocks, `classList` objects, and common
+  literal class-composition calls.
+
+JavaScript files are parsed using JSX grammar, which is a safe superset of valid
+JavaScript and supports React projects that place JSX in `.js` files.
 
 ## Flags
 
-- `MINWIND=off` — build with the plugin disabled (used by the harness).
+- `MINWIND=off` — disable all transforms for the build.
 - `MINWIND_REPORT=0` — skip writing `report.json`.
-
-## How it works
-
-1. **Pre-pass** (Vite `buildStart`, webpack `beforeCompile`, CLI startup):
-   compiles your CSS with Tailwind once, scans your content, and builds the
-   class universe — every token, where it came from, and whether it is
-   excludable.
-2. **Source transform** (Vite `transform`, webpack loader): parses each
-   JS/TS module with the TypeScript compiler API and rewrites class strings
-   in JSX attributes, `classList` objects, and `cn()` calls with
-   span-precise edits (sourcemaps intact). SFC files walk their template
-   class attributes and bindings through the same classifier; `minwind
-apply` rewrites emitted HTML and, conservatively, compiled bundles.
-3. **CSS transform** (Vite `generateBundle`, webpack `processAssets`, CLI
-   in place): parses the emitted stylesheet with css-tree and rewrites
-   selectors to the same generated names, appending consolidated rules.
-
-One global bijection — original token to generated name — is shared by all
-three phases, so HTML, JS, and CSS always agree.
 
 ## Development
 
 ```bash
 pnpm install
 pnpm test          # unit tests
-pnpm compare       # full harness against examples/demo
-pnpm build         # emit dist/ (JS + d.ts)
+pnpm compare       # full browser harness against examples/demo
+pnpm build         # emit dist/ JavaScript and declarations
+pnpm check         # typecheck, formatting, and tests
 ```
+
+Repository architecture, module ownership, and change invariants are documented
+in [Architecture and safety](./docs/architecture.md). Coding agents should also
+read [AGENTS.md](./AGENTS.md).
 
 ## License
 

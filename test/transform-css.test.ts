@@ -7,6 +7,7 @@ import {
   transformStylesheet,
   type TransformCssResult,
 } from "../src/transform-css.js";
+import { createCustomPropertyRegistry } from "../src/custom-properties.js";
 
 // A toy registry as the U2 pre-pass would build it: `tokens` are renamed,
 // `cssOnly` tokens are defined in the stylesheet but never used in source
@@ -103,6 +104,32 @@ describe("transformStylesheet happy path (R1, AE3)", function () {
       "re-transform must be a fixed point",
     );
     assert.deepStrictEqual(second.warnings, []);
+  });
+});
+
+describe("transformStylesheet owned custom properties", function () {
+  it("renames declarations, var() references, and @property without touching strings or comments", function () {
+    const registry = registryFor(["text-accent"]);
+    const properties = createCustomPropertyRegistry({
+      owned: ["--color-accent"],
+    });
+    const propertyName = properties.nameFor("--color-accent") ?? "";
+    const result = transformStylesheet({
+      css:
+        `@property --color-accent{syntax:"<color>";inherits:true;initial-value:red}` +
+        `:root{--color-accent:red;content:"--color-accent"}` +
+        `@layer utilities{.text-accent{color:var(--color-accent,blue)}}` +
+        `/* --color-accent */`,
+      registry,
+      customProperties: properties,
+    });
+    assert.strictEqual(
+      result.css,
+      `@property ${propertyName}{syntax:"<color>";inherits:true;initial-value:red}` +
+        `:root{${propertyName}:red;content:"--color-accent"}` +
+        `@layer utilities{.${nameOf(registry, "text-accent")}{color:var(${propertyName},blue)}}` +
+        `/* --color-accent */`,
+    );
   });
 });
 

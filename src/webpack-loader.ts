@@ -60,6 +60,7 @@ export default function minwindLoader(
         ? prepass.consolidationVerdicts
         : undefined,
       quoteOrder: prepass.naming?.order,
+      customProperties: prepass.customProperties,
     });
     if (result === null) {
       callback(null, source);

@@ -26,6 +26,7 @@ import {
 } from "./report.js";
 import { assertPresence, transformStylesheet } from "./transform-css.js";
 import { shouldTransformModule, transformSource } from "./transform-source.js";
+import type { CustomPropertiesConfig } from "./custom-properties.js";
 
 // U6 plugin wiring (R4, R8, R9, R11). One factory returns two build-only
 // plugins sharing per-build state: the source plugin (enforce 'pre', so it
@@ -55,6 +56,9 @@ export interface MinwindOptions {
   // highlighter's 'shiki' class). Excluded classes keep their original
   // bytes everywhere. Defaults to none.
   exclusions?: ExclusionConfig;
+  // Explicitly application-owned CSS custom properties. minwind never
+  // infers ownership; unprovable source usage keeps a property unchanged.
+  customProperties?: CustomPropertiesConfig;
 }
 
 export interface MinwindFlags {
@@ -254,6 +258,7 @@ export function minwind(options: MinwindOptions = {}): Array<Plugin> {
           cssEntry: currentCssEntry(root),
           naming: options.naming,
           exclusions: options.exclusions,
+          customProperties: options.customProperties,
         });
         if (active.consolidate) {
           assertConsolidatedNames(
@@ -310,6 +315,7 @@ export function minwind(options: MinwindOptions = {}): Array<Plugin> {
             ? current.prepass.consolidationVerdicts
             : undefined,
           quoteOrder: current.prepass.naming?.order,
+          customProperties: current.prepass.customProperties,
         });
         if (result === null) return null;
         current.detectedModules += 1;
@@ -408,6 +414,7 @@ export function minwind(options: MinwindOptions = {}): Array<Plugin> {
             css: original,
             registry,
             fileName,
+            customProperties: current.prepass.customProperties,
           });
           for (const warning of renamed.warnings) {
             this.warn(warning.message);
@@ -457,10 +464,12 @@ export function minwind(options: MinwindOptions = {}): Array<Plugin> {
           verdicts: current.prepass.consolidationVerdicts,
           warnings: sharedWarnings,
           consolidate: current.flags.consolidate,
+          customProperties: current.prepass.customProperties,
         });
         const map = buildRenameMap(
           current.prepass.registry,
           current.prepass.consolidationVerdicts,
+          current.prepass.customProperties,
         );
         // The first participating build of this process publishes
         // unconditionally (clearing any stale artifacts a previous process
