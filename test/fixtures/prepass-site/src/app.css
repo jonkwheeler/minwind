@@ -1,5 +1,9 @@
 @import "tailwindcss";
 
+:root {
+  --b8xg: blue;
+}
+
 @utility fade-in {
   opacity: 0;
   animation: fade-in 1s ease forwards;

@@ -31,6 +31,7 @@ import {
 } from "./consolidate.js";
 import { compareCodeUnits } from "./util.js";
 import {
+  collectCustomPropertyNamesInCss,
   createCustomPropertyRegistry,
   scanCustomPropertySource,
   type CustomPropertiesConfig,
@@ -200,7 +201,13 @@ function scanModule(filePath: string, text: string, scan: SourceScan): void {
   });
 }
 
-async function scanSources(root: string): Promise<SourceScan> {
+interface SourceInventory {
+  scan: SourceScan;
+  paths: Array<string>;
+  texts: Array<string>;
+}
+
+async function scanSources(root: string): Promise<SourceInventory> {
   const scan: SourceScan = {
     renameTokens: new Set<string>(),
     runtimeTokens: new Set<string>(),
@@ -219,7 +226,7 @@ async function scanSources(root: string): Promise<SourceScan> {
   for (let index = 0; index < paths.length; index += 1) {
     scanModule(paths[index], texts[index], scan);
   }
-  return scan;
+  return { scan, paths, texts };
 }
 
 // Mirror @tailwindcss/vite 4.1.18's own source computation so the pre-pass
@@ -284,22 +291,17 @@ export async function runPrepass(
   }
 
   const stylesheetModel = modelStylesheet(stylesheet);
-  const scan = await scanSources(options.root);
+  const sourceInventory = await scanSources(options.root);
+  const scan = sourceInventory.scan;
 
   let customProperties: CustomPropertyRegistry | undefined;
   if (options.customProperties !== undefined) {
     const provisional = createCustomPropertyRegistry(options.customProperties);
     const unsafe = new Set<string>();
-    const paths = await sourceModulePaths(options.root);
-    const texts = await Promise.all(
-      paths.map(function (filePath) {
-        return readFile(filePath, "utf8");
-      }),
-    );
-    for (let index = 0; index < paths.length; index += 1) {
+    for (let index = 0; index < sourceInventory.paths.length; index += 1) {
       const sourceScan = scanCustomPropertySource(
-        texts[index],
-        paths[index],
+        sourceInventory.texts[index],
+        sourceInventory.paths[index],
         provisional,
       );
       for (const property of sourceScan.unsafe) unsafe.add(property);
@@ -307,6 +309,7 @@ export async function runPrepass(
     customProperties = createCustomPropertyRegistry(
       options.customProperties,
       unsafe,
+      collectCustomPropertyNamesInCss(stylesheet),
     );
     customProperties.assertBijection();
   }

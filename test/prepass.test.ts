@@ -160,6 +160,18 @@ describe("runPrepass owned custom properties", function () {
     );
   });
 
+  it("does not assign a generated name already used by public CSS", async function () {
+    const result = await runPrepass({
+      root: siteRoot(),
+      cssEntry: cssEntry(),
+      customProperties: { owned: ["--accent"] },
+    });
+    assert.notStrictEqual(
+      result.customProperties?.nameFor("--accent"),
+      "--b8xg",
+    );
+  });
+
   it("keeps an owned property unchanged when source uses it outside a provable CSSOM call", async function () {
     const result = await runPrepass({
       root: siteRoot(),

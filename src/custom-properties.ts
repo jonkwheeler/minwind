@@ -29,6 +29,7 @@ const CUSTOM_PROPERTY_CHARACTER = /[A-Za-z0-9_-]/;
 export function createCustomPropertyRegistry(
   config: CustomPropertiesConfig,
   unsafe: ReadonlySet<string> = new Set<string>(),
+  reserved: ReadonlySet<string> = new Set<string>(),
 ): CustomPropertyRegistry {
   const owned = new Set<string>();
   for (const property of config.owned) {
@@ -50,17 +51,23 @@ export function createCustomPropertyRegistry(
 
   const names = new Map<string, string>();
   const inverse = new Map<string, string>();
+  const unavailable = new Set<string>(reserved);
+  for (const property of owned) unavailable.add(property);
   for (const property of Array.from(owned).sort(compareCodeUnits)) {
     if (unsafe.has(property)) continue;
-    const name = `--${hashClassName(`custom-property:${property}`)}`;
-    const existing = inverse.get(name);
-    if (existing !== undefined) {
-      throw new Error(
-        `minwind: custom-property collision: "${existing}" and "${property}" both map to "${name}"`,
-      );
-    }
+    let attempt = 0;
+    let name: string;
+    do {
+      const hashInput =
+        attempt === 0
+          ? `custom-property:${property}`
+          : `custom-property:${property}:${attempt}`;
+      name = `--${hashClassName(hashInput)}`;
+      attempt += 1;
+    } while (unavailable.has(name));
     names.set(property, name);
     inverse.set(name, property);
+    unavailable.add(name);
   }
 
   const entries = Array.from(names, function ([property, name]) {
@@ -187,76 +194,37 @@ export function scanCustomPropertySource(
       return `${span.start}:${span.end}`;
     }),
   );
-  for (const entry of registry.entries()) {
-    let from = 0;
-    for (;;) {
-      const at = text.indexOf(entry.property, from);
-      if (at === -1) break;
-      from = at + entry.property.length;
-      if (!isPropertyBoundary(text, at, entry.property.length)) continue;
-      const safe = rewritableStarts.has(`${at}:${at + entry.property.length}`);
-      if (!safe) unsafe.add(entry.property);
+  let index = 0;
+  while (index < text.length) {
+    if (text[index] !== "-" || text[index + 1] !== "-") {
+      index += 1;
+      continue;
     }
+    let end = index + 2;
+    while (end < text.length && CUSTOM_PROPERTY_CHARACTER.test(text[end])) {
+      end += 1;
+    }
+    const property = text.slice(index, end);
+    if (
+      registry.nameFor(property) !== undefined &&
+      isPropertyBoundary(text, index, property.length) &&
+      !rewritableStarts.has(`${index}:${end}`)
+    ) {
+      unsafe.add(property);
+    }
+    index = end;
   }
   return { rewritable, unsafe };
 }
 
-export function transformCustomPropertiesInSource(
-  code: string,
-  id: string,
-  registry: CustomPropertyRegistry,
-): { code: string; unsafe: Set<string> } {
-  const scan = scanCustomPropertySource(code, id, registry);
-  let output = "";
-  let cursor = 0;
-  for (const span of scan.rewritable.sort(function (a, b) {
-    return a.start - b.start;
-  })) {
-    const name = registry.nameFor(span.property);
-    if (name === undefined) continue;
-    output += code.slice(cursor, span.start) + name;
-    cursor = span.end;
-  }
-  output += code.slice(cursor);
-  return { code: output, unsafe: scan.unsafe };
+interface CustomPropertySpan {
+  start: number;
+  end: number;
+  property: string;
 }
 
-// Token-aware CSS rewriting. Custom-property identifiers are rewritten in
-// CSS syntax but never inside comments or quoted strings. This covers
-// declarations, var() references, and @property preludes without reserializing
-// the stylesheet or depending on css-tree's handling of every Tailwind value.
-export function transformCustomPropertiesInCss(
-  css: string,
-  registry: CustomPropertyRegistry,
-): string {
-  function previousNonWhitespace(from: number): number {
-    let index = from;
-    while (index >= 0 && /\s/.test(css[index])) index -= 1;
-    return index;
-  }
-
-  function nextNonWhitespace(from: number): number {
-    let index = from;
-    while (index < css.length && /\s/.test(css[index])) index += 1;
-    return index;
-  }
-
-  function isSemanticContext(start: number, end: number): boolean {
-    const before = previousNonWhitespace(start - 1);
-    if (before >= 3 && css.slice(before - 3, before + 1) === "var(") {
-      return true;
-    }
-    if (before >= 8 && css.slice(before - 8, before + 1) === "@property") {
-      return true;
-    }
-    const after = nextNonWhitespace(end);
-    return (
-      (before === -1 || css[before] === ";" || css[before] === "{") &&
-      css[after] === ":"
-    );
-  }
-  let output = "";
-  let cursor = 0;
+function customPropertySpans(css: string): Array<CustomPropertySpan> {
+  const spans: Array<CustomPropertySpan> = [];
   let index = 0;
   let quote: string | null = null;
   let comment = false;
@@ -295,16 +263,68 @@ export function transformCustomPropertiesInCss(
       end += 1;
     }
     const property = css.slice(index, end);
+    if (isPropertyBoundary(css, index, property.length)) {
+      spans.push({ start: index, end, property });
+    }
+    index = end;
+  }
+  return spans;
+}
+
+export function collectCustomPropertyNamesInCss(css: string): Set<string> {
+  return new Set(
+    customPropertySpans(css).map(function (span) {
+      return span.property;
+    }),
+  );
+}
+
+// Token-aware CSS rewriting. Custom-property identifiers are rewritten in
+// CSS syntax but never inside comments or quoted strings. This covers
+// declarations, var() references, and @property preludes without reserializing
+// the stylesheet or depending on css-tree's handling of every Tailwind value.
+export function transformCustomPropertiesInCss(
+  css: string,
+  registry: CustomPropertyRegistry,
+): string {
+  function previousNonWhitespace(from: number): number {
+    let index = from;
+    while (index >= 0 && /\s/.test(css[index])) index -= 1;
+    return index;
+  }
+
+  function nextNonWhitespace(from: number): number {
+    let index = from;
+    while (index < css.length && /\s/.test(css[index])) index += 1;
+    return index;
+  }
+
+  function isSemanticContext(start: number, end: number): boolean {
+    const before = previousNonWhitespace(start - 1);
+    if (before >= 3 && css.slice(before - 3, before + 1) === "var(") {
+      return true;
+    }
+    if (before >= 8 && css.slice(before - 8, before + 1) === "@property") {
+      return true;
+    }
+    const after = nextNonWhitespace(end);
+    return (
+      (before === -1 ||
+        css[before] === ";" ||
+        css[before] === "{" ||
+        css[before] === "(") &&
+      css[after] === ":"
+    );
+  }
+  let output = "";
+  let cursor = 0;
+  for (const span of customPropertySpans(css)) {
+    const { start: index, end, property } = span;
     const name = registry.nameFor(property);
-    if (
-      name !== undefined &&
-      isPropertyBoundary(css, index, property.length) &&
-      isSemanticContext(index, end)
-    ) {
+    if (name !== undefined && isSemanticContext(index, end)) {
       output += css.slice(cursor, index) + name;
       cursor = end;
     }
-    index = end;
   }
   return output + css.slice(cursor);
 }

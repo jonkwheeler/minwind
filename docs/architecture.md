@@ -58,7 +58,7 @@ be considered for consolidation.
 Primary modules:
 
 - `src/prepass.ts` — orchestration and source discovery.
-- `src/classify-source.ts` — shared syntax/context classification.
+- `src/class-contexts.ts` — shared syntax/context classification.
 - `src/names.ts` — exclusion rules and bijective registry.
 - `src/naming.ts` — hash, word, quote, and prominence assignment.
 
@@ -75,7 +75,7 @@ rendering and hydration bundles to inherit the same names.
 Primary modules:
 
 - `src/transform-source.ts` — TypeScript/JavaScript and script-block edits.
-- `src/transform-sfc.ts` — Vue, Svelte, and Astro template handling.
+- `src/sfc.ts` — Vue, Svelte, and Astro template handling.
 - `src/plugin.ts` — Vite lifecycle adapter.
 - `src/webpack-loader.ts` and `src/webpack.ts` — webpack/rspack adapter.
 

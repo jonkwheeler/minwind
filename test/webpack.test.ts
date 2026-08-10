@@ -182,6 +182,25 @@ describe("minwindLoader", function () {
     assert.ok(call.map !== undefined);
   });
 
+  it("rewrites owned CSSOM property calls through the loader", function () {
+    const plugin = new MinwindWebpackPlugin();
+    const prepass = fakePrepass();
+    prepass.customProperties = createCustomPropertyRegistry({
+      owned: ["--accent"],
+    });
+    plugin.prepass = prepass;
+    const call = runLoader(
+      plugin,
+      "/site/src/theme.ts",
+      `element.style.setProperty("--accent", value);`,
+    );
+    assert.strictEqual(call.error, null);
+    assert.strictEqual(
+      call.content,
+      `element.style.setProperty("${prepass.customProperties.nameFor("--accent")}", value);`,
+    );
+  });
+
   it("skips modules outside the transform filter", function () {
     const plugin = new MinwindWebpackPlugin();
     plugin.prepass = fakePrepass();

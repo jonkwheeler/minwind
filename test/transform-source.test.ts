@@ -205,7 +205,10 @@ describe("transformSource owned custom properties", function () {
       owned: ["--color-accent"],
     });
     const result = transformSource({
-      code: `element.style.setProperty("--color-accent", value);`,
+      code:
+        `element.style.setProperty("--color-accent", value);\n` +
+        `getComputedStyle(element).getPropertyValue("--color-accent");\n` +
+        `element.style.removeProperty("--color-accent");`,
       id: "/site/src/theme.ts",
       registry: REGISTRY,
       customProperties: properties,
@@ -213,7 +216,9 @@ describe("transformSource owned custom properties", function () {
     assert.ok(result !== null);
     assert.strictEqual(
       result.code,
-      `element.style.setProperty("${properties.nameFor("--color-accent")}", value);`,
+      `element.style.setProperty("${properties.nameFor("--color-accent")}", value);\n` +
+        `getComputedStyle(element).getPropertyValue("${properties.nameFor("--color-accent")}");\n` +
+        `element.style.removeProperty("${properties.nameFor("--color-accent")}");`,
     );
   });
 });

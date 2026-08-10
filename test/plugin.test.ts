@@ -190,7 +190,12 @@ interface MockLifecycleResult {
 // Modules/css are only fed when the simulated router would see them.
 async function driveLifecycle(
   plugins: ReadonlyArray<Plugin>,
-  options: { withModules: boolean; withCss: boolean; cssText?: string },
+  options: {
+    withModules: boolean;
+    withCss: boolean;
+    cssText?: string;
+    extraModule?: { id: string; code: string };
+  },
 ): Promise<MockLifecycleResult> {
   const source = findHook(plugins, "minwind:source");
   const cssPlugin = findHook(plugins, "minwind:css");
@@ -215,6 +220,14 @@ async function driveLifecycle(
       const result = (await transform.call(mock.context, code, id)) as {
         code: string;
       } | null;
+      if (result !== null) jsOutputs.push(result.code);
+    }
+    if (options.extraModule !== undefined) {
+      const result = (await transform.call(
+        mock.context,
+        options.extraModule.code,
+        options.extraModule.id,
+      )) as { code: string } | null;
       if (result !== null) jsOutputs.push(result.code);
     }
   }
@@ -547,6 +560,10 @@ describe("minwind owned custom properties", function () {
       const result = await driveLifecycle(plugins, {
         withModules: true,
         withCss: true,
+        extraModule: {
+          id: path.join(FIXTURE, "src", "custom-property-runtime.ts"),
+          code: `element.style.setProperty("--fixture-accent", value);`,
+        },
         cssText:
           ":root{--fixture-accent:red}" +
           (await readFile(path.join(FIXTURE, "src", "emitted.css"), "utf8")) +
@@ -555,6 +572,11 @@ describe("minwind owned custom properties", function () {
       const generated = `--${hashClassName("custom-property:--fixture-accent")}`;
       assert.ok(result.cssOutputs[0].includes(`${generated}:red`));
       assert.ok(result.cssOutputs[0].includes(`var(${generated})`));
+      assert.ok(
+        result.jsOutputs.some(function (code) {
+          return code.includes(`style.setProperty("${generated}", value)`);
+        }),
+      );
       const report = JSON.parse(
         await readFile(path.join(ARTIFACT_DIR, "report.json"), "utf8"),
       );

@@ -4,7 +4,6 @@ import {
   createCustomPropertyRegistry,
   scanCustomPropertySource,
   transformCustomPropertiesInCss,
-  transformCustomPropertiesInSource,
 } from "../src/custom-properties.js";
 import { createNameRegistry } from "../src/names.js";
 import { buildRenameMap, buildReport } from "../src/report.js";
@@ -31,24 +30,6 @@ describe("owned custom properties", function () {
     assert.throws(function () {
       createCustomPropertyRegistry({ owned: ["--accent", "--accent"] });
     }, /duplicate/);
-  });
-
-  it("rewrites static CSSOM property-name arguments", function () {
-    const registry = createCustomPropertyRegistry({
-      owned: ["--color-accent"],
-    });
-    const code =
-      `node.style.setProperty("--color-accent", value);\n` +
-      `getComputedStyle(node).getPropertyValue("--color-accent");\n` +
-      `node.style.removeProperty("--color-accent");`;
-    const result = transformCustomPropertiesInSource(
-      code,
-      "/site/src/theme.ts",
-      registry,
-    );
-    const name = registry.nameFor("--color-accent") ?? "";
-    assert.strictEqual(result.unsafe.size, 0);
-    assert.strictEqual(result.code.match(new RegExp(name, "g"))?.length, 3);
   });
 
   it("poisons dynamic or otherwise unrecognized source occurrences", function () {
@@ -83,6 +64,39 @@ describe("owned custom properties", function () {
         registry,
       ),
       `.asset{${registry.nameFor("--asset")}:red;background:url(--asset.png);color:var(${registry.nameFor("--asset")})}`,
+    );
+  });
+
+  it("rewrites owned property names in CSS conditions", function () {
+    const registry = createCustomPropertyRegistry({ owned: ["--accent"] });
+    const name = registry.nameFor("--accent") ?? "";
+    assert.strictEqual(
+      transformCustomPropertiesInCss(
+        `@supports (--accent: red){.x{--accent:red}}` +
+          `@container style(--accent: red){.y{color:var(--accent)}}`,
+        registry,
+      ),
+      `@supports (${name}: red){.x{${name}:red}}` +
+        `@container style(${name}: red){.y{color:var(${name})}}`,
+    );
+  });
+
+  it("probes deterministically past reserved stylesheet property names", function () {
+    const initial = createCustomPropertyRegistry({ owned: ["--accent"] });
+    const collision = initial.nameFor("--accent") ?? "";
+    const registry = createCustomPropertyRegistry(
+      { owned: ["--accent"] },
+      new Set(),
+      new Set([collision]),
+    );
+    assert.notStrictEqual(registry.nameFor("--accent"), collision);
+    assert.strictEqual(
+      registry.nameFor("--accent"),
+      createCustomPropertyRegistry(
+        { owned: ["--accent"] },
+        new Set(),
+        new Set([collision]),
+      ).nameFor("--accent"),
     );
   });
 
