@@ -18,6 +18,10 @@ import { hashClassName } from "../src/names.js";
 import { resolveFlags, minwind } from "../src/plugin.js";
 import { MODULES_COMPRESS_WARNING } from "../src/flags.js";
 import {
+  hashModuleLocal,
+  LIGHTNING_MODULES_ERROR,
+} from "../src/engines/css-modules.js";
+import {
   writeArtifacts,
   type RenameMap,
   type TransformReport,
@@ -1221,5 +1225,97 @@ describe("writeArtifacts (R11, KTD9)", function () {
     } finally {
       await rm(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("minwind CSS Modules naming hooks", function () {
+  const MODULES_FIXTURE = path.join(HERE, "fixtures", "modules-site");
+  const BUTTON_CSS = path.join(MODULES_FIXTURE, "src", "Button.module.css");
+  const OTHER_CSS = path.join(MODULES_FIXTURE, "src", "other.module.css");
+  const COMPOSED_CSS = path.join(
+    MODULES_FIXTURE,
+    "src",
+    "composed.module.css",
+  );
+
+  async function buildModules(outDirName: string): Promise<Map<string, Buffer>> {
+    const outDir = path.join(MODULES_FIXTURE, outDirName);
+    await build({
+      root: MODULES_FIXTURE,
+      logLevel: "silent",
+      plugins: minwind({
+        root: MODULES_FIXTURE,
+        engines: ["css-modules"],
+        mode: "morph",
+      }),
+      build: {
+        outDir,
+        emptyOutDir: true,
+        rollupOptions: { input: path.join(MODULES_FIXTURE, "index.html") },
+      },
+    });
+    return readOutputTree(outDir);
+  }
+
+  it("keeps export keys and syncs JS values with CSS selectors (AE1)", async function () {
+    await rm(path.join(MODULES_FIXTURE, ".output"), {
+      recursive: true,
+      force: true,
+    });
+    const files = await buildModules("dist-modules");
+    const rootName = hashModuleLocal(MODULES_FIXTURE, BUTTON_CSS, "root");
+    const buttonName = hashModuleLocal(MODULES_FIXTURE, COMPOSED_CSS, "button");
+    const baseName = hashModuleLocal(MODULES_FIXTURE, OTHER_CSS, "base");
+    const js = findFile(files, /assets\/.*\.js$/);
+    const css = findFile(files, /assets\/.*\.css$/);
+    assert.ok(js.text.includes(rootName));
+    assert.ok(css.text.includes(`.${rootName}`));
+    assert.ok(js.text.includes(buttonName));
+    assert.ok(js.text.includes(baseName));
+    assert.ok(css.text.includes(`.${buttonName}`));
+    assert.ok(css.text.includes(`.${baseName}`));
+    assert.ok(!js.text.includes('root:"Button_root'));
+    await rm(path.join(MODULES_FIXTURE, "dist-modules"), {
+      recursive: true,
+      force: true,
+    });
+    await rm(path.join(MODULES_FIXTURE, ".output"), {
+      recursive: true,
+      force: true,
+    });
+  });
+
+  it("is build-only so dev does not install the morphing generator", function () {
+    const plugins = minwind({
+      engines: ["css-modules"],
+      mode: "morph",
+    });
+    assert.strictEqual(plugins[0].apply, "build");
+  });
+
+  it("fails when Vite Lightning CSS Modules is active (AE6)", function () {
+    const plugins = minwind({
+      root: MODULES_FIXTURE,
+      engines: ["css-modules"],
+      mode: "morph",
+    });
+    const resolved = plugins[0].configResolved;
+    assert.ok(typeof resolved === "function");
+    assert.throws(function () {
+      resolved.call(
+        {},
+        {
+          root: MODULES_FIXTURE,
+          css: {
+            transformer: "lightningcss",
+            modules: {
+              generateScopedName: function () {
+                return "x";
+              },
+            },
+          },
+        },
+      );
+    }, new RegExp(LIGHTNING_MODULES_ERROR.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   });
 });

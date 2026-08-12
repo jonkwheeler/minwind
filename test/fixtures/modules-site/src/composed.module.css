@@ -1,0 +1,4 @@
+.button {
+  composes: base from "./other.module.css";
+  color: blue;
+}

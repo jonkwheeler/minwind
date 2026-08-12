@@ -17,7 +17,7 @@ import {
 } from "./consolidate.js";
 import type { ExclusionConfig, NameRegistry } from "./names.js";
 import type { NamingConfig } from "./naming.js";
-import { runPrepass, type PrepassResult } from "./prepass.js";
+import { emptyPrepassResult, runPrepass, type PrepassResult } from "./prepass.js";
 import {
   buildRenameMap,
   buildReport,
@@ -28,11 +28,18 @@ import { assertPresence, transformStylesheet } from "./transform-css.js";
 import { shouldTransformModule, transformSource } from "./transform-source.js";
 import type { CustomPropertiesConfig } from "./custom-properties.js";
 import {
+  enginesInclude,
+  isModulesOnly,
   resolveFlags,
   type MinwindEngineId,
   type MinwindFlags,
   type MinwindMode,
 } from "./flags.js";
+import {
+  createGenerateScopedName,
+  LIGHTNING_MODULES_ERROR,
+  MODULES_HOOK_MISSING_ERROR,
+} from "./engines/css-modules.js";
 
 export type { MinwindEngineId, MinwindFlags, MinwindMode };
 export { resolveFlags };
@@ -211,8 +218,49 @@ export function minwind(options: MinwindOptions = {}): Array<Plugin> {
     apply: "build",
     enforce: "pre",
 
+    config: function (userConfig, env) {
+      if (env.command !== "build") return;
+      const flags = resolveFlags(process.env, {
+        mode: options.mode,
+        engines: options.engines,
+      });
+      if (!flags.enabled) return;
+      if (!enginesInclude(flags.engines, "css-modules")) return;
+      const root = options.root ?? userConfig.root ?? process.cwd();
+      return {
+        css: {
+          modules: {
+            generateScopedName: createGenerateScopedName(root),
+          },
+        },
+      };
+    },
+
     configResolved: function (config) {
       viteRoot = config.root;
+      const flags = resolveFlags(process.env, {
+        mode: options.mode,
+        engines: options.engines,
+      });
+      if (!flags.enabled) return;
+      if (!enginesInclude(flags.engines, "css-modules")) return;
+      const css = config.css as {
+        transformer?: string;
+        modules?: boolean | { generateScopedName?: unknown };
+      };
+      if (css.transformer === "lightningcss") {
+        throw new Error(LIGHTNING_MODULES_ERROR);
+      }
+      if (css.modules === false) {
+        throw new Error(MODULES_HOOK_MISSING_ERROR);
+      }
+      const generateScopedName =
+        typeof css.modules === "object" && css.modules !== null
+          ? css.modules.generateScopedName
+          : undefined;
+      if (typeof generateScopedName !== "function") {
+        throw new Error(MODULES_HOOK_MISSING_ERROR);
+      }
     },
 
     buildStart: async function () {
@@ -229,13 +277,15 @@ export function minwind(options: MinwindOptions = {}): Array<Plugin> {
         return;
       }
       try {
-        const prepass = await runPrepass({
-          root,
-          cssEntry: currentCssEntry(root),
-          naming: options.naming,
-          exclusions: options.exclusions,
-          customProperties: options.customProperties,
-        });
+        const prepass = isModulesOnly(active.engines)
+          ? emptyPrepassResult()
+          : await runPrepass({
+              root,
+              cssEntry: currentCssEntry(root),
+              naming: options.naming,
+              exclusions: options.exclusions,
+              customProperties: options.customProperties,
+            });
         if (active.consolidate) {
           assertConsolidatedNames(
             prepass.registry,
