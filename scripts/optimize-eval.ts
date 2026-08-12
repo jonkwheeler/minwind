@@ -73,6 +73,31 @@ function emit(metrics: Metrics): void {
   process.stdout.write(JSON.stringify(metrics) + "\n");
 }
 
+// compare --json writes the report to stdout, but site builds also print
+// vinxi/vite noise on the same stream. Walk candidates from the end until
+// a parseable harness report with compare.sizes appears.
+function extractCompareReport(stdout: string): HarnessReport {
+  let searchFrom = stdout.length;
+  while (searchFrom > 0) {
+    const start = stdout.lastIndexOf("\n{", searchFrom);
+    const absoluteStart = start === -1 ? (stdout.startsWith("{") ? 0 : -1) : start + 1;
+    if (absoluteStart === -1) {
+      break;
+    }
+    const candidate = stdout.slice(absoluteStart).trim();
+    try {
+      const parsed = JSON.parse(candidate) as HarnessReport;
+      if (parsed.compare?.sizes !== undefined) {
+        return parsed;
+      }
+    } catch {
+      // try an earlier brace
+    }
+    searchFrom = absoluteStart - 1;
+  }
+  throw new Error("no compare JSON object found in harness stdout");
+}
+
 function main(): number {
   const unit = run("pnpm", ["run", "test:unit"]);
   const unitPassed = unit.status === 0 ? 1 : 0;
@@ -111,9 +136,9 @@ function main(): number {
   }
 
   const compare = run("pnpm", ["exec", "tsx", "harness/compare.ts", "--json"]);
-  let report: HarnessReport | null = null;
+  let report: HarnessReport;
   try {
-    report = JSON.parse(compare.stdout) as HarnessReport;
+    report = extractCompareReport(compare.stdout);
   } catch (cause) {
     process.stderr.write(
       "optimize-eval: failed to parse compare JSON: " +
