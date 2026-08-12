@@ -1,7 +1,7 @@
 {
   "name": "minwind",
   "version": "0.4.0",
-  "description": "Build-time CSS name compression for Tailwind projects: renames and consolidates classes across JS/TS, SFC, HTML, and CSS, with optional custom-property aliases. Vite and webpack/rspack plugins plus a post-build CLI.",
+  "description": "Build-time CSS name compression for Tailwind and CSS Modules: renames and consolidates classes across JS/TS, SFC, HTML, and CSS, with optional custom-property aliases. Vite and webpack/rspack plugins plus a post-build CLI.",
   "type": "module",
   "exports": {
     ".": {
@@ -34,8 +34,8 @@
     "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,css,md}\"",
     "format:check": "prettier --check \"**/*.{ts,tsx,js,jsx,json,css,md}\"",
     "prepublishOnly": "pnpm run clean && pnpm run build",
-    "test": "node --import tsx --test test/*.test.ts test/measure/*.test.ts",
-    "test:unit": "MINWIND_SKIP_BUILD=1 node --import tsx --test test/*.test.ts test/measure/*.test.ts",
+    "test": "node --import tsx --test test/*.test.ts test/engines/*.test.ts test/measure/*.test.ts",
+    "test:unit": "MINWIND_SKIP_BUILD=1 node --import tsx --test test/*.test.ts test/engines/*.test.ts test/measure/*.test.ts",
     "typecheck": "tsc --noEmit",
     "check": "pnpm run typecheck && pnpm run format:check && pnpm run test"
   },
@@ -60,10 +60,17 @@
   },
   "peerDependencies": {
     "tailwindcss": "^4",
-    "vite": "^5 || ^6 || ^7"
+    "vite": "^5 || ^6 || ^7",
+    "sass": "^1"
   },
   "peerDependenciesMeta": {
     "vite": {
+      "optional": true
+    },
+    "tailwindcss": {
+      "optional": true
+    },
+    "sass": {
       "optional": true
     }
   },

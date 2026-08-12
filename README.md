@@ -32,16 +32,18 @@ prerendered routes:
 
 Use minwind when all of these are true:
 
-- You use Tailwind CSS v4.
+- You use Tailwind CSS v4 and/or CSS Modules (`*.module.css` / `*.module.scss`).
 - You ship a production build containing HTML, CSS, and JavaScript.
-- Shorter shipped markup or a cleaner production DOM is worth adding a build
-  transform.
+- Shorter shipped markup, themed production class names, or a cleaner DOM is
+  worth adding a build transform.
 - Runtime-generated or third-party classes can remain unchanged or be listed as
   exclusions.
 
 minwind is not a CSS minifier, a runtime library, or a source-code formatter.
 It does not rename classes in development and never guesses about dynamic class
-references.
+references. CSS Modules support is rename/theme sync (JS export values match
+emitted selectors). It does not consolidate or atomically decompose Modules
+stylesheets.
 
 Unsure whether the savings justify it? Measure an existing build first. This is
 read-only and does not require adding minwind to your project:
@@ -57,9 +59,9 @@ theoretical upper bound, with gzip and Brotli estimates.
 
 | Build system                                    | Integration     | Coverage                                    | Trade-off                                 |
 | ----------------------------------------------- | --------------- | ------------------------------------------- | ----------------------------------------- |
-| Vite, SolidStart, Astro on Vite, SvelteKit      | `minwind()`     | Source modules and emitted CSS              | Best coverage; production builds only     |
-| webpack or rspack, including Next.js on webpack | Plugin + loader | Source modules and emitted CSS              | Loader must run before JSX/TS compilation |
-| Turbopack, esbuild, Parcel, or another bundler  | `minwind apply` | Emitted HTML, CSS, and provable JS literals | Conservative; may rename fewer tokens     |
+| Vite, SolidStart, Astro on Vite, SvelteKit      | `minwind()`     | Source modules, emitted CSS, CSS Modules    | Best coverage; production builds only     |
+| webpack or rspack, including Next.js on webpack | Plugin + loader | Source modules, emitted CSS, CSS Modules    | Loader must run before JSX/TS compilation |
+| Turbopack, esbuild, Parcel, or another bundler  | `minwind apply` | Emitted HTML, CSS, and provable JS literals | Tailwind-only; CSS Modules unsupported    |
 
 All three routes share the same contract:
 
@@ -77,8 +79,10 @@ See [Architecture and safety](./docs/architecture.md) for the complete model.
 npm install minwind
 ```
 
-Requirements: Node.js 20 or newer and Tailwind CSS v4. Vite is an optional peer
-dependency used only by the Vite integration.
+Requirements: Node.js 20 or newer. The Tailwind engine needs Tailwind CSS v4.
+Vite is an optional peer used only by the Vite integration. `sass` is an
+optional peer used only when CSS Modules `words` naming inventories
+`*.module.scss` files.
 
 ## Vite
 
@@ -95,6 +99,44 @@ export default defineConfig({
 ```
 
 Run the normal production build. The plugin does nothing during development.
+
+### Mode, engines, and CSS Modules
+
+`mode` chooses rename-only vs rename plus consolidation:
+
+- `compress` (default) — rename and consolidate where the engine supports it.
+- `morph` — rename or theme class names only; skip consolidation.
+
+```ts
+minwind({
+  mode: "morph",
+  engines: ["css-modules"],
+  naming: {
+    strategy: "words",
+    vocabulary: ["quill", "willow", "ember", "lark"],
+  },
+});
+```
+
+`engines` defaults to `["tailwind"]`. Add `"css-modules"` for CSS/SCSS Modules,
+or pass both for a dual-stack app. Modules-only `compress` coerces to `morph`
+with a warning: Modules v1 does not consolidate. Dual-stack `compress`
+consolidates Tailwind assets only.
+
+CSS Modules morph owns Vite `css.modules.generateScopedName` so `styles.foo`
+**keys stay `foo`** while export **values** match the emitted selectors. Use
+PostCSS Modules. Vite Lightning CSS Modules is unsupported and fails the build
+when the Modules engine is enabled. Themed `words` naming needs a complete
+Modules inventory; SCSS Modules + `words` needs the optional `sass` peer.
+
+webpack/rspack: pass the same `engines` / `mode` options and install the
+generator on css-loader:
+
+```ts
+modules: {
+  getLocalIdent: MinwindWebpackPlugin.createGetLocalIdent(__dirname),
+}
+```
 
 ## webpack and rspack
 
@@ -134,14 +176,17 @@ npx minwind apply .output/public
 `apply` handles HTML class attributes, CSS selectors and consolidation, and
 provable class lists in JavaScript bundles. A token found in an ambiguous
 runtime context keeps its original name everywhere and appears in the report as
-a `runtime-context` exclusion.
+a `runtime-context` exclusion. CSS Modules is not supported on `apply`; use the
+Vite or webpack plugin (`--engines css-modules` errors).
 
 ```text
 minwind apply <build-directory> [options]
 
 --root <directory>     Project root used to discover source and write reports
 --css-entry <file>     Tailwind CSS entrypoint
---no-consolidate       Rename only
+--mode morph|compress  morph = rename only; compress = rename + consolidation
+--no-consolidate       Alias for --mode morph
+--engines <ids>        Comma-separated engines (default: tailwind)
 --dry-run              Report the result without changing the build
 ```
 
@@ -171,7 +216,9 @@ pnpm compare --site path/to/your/site
 ```
 
 The harness fails on a visual, console, navigation, theme, or interaction
-mismatch.
+mismatch. The checked-in compare site is Tailwind-only; CSS Modules morph is
+proven by the `test/fixtures/modules-site` Vite fixture rather than `pnpm
+compare`.
 
 ## Naming strategies
 

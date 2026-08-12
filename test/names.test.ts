@@ -332,3 +332,16 @@ describe("createNameRegistry collision policy (R10)", function () {
     }, /identifier/);
   });
 });
+
+describe("createNameRegistry file-qualified module keys", function () {
+  it("renames definition-site locals without a class-context source token", function () {
+    const a = "src/a.module.css\0button";
+    const b = "src/b.module.css\0button";
+    const registry = createNameRegistry(
+      inputFor({ universe: [a, b], sourceTokens: [a, b] }),
+    );
+    assert.notStrictEqual(registry.nameFor(a), registry.nameFor(b));
+    assert.ok(registry.nameFor(a) !== undefined);
+    assert.ok(registry.nameFor(b) !== undefined);
+  });
+});

@@ -12,6 +12,10 @@ export const MODULES_COMPRESS_WARNING =
   "minwind: CSS Modules-only builds coerce mode compress to morph;" +
   " Modules v1 does not consolidate";
 
+export const MODULES_CONSOLIDATE_SKIP_WARNING =
+  "minwind: CSS Modules assets skip consolidation;" +
+  " Tailwind may still consolidate";
+
 const FLAG_NAMES = {
   master: "MINWIND",
   rename: "MINWIND_RENAME",
@@ -82,7 +86,9 @@ export function enginesInclude(
   return false;
 }
 
-export function isModulesOnly(engines: ReadonlyArray<MinwindEngineId>): boolean {
+export function isModulesOnly(
+  engines: ReadonlyArray<MinwindEngineId>,
+): boolean {
   let hasModules = false;
   for (const engine of engines) {
     if (engine === "tailwind") return false;

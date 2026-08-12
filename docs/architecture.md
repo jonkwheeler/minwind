@@ -30,10 +30,10 @@ and their generated or explicitly aliased names always retain the required
 ## Pipeline
 
 ```text
-Tailwind CSS + source modules
+Tailwind CSS and/or CSS/SCSS Modules
               |
               v
-        pre-pass/classifier
+     engine providers (pre-pass / inventory)
               |
               v
       one global name registry
@@ -41,8 +41,12 @@ Tailwind CSS + source modules
          v               v
  source/markup       emitted CSS
    transform          transform
+   (Tailwind)        (Tailwind layer gate)
          \               /
           v             v
+ CSS Modules naming hooks (generateScopedName / getLocalIdent)
+              |
+              v
         production output
               |
               v
@@ -59,9 +63,13 @@ be considered for consolidation.
 Primary modules:
 
 - `src/prepass.ts` — orchestration and source discovery.
+- `src/engines/tailwind.ts` — Tailwind compile + oxide scan.
+- `src/engines/css-modules.ts` — Modules inventory and bundler naming hooks.
+- `src/engines/types.ts` — shared engine provider surface.
 - `src/class-contexts.ts` — shared syntax/context classification.
 - `src/names.ts` — exclusion rules and bijective registry.
 - `src/naming.ts` — hash, word, quote, and prominence assignment.
+- `src/flags.ts` — morph/compress mode and engine selection.
 
 The pre-pass and source transform must share the same classifier. Adding syntax
 to only one side creates a dangerous disagreement between what the build thinks
@@ -123,19 +131,34 @@ coverage.
 `src/plugin.ts` runs the pre-pass in `buildStart`, transforms source modules in
 `transform`, and rewrites emitted CSS in `generateBundle`. The adapter is
 production-only and includes tripwires for builds that discover class-bearing
-source but perform no renames.
+source but perform no renames. When the CSS Modules engine is enabled it owns
+`css.modules.generateScopedName` (PostCSS Modules only; Lightning CSS Modules
+fails the build).
 
 ### webpack and rspack
 
 `src/webpack-loader.ts` rewrites modules before framework compilers.
 `src/webpack.ts` owns the pre-pass, emitted CSS rewrite, reports, and ordering
-tripwire. The loader must be configured as `enforce: "pre"`.
+tripwire. The loader must be configured as `enforce: "pre"`. CSS Modules morph
+uses `MinwindWebpackPlugin.createGetLocalIdent`.
 
 ### Post-build apply
 
 `src/apply.ts` operates on completed HTML, CSS, and JavaScript assets. Because
 compiled bundles have lost some source semantics, it deliberately accepts lower
 rename coverage in exchange for never breaking an ambiguous runtime reference.
+Apply is Tailwind-only in this milestone; requesting the CSS Modules engine is
+an error.
+
+### CSS Modules
+
+Modules locals are rename-eligible by definition-site inventory (file-qualified
+`path + "\0" + local`), not by Tailwind's source∩universe predicate. Generated
+names share a collision space with Tailwind. Tailwind assets that reference
+registry tokens still require `@layer utilities`; Modules-emitted CSS that only
+carries Modules-generated names skips that gate. Follow-up engine altitudes
+(StyleX, Vanilla Extract, Panda) are documented in
+[Engine follow-ups](./engines-followups.md).
 
 ## Exclusion semantics
 
