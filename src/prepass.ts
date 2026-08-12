@@ -411,3 +411,21 @@ export async function runPrepass(
     customProperties,
   };
 }
+
+export function emptyPrepassResult(): PrepassResult {
+  const empty = new Set<string>();
+  return {
+    registry: createNameRegistry({
+      universe: empty,
+      sourceTokens: empty,
+    }),
+    universe: empty,
+    sourceTokens: empty,
+    renameTokens: empty,
+    runtimeTokens: empty,
+    listFrequencies: [],
+    consolidationVerdicts: [],
+    stylesheet: "",
+    stylesheetModel: { universe: new Set<string>(), rules: [] },
+  };
+}

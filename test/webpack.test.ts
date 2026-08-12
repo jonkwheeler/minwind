@@ -1,6 +1,6 @@
 import assert from "node:assert";
 import { describe, it } from "node:test";
-import { createNameRegistry } from "../src/names.js";
+import { createNameRegistry, hashClassName } from "../src/names.js";
 import type { PrepassResult } from "../src/prepass.js";
 import {
   MinwindWebpackPlugin,
@@ -266,6 +266,16 @@ describe("MinwindWebpackPlugin hooks", function () {
     const plugin = new MinwindWebpackPlugin({ mode: "morph" });
     assert.strictEqual(plugin.consolidate, false);
     assert.strictEqual(plugin.mode, "morph");
+  });
+
+  it("createGetLocalIdent matches file-qualified module hashes (AE1b)", function () {
+    const root = "/app";
+    const file = "/app/src/Button.module.css";
+    const ident = MinwindWebpackPlugin.createGetLocalIdent(root);
+    assert.strictEqual(
+      ident({ resourcePath: file }, "[hash]", "root"),
+      hashClassName("src/Button.module.css\0root"),
+    );
   });
 
   it("fires the zero-rename tripwire when modules were detected but none renamed", async function () {

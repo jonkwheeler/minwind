@@ -9,7 +9,7 @@ import {
 } from "./consolidate.js";
 import type { ExclusionConfig } from "./names.js";
 import type { NamingConfig } from "./naming.js";
-import { runPrepass, type PrepassResult } from "./prepass.js";
+import { emptyPrepassResult, runPrepass, type PrepassResult } from "./prepass.js";
 import {
   buildRenameMap,
   buildReport,
@@ -23,11 +23,8 @@ import {
 } from "./transform-css.js";
 import type { TransformWarning } from "./transform-source.js";
 import type { CustomPropertiesConfig } from "./custom-properties.js";
-import {
-  resolveFlags,
-  type MinwindEngineId,
-  type MinwindMode,
-} from "./flags.js";
+import { isModulesOnly, resolveFlags, type MinwindEngineId, type MinwindMode } from "./flags.js";
+import { createGetLocalIdent } from "./engines/css-modules.js";
 
 // webpack/rspack adapter (U3 outside Vite). The shape mirrors the Vite
 // plugin: a pre-pass runs once before compilation (beforeCompile), a loader
@@ -163,6 +160,10 @@ export class MinwindWebpackPlugin {
     new URL("./webpack-loader.js", import.meta.url),
   );
 
+  static createGetLocalIdent(root: string) {
+    return createGetLocalIdent(root);
+  }
+
   // Read by the loader between beforeCompile and the end of compilation.
   prepass: PrepassResult | undefined;
   readonly consolidate: boolean;
@@ -210,13 +211,21 @@ export class MinwindWebpackPlugin {
         return;
       }
       const root = plugin.options.root ?? compiler.context ?? process.cwd();
-      const prepass = await runPrepass({
-        root,
-        cssEntry: plugin.options.cssEntry ?? path.join(root, "src", "app.css"),
-        naming: plugin.options.naming,
-        exclusions: plugin.options.exclusions,
-        customProperties: plugin.options.customProperties,
+      const flags = resolveFlags(process.env, {
+        mode: plugin.options.mode,
+        engines: plugin.options.engines,
+        consolidate: plugin.options.consolidate,
       });
+      const prepass = isModulesOnly(flags.engines)
+        ? emptyPrepassResult()
+        : await runPrepass({
+            root,
+            cssEntry:
+              plugin.options.cssEntry ?? path.join(root, "src", "app.css"),
+            naming: plugin.options.naming,
+            exclusions: plugin.options.exclusions,
+            customProperties: plugin.options.customProperties,
+          });
       if (plugin.consolidate) {
         assertConsolidatedNames(
           prepass.registry,

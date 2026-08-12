@@ -72,7 +72,17 @@ function normalizeEngines(
   return result;
 }
 
-function isModulesOnly(engines: ReadonlyArray<MinwindEngineId>): boolean {
+export function enginesInclude(
+  engines: ReadonlyArray<MinwindEngineId>,
+  id: MinwindEngineId,
+): boolean {
+  for (const engine of engines) {
+    if (engine === id) return true;
+  }
+  return false;
+}
+
+export function isModulesOnly(engines: ReadonlyArray<MinwindEngineId>): boolean {
   let hasModules = false;
   for (const engine of engines) {
     if (engine === "tailwind") return false;
