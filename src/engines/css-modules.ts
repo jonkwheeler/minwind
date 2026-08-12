@@ -24,7 +24,9 @@ const SKIP_DIRECTORY_NAMES = new Set([
   ".output",
   ".context",
   ".worktrees",
+  ".next",
   "dist",
+  "out",
 ]);
 
 const requireFromHere = createRequire(import.meta.url);
@@ -92,6 +94,38 @@ export class NameCollisionSpace {
     for (const entry of registry.entries()) {
       this.claim(entry.token, entry.name);
     }
+  }
+
+  reservedNames(): Set<string> {
+    const names = new Set<string>();
+    for (const [name, token] of this.inverse) {
+      names.add(name);
+      names.add(token);
+    }
+    return names;
+  }
+}
+
+export function reservedFromRegistry(registry: NameRegistry): Set<string> {
+  const names = new Set<string>();
+  for (const entry of registry.entries()) {
+    names.add(entry.name);
+    names.add(entry.token);
+  }
+  for (const exclusion of registry.exclusions()) {
+    names.add(exclusion.token);
+  }
+  return names;
+}
+
+export function assertSharedCollision(
+  tailwind: NameRegistry,
+  modules: NameRegistry,
+): void {
+  const space = new NameCollisionSpace();
+  space.seed(tailwind);
+  for (const entry of modules.entries()) {
+    space.claim(entry.token, entry.name);
   }
 }
 
@@ -208,9 +242,15 @@ export const MODULES_WORDS_UNKNOWN_ERROR =
 
 export const MODULES_COMPOSE_ERROR = "minwind: unresolved CSS Modules composes";
 
-export const APPLY_MODULES_ERROR =
-  "minwind apply does not support the CSS Modules engine;" +
-  " use the Vite or webpack plugin";
+export const MODULES_QUOTES_ERROR =
+  'minwind: naming.strategy "quotes" is not supported with the CSS Modules' +
+  " engine";
+
+export function assertModulesQuotes(naming: NamingConfig | undefined): void {
+  if (naming !== undefined && naming.strategy === "quotes") {
+    throw new Error(MODULES_QUOTES_ERROR);
+  }
+}
 
 function skipDirectory(name: string): boolean {
   return SKIP_DIRECTORY_NAMES.has(name) || name.startsWith("dist");

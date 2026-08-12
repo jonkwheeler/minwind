@@ -1,6 +1,6 @@
 {
   "name": "minwind",
-  "version": "0.4.0",
+  "version": "1.0.0",
   "description": "Build-time CSS name compression for Tailwind and CSS Modules: renames and consolidates classes across JS/TS, SFC, HTML, and CSS, with optional custom-property aliases. Vite and webpack/rspack plugins plus a post-build CLI.",
   "type": "module",
   "exports": {
@@ -48,7 +48,8 @@
     "compression",
     "vite",
     "vite-plugin",
-    "css"
+    "css",
+    "css-modules"
   ],
   "license": "MIT",
   "repository": {

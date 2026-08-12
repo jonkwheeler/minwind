@@ -2,7 +2,8 @@
 
 These engines are **not** implemented. The notes record the rename altitude so
 a later adapter does not invent a second identity model. CSS/SCSS Modules is
-the only non-Tailwind engine in this milestone.
+the only non-Tailwind engine: Vite and webpack own the scoped-name hook;
+Turbopack and other apply-class bundlers remap proven export maps after emit.
 
 ## StyleX
 

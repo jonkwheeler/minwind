@@ -65,6 +65,7 @@ Primary modules:
 - `src/prepass.ts` — orchestration and source discovery.
 - `src/engines/tailwind.ts` — Tailwind compile + oxide scan.
 - `src/engines/css-modules.ts` — Modules inventory and bundler naming hooks.
+- `src/engines/modules-remap.ts` — post-build inverse rename from JS export maps.
 - `src/engines/types.ts` — shared engine provider surface.
 - `src/class-contexts.ts` — shared syntax/context classification.
 - `src/names.ts` — exclusion rules and bijective registry.
@@ -147,8 +148,16 @@ uses `MinwindWebpackPlugin.createGetLocalIdent`.
 `src/apply.ts` operates on completed HTML, CSS, and JavaScript assets. Because
 compiled bundles have lost some source semantics, it deliberately accepts lower
 rename coverage in exchange for never breaking an ambiguous runtime reference.
-Apply is Tailwind-only in this milestone; requesting the CSS Modules engine is
-an error.
+
+Tailwind apply rewrites HTML class attributes, stylesheet selectors, and
+provable JS `class` / `className` literals. CSS/SCSS Modules apply is an inverse
+rename for bundlers without a name-generator hook (Turbopack, and the same
+`minwind apply` path for esbuild or Parcel). It proves Module generated names
+from CSS Module JS export maps whose keys uniquely identify one inventory file,
+then rewrites every whole-word occurrence of those proven bundler names in JS,
+CSS, and HTML. Unprovable strings stay original. Once a name is proven, JS and
+CSS must both contain it after remap or the build fails; missing HTML is not a
+fail. `quotes` with the Modules engine is a hard error.
 
 ### CSS Modules
 

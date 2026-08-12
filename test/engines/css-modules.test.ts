@@ -14,10 +14,12 @@ import {
   hashModuleLocal,
   moduleLocalKey,
   MODULES_COMPOSE_ERROR,
+  MODULES_QUOTES_ERROR,
   NameCollisionSpace,
   SCSS_SASS_ERROR,
+  assertModulesQuotes,
 } from "../../src/engines/css-modules.js";
-import { hashClassName } from "../../src/names.js";
+import { hashClassName, createNameRegistry } from "../../src/names.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(HERE, "..", "fixtures", "modules-site");
@@ -227,6 +229,39 @@ describe("NameCollisionSpace", function () {
     space.claim("src/a.module.css\0flex", "abcd");
     assert.throws(function () {
       space.claim("flex", "abcd");
+    }, /name collision/);
+  });
+});
+
+describe("Modules quotes rejection", function () {
+  it("throws when naming strategy is quotes", function () {
+    assert.throws(
+      function () {
+        assertModulesQuotes({ strategy: "quotes", corpus: ["a b"] });
+      },
+      new RegExp(MODULES_QUOTES_ERROR.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
+    );
+  });
+
+  it("allows hash and words", function () {
+    assertModulesQuotes({ strategy: "hash" });
+    assertModulesQuotes({ strategy: "words", vocabulary: ["alpha"] });
+    assertModulesQuotes(undefined);
+  });
+});
+
+describe("shared collision space", function () {
+  it("throws when a Module name matches a seeded Tailwind name", function () {
+    const space = new NameCollisionSpace();
+    const registry = createNameRegistry({
+      universe: new Set(["flex"]),
+      sourceTokens: new Set(["flex"]),
+    });
+    space.seed(registry);
+    const twName = registry.nameFor("flex");
+    assert.ok(twName !== undefined);
+    assert.throws(function () {
+      space.claim("src/Card.module.css\0flex", twName);
     }, /name collision/);
   });
 });

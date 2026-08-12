@@ -4,8 +4,18 @@ import os from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
 import { applyBuildOutput } from "../src/apply.js";
-import { parseArgs } from "../src/apply-cli.js";
-import { createNameRegistry, type NameRegistry } from "../src/names.js";
+import { parseArgs, runApplyCli } from "../src/apply-cli.js";
+import {
+  collectModuleInventory,
+  createModuleNameRegistry,
+  hashModuleLocal,
+  SCSS_SASS_ERROR,
+} from "../src/engines/css-modules.js";
+import {
+  createNameRegistry,
+  hashClassName,
+  type NameRegistry,
+} from "../src/names.js";
 import { transformBundle } from "../src/transform-bundle.js";
 import { transformModule } from "../src/transform-source.js";
 import type { ConsolidationVerdict } from "../src/consolidate.js";
@@ -61,7 +71,13 @@ describe("parseArgs mode flags", function () {
     );
   });
 
-  it("rejects the CSS Modules engine (AE apply boundary)", function () {
+  it("accepts the CSS Modules engine with hash naming", function () {
+    const options = parseArgs(["/tmp/out", "--engines", "css-modules"]);
+    assert.deepStrictEqual(options.engines, ["css-modules"]);
+    assert.strictEqual(options.naming, undefined);
+  });
+
+  it("rejects quotes with the CSS Modules engine (AE6)", function () {
     const exit = process.exit;
     const writes: Array<string> = [];
     const write = process.stderr.write;
@@ -74,14 +90,103 @@ describe("parseArgs mode flags", function () {
     } as typeof process.exit;
     try {
       assert.throws(function () {
-        parseArgs(["/tmp/out", "--engines", "css-modules"]);
+        parseArgs([
+          "/tmp/out",
+          "--engines",
+          "css-modules",
+          "--naming",
+          "quotes",
+        ]);
       }, /exit 1/);
-      assert.ok(
-        writes.join("").includes("does not support the CSS Modules engine"),
-      );
+      assert.ok(writes.join("").includes("quotes"));
+      assert.ok(!writes.join("").includes("does not support the CSS Modules"));
     } finally {
       process.exit = exit;
       process.stderr.write = write;
+    }
+  });
+
+  it("loads words vocabulary from --vocabulary", function () {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minwind-vocab-"));
+    const vocab = path.join(dir, "words.json");
+    fs.writeFileSync(vocab, JSON.stringify(["alpha", "bravo"]));
+    try {
+      const options = parseArgs([
+        "/tmp/out",
+        "--engines",
+        "css-modules",
+        "--naming",
+        "words",
+        "--vocabulary",
+        vocab,
+      ]);
+      assert.deepStrictEqual(options.naming, {
+        strategy: "words",
+        vocabulary: ["alpha", "bravo"],
+      });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("requires --vocabulary for --naming words", function () {
+    const exit = process.exit;
+    const writes: Array<string> = [];
+    const write = process.stderr.write;
+    process.stderr.write = function (chunk: string | Uint8Array) {
+      writes.push(String(chunk));
+      return true;
+    } as typeof process.stderr.write;
+    process.exit = function (code?: number): never {
+      throw new Error(`exit ${code}`);
+    } as typeof process.exit;
+    try {
+      assert.throws(function () {
+        parseArgs([
+          "/tmp/out",
+          "--engines",
+          "css-modules",
+          "--naming",
+          "words",
+        ]);
+      }, /exit 1/);
+      assert.ok(writes.join("").includes("--vocabulary"));
+    } finally {
+      process.exit = exit;
+      process.stderr.write = write;
+    }
+  });
+
+  it("fails words apply when SCSS modules exist without sass (R8)", async function () {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "minwind-scss-root-"));
+    const out = fs.mkdtempSync(path.join(os.tmpdir(), "minwind-scss-out-"));
+    const vocab = path.join(root, "words.json");
+    fs.mkdirSync(path.join(root, "src"));
+    fs.writeFileSync(
+      path.join(root, "src", "button.module.scss"),
+      ".root { color: red }",
+    );
+    fs.writeFileSync(vocab, JSON.stringify(["alpha"]));
+    try {
+      await assert.rejects(
+        function () {
+          return runApplyCli([
+            out,
+            "--root",
+            root,
+            "--engines",
+            "css-modules",
+            "--naming",
+            "words",
+            "--vocabulary",
+            vocab,
+          ]);
+        },
+        new RegExp(SCSS_SASS_ERROR.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
+      );
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+      fs.rmSync(out, { recursive: true, force: true });
     }
   });
 });
@@ -298,6 +403,199 @@ describe("applyBuildOutput", function () {
       assert.ok(css.includes(".mb-16{margin-bottom:4rem}"));
       assert.ok(css.includes(`.${nameOf("flex")}{display:flex}`));
     } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("applyBuildOutput Modules remap", function () {
+  it("rewrites proven Module names in JS, CSS, and HTML together", function () {
+    const site = fs.mkdtempSync(path.join(os.tmpdir(), "minwind-mod-root-"));
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minwind-mod-out-"));
+    try {
+      fs.mkdirSync(path.join(site, "src"));
+      const moduleFile = path.join(site, "src", "Button.module.css");
+      fs.writeFileSync(moduleFile, ".root { color: red }");
+      const inventory = collectModuleInventory(site);
+      const registry = createModuleNameRegistry(inventory);
+      const expected = hashModuleLocal(site, moduleFile, "root");
+      const bundler = "Button-module__abc__root";
+      fs.writeFileSync(
+        path.join(dir, "index.html"),
+        `<div class="${bundler}">x</div>`,
+      );
+      fs.mkdirSync(path.join(dir, "assets"));
+      fs.writeFileSync(
+        path.join(dir, "assets", "app.css"),
+        `.${bundler}{color:red}`,
+      );
+      fs.writeFileSync(
+        path.join(dir, "assets", "app.js"),
+        `const styles = { root: "${bundler}" };\n`,
+      );
+      applyBuildOutput({
+        dir,
+        registry: createNameRegistry({
+          universe: new Set(),
+          sourceTokens: new Set(),
+        }),
+        consolidationVerdicts: [],
+        consolidate: false,
+        modules: { root: site, inventory, registry },
+      });
+      assert.ok(
+        fs
+          .readFileSync(path.join(dir, "index.html"), "utf8")
+          .includes(`class="${expected}"`),
+      );
+      assert.ok(
+        fs
+          .readFileSync(path.join(dir, "assets", "app.css"), "utf8")
+          .includes(`.${expected}{color:red}`),
+      );
+      const js = fs.readFileSync(path.join(dir, "assets", "app.js"), "utf8");
+      assert.ok(js.includes(`root: "${expected}"`));
+      assert.ok(!js.includes(bundler));
+    } finally {
+      fs.rmSync(site, { recursive: true, force: true });
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not fail when HTML is missing after a proven JS and CSS remap", function () {
+    const site = fs.mkdtempSync(path.join(os.tmpdir(), "minwind-mod-root-"));
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minwind-mod-out-"));
+    try {
+      fs.mkdirSync(path.join(site, "src"));
+      const moduleFile = path.join(site, "src", "Button.module.css");
+      fs.writeFileSync(moduleFile, ".root { color: red }");
+      const inventory = collectModuleInventory(site);
+      const registry = createModuleNameRegistry(inventory);
+      const expected = hashModuleLocal(site, moduleFile, "root");
+      const bundler = "Button-module__abc__root";
+      fs.writeFileSync(path.join(dir, "app.css"), `.${bundler}{color:red}`);
+      fs.writeFileSync(
+        path.join(dir, "app.js"),
+        `const styles = { root: "${bundler}" };\n`,
+      );
+      applyBuildOutput({
+        dir,
+        registry: createNameRegistry({
+          universe: new Set(),
+          sourceTokens: new Set(),
+        }),
+        consolidationVerdicts: [],
+        consolidate: false,
+        modules: { root: site, inventory, registry },
+      });
+      assert.ok(
+        fs
+          .readFileSync(path.join(dir, "app.css"), "utf8")
+          .includes(`.${expected}`),
+      );
+      assert.ok(
+        fs
+          .readFileSync(path.join(dir, "app.js"), "utf8")
+          .includes(`"${expected}"`),
+      );
+    } finally {
+      fs.rmSync(site, { recursive: true, force: true });
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("gives Module local flex and Tailwind flex distinct names (AE5)", function () {
+    const site = fs.mkdtempSync(path.join(os.tmpdir(), "minwind-dual-root-"));
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minwind-dual-out-"));
+    try {
+      fs.mkdirSync(path.join(site, "src"));
+      const moduleFile = path.join(site, "src", "Card.module.css");
+      fs.writeFileSync(moduleFile, ".flex { gap: 4px }");
+      const inventory = collectModuleInventory(site);
+      const modulesRegistry = createModuleNameRegistry(inventory);
+      const twFlex = hashClassName("flex");
+      const modFlex = hashModuleLocal(site, moduleFile, "flex");
+      assert.notStrictEqual(twFlex, modFlex);
+      const bundler = "Card-module__abc__flex";
+      fs.writeFileSync(
+        path.join(dir, "index.html"),
+        `<div class="flex ${bundler}">x</div>`,
+      );
+      fs.writeFileSync(path.join(dir, "app.css"), LAYERED_CSS);
+      fs.writeFileSync(path.join(dir, "card.css"), `.${bundler}{gap:4px}`);
+      fs.writeFileSync(
+        path.join(dir, "app.js"),
+        `const styles = { flex: "${bundler}" };\n`,
+      );
+      applyBuildOutput({
+        dir,
+        registry: REGISTRY,
+        consolidationVerdicts: [],
+        consolidate: false,
+        modules: {
+          root: site,
+          inventory,
+          registry: modulesRegistry,
+        },
+      });
+      const html = fs.readFileSync(path.join(dir, "index.html"), "utf8");
+      assert.ok(html.includes(`class="${twFlex} ${modFlex}"`));
+      const card = fs.readFileSync(path.join(dir, "card.css"), "utf8");
+      assert.ok(card.includes(`.${modFlex}{gap:4px}`));
+      assert.ok(!card.includes("@layer"));
+      const app = fs.readFileSync(path.join(dir, "app.css"), "utf8");
+      assert.ok(app.includes(`.${twFlex}{display:flex}`));
+    } finally {
+      fs.rmSync(site, { recursive: true, force: true });
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not consolidate Module stylesheets under dual-stack compress", function () {
+    const site = fs.mkdtempSync(path.join(os.tmpdir(), "minwind-dual-root-"));
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minwind-dual-out-"));
+    try {
+      fs.mkdirSync(path.join(site, "src"));
+      const moduleFile = path.join(site, "src", "Card.module.css");
+      fs.writeFileSync(
+        moduleFile,
+        ".root { color: red }\n.title { color: blue }",
+      );
+      const inventory = collectModuleInventory(site);
+      const modulesRegistry = createModuleNameRegistry(inventory);
+      const bundlerRoot = "Card-module__abc__root";
+      const bundlerTitle = "Card-module__abc__title";
+      fs.writeFileSync(path.join(dir, "app.css"), LAYERED_CSS);
+      fs.writeFileSync(
+        path.join(dir, "card.css"),
+        `.${bundlerRoot}{color:red}.${bundlerTitle}{color:blue}`,
+      );
+      fs.writeFileSync(
+        path.join(dir, "app.js"),
+        `const styles = { root: "${bundlerRoot}", title: "${bundlerTitle}" };\n`,
+      );
+      const verdicts: Array<ConsolidationVerdict> = [
+        { tokens: ["flex", "p-4"], frequency: 4, safe: true, name: "combo" },
+      ];
+      applyBuildOutput({
+        dir,
+        registry: REGISTRY,
+        consolidationVerdicts: verdicts,
+        consolidate: true,
+        modules: {
+          root: site,
+          inventory,
+          registry: modulesRegistry,
+        },
+      });
+      const card = fs.readFileSync(path.join(dir, "card.css"), "utf8");
+      const expectedRoot = hashModuleLocal(site, moduleFile, "root");
+      const expectedTitle = hashModuleLocal(site, moduleFile, "title");
+      assert.ok(card.includes(`.${expectedRoot}{color:red}`));
+      assert.ok(card.includes(`.${expectedTitle}{color:blue}`));
+      assert.ok(!card.includes("combo"));
+    } finally {
+      fs.rmSync(site, { recursive: true, force: true });
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
