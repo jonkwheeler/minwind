@@ -7,7 +7,10 @@ import { fileURLToPath } from "node:url";
 // Runs unit tests, builds the package, then the compare gate, and emits
 // scalar metrics the experiment log can gate and rank on.
 
-const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const REPO_ROOT = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..",
+);
 
 interface CompareSizes {
   brotliDeltaBytes?: number;
@@ -80,7 +83,8 @@ function extractCompareReport(stdout: string): HarnessReport {
   let searchFrom = stdout.length;
   while (searchFrom > 0) {
     const start = stdout.lastIndexOf("\n{", searchFrom);
-    const absoluteStart = start === -1 ? (stdout.startsWith("{") ? 0 : -1) : start + 1;
+    const absoluteStart =
+      start === -1 ? (stdout.startsWith("{") ? 0 : -1) : start + 1;
     if (absoluteStart === -1) {
       break;
     }
