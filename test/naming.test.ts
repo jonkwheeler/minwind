@@ -180,17 +180,18 @@ describe("resolveNaming quotes strategy", function () {
   });
 
   it("reuses an assigned word when a later list shares its token", function () {
-    // [flex p-4] claims "ludicrous speed" first (higher count), so p-4 is
-    // pinned to "speed"; [items-center p-4] must pick a fragment containing
-    // "speed", and its quote order places p-4 first.
+    // [flex p-4] claims the shortest available fragment ("speed of", not the
+    // earlier "ludicrous speed"), so p-4 is pinned to "of"; [items-center
+    // p-4] must pick a fragment containing "of", and its quote order places
+    // p-4 first.
     const result = quotes(
       ["ludicrous speed", "speed of light"],
       ["flex", "items-center", "p-4"],
       [list(5, "flex", "p-4"), list(3, "items-center", "p-4")],
     );
-    assert.strictEqual(result.names.get("flex"), "ludicrous");
-    assert.strictEqual(result.names.get("p-4"), "speed");
-    assert.strictEqual(result.names.get("items-center"), "of");
+    assert.strictEqual(result.names.get("flex"), "speed");
+    assert.strictEqual(result.names.get("p-4"), "of");
+    assert.strictEqual(result.names.get("items-center"), "light");
     assert.deepStrictEqual(result.order.get("items-center p-4"), [
       "p-4",
       "items-center",
@@ -272,15 +273,17 @@ describe("resolveNaming quotes strategy", function () {
   });
 
   it("breaks size ties by frequency", function () {
+    // Higher-count list is solved first and takes the shortest fragment
+    // ("gone to"), leaving the longer earlier quote for the rarer list.
     const result = quotes(
       ["ludicrous speed", "gone to plaid"],
       ["flex", "items-center", "p-4", "mb-16"],
       [list(1, "flex", "p-4"), list(9, "items-center", "mb-16")],
     );
-    assert.strictEqual(result.names.get("items-center"), "ludicrous");
-    assert.strictEqual(result.names.get("mb-16"), "speed");
-    assert.strictEqual(result.names.get("flex"), "gone");
-    assert.strictEqual(result.names.get("p-4"), "to");
+    assert.strictEqual(result.names.get("items-center"), "gone");
+    assert.strictEqual(result.names.get("mb-16"), "to");
+    assert.strictEqual(result.names.get("flex"), "ludicrous");
+    assert.strictEqual(result.names.get("p-4"), "speed");
     assert.strictEqual(result.quotedLists, 2);
   });
 
@@ -293,6 +296,32 @@ describe("resolveNaming quotes strategy", function () {
     assert.strictEqual(result.quotedLists, 1);
     assert.strictEqual(result.names.get("flex"), "may");
     assert.strictEqual(result.names.get("p-4"), "the");
+  });
+
+  it("prefers shorter equal-length fragments by rendered byte cost", function () {
+    // First-fit would take "ludicrous speed" (earlier in the corpus). Byte
+    // scoring picks "be to" because sum(word.length) * list.count is lower.
+    const result = quotes(
+      ["ludicrous speed", "be to"],
+      ["flex", "p-4"],
+      [list(3, "flex", "p-4")],
+    );
+    assert.strictEqual(result.names.get("flex"), "be");
+    assert.strictEqual(result.names.get("p-4"), "to");
+    assert.strictEqual(result.quotedLists, 1);
+  });
+
+  it("breaks equal byte-cost fragment ties by corpus order", function () {
+    // "may the" and "be with" both sum to 6 characters; earlier corpus
+    // order is the only tie-break.
+    const result = quotes(
+      ["may the schwartz be with you"],
+      ["flex", "p-4"],
+      [list(1, "flex", "p-4")],
+    );
+    assert.strictEqual(result.names.get("flex"), "may");
+    assert.strictEqual(result.names.get("p-4"), "the");
+    assert.strictEqual(result.quotedLists, 1);
   });
 
   it("sanitizes punctuation and apostrophes out of quote words", function () {

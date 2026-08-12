@@ -87,8 +87,9 @@ function sanitizeVocabulary(
 // The fragment inventory: every contiguous run of distinct usable words in
 // every quote, grouped by run length. Names are a bijection, so a run with a
 // repeated word ("now now") can never map a token list — runs stop at the
-// repeat. Corpus order is the priority order (earlier quotes win contested
-// words), so the corpus lists the most iconic lines first.
+// repeat. Corpus order is the inventory order and the score tie-break
+// (earlier quotes win when byte cost ties), so the corpus still lists the
+// most iconic lines first.
 function buildFragments(
   corpus: ReadonlyArray<string>,
   reserved: ReadonlySet<string>,
@@ -188,6 +189,12 @@ export function resolveNaming(
     if (list.tokens.length < 2) continue;
     const candidates = fragments.get(list.tokens.length);
     if (candidates === undefined) continue;
+    // Among equal-length fragments, minimize rendered class bytes:
+    // sum(word.length) * list.count. Corpus order is the tie-break only
+    // (candidates are already in first-seen corpus order).
+    let bestFragment: Array<string> | undefined;
+    let bestFresh: Array<string> | undefined;
+    let bestScore = 0;
     for (const fragment of candidates) {
       const pinned: Array<string> = [];
       let blocked = false;
@@ -211,29 +218,39 @@ export function resolveNaming(
       ) {
         continue;
       }
-      // list.tokens is canonical (sorted), so pairing open tokens with the
-      // fragment's leftover words in fragment order is deterministic.
-      const open = list.tokens.filter(function (token) {
-        return !assigned.has(token);
-      });
-      for (let index = 0; index < open.length; index += 1) {
-        assigned.set(open[index], fresh[index]);
-        tokenForWord.set(fresh[index], open[index]);
-      }
-      const orderedTokens: Array<string> = [];
+      let wordLengthSum = 0;
       for (const word of fragment) {
-        const token = tokenForWord.get(word);
-        if (token === undefined) {
-          throw new Error(
-            `minwind: internal error: quote word "${word}" lost its token`,
-          );
-        }
-        orderedTokens.push(token);
+        wordLengthSum += word.length;
       }
-      order.set(canonicalListKey(list.tokens), orderedTokens);
-      quotedLists += 1;
-      break;
+      const score = wordLengthSum * list.count;
+      if (bestFragment === undefined || score < bestScore) {
+        bestFragment = fragment;
+        bestFresh = fresh;
+        bestScore = score;
+      }
     }
+    if (bestFragment === undefined || bestFresh === undefined) continue;
+    // list.tokens is canonical (sorted), so pairing open tokens with the
+    // fragment's leftover words in fragment order is deterministic.
+    const open = list.tokens.filter(function (token) {
+      return !assigned.has(token);
+    });
+    for (let index = 0; index < open.length; index += 1) {
+      assigned.set(open[index], bestFresh[index]);
+      tokenForWord.set(bestFresh[index], open[index]);
+    }
+    const orderedTokens: Array<string> = [];
+    for (const word of bestFragment) {
+      const token = tokenForWord.get(word);
+      if (token === undefined) {
+        throw new Error(
+          `minwind: internal error: quote word "${word}" lost its token`,
+        );
+      }
+      orderedTokens.push(token);
+    }
+    order.set(canonicalListKey(list.tokens), orderedTokens);
+    quotedLists += 1;
   }
 
   const vocabulary = sanitizeVocabulary(
