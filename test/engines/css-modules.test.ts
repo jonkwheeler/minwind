@@ -169,6 +169,8 @@ describe("CSS Modules inventory", function () {
     const dir = tempSite({
       "src/button.module.scss": ".root { color: red }",
     });
+    const previous = process.env.MINWIND_FORCE_NO_SASS;
+    process.env.MINWIND_FORCE_NO_SASS = "1";
     try {
       const inventory = collectModuleInventory(dir);
       assert.ok(inventory.scssFiles.length > 0);
@@ -180,6 +182,11 @@ describe("CSS Modules inventory", function () {
         new RegExp(SCSS_SASS_ERROR.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
       );
     } finally {
+      if (previous === undefined) {
+        delete process.env.MINWIND_FORCE_NO_SASS;
+      } else {
+        process.env.MINWIND_FORCE_NO_SASS = previous;
+      }
       rmSync(dir, { recursive: true, force: true });
     }
   });
