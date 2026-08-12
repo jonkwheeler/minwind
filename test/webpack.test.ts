@@ -262,6 +262,12 @@ describe("MinwindWebpackPlugin hooks", function () {
     assert.ok(MinwindWebpackPlugin.loader.endsWith("webpack-loader.js"));
   });
 
+  it("mode morph disables consolidation", function () {
+    const plugin = new MinwindWebpackPlugin({ mode: "morph" });
+    assert.strictEqual(plugin.consolidate, false);
+    assert.strictEqual(plugin.mode, "morph");
+  });
+
   it("fires the zero-rename tripwire when modules were detected but none renamed", async function () {
     const plugin = new MinwindWebpackPlugin({ enabled: false });
     const { compiler, taps } = fakeCompiler();

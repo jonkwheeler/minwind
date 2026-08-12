@@ -23,6 +23,11 @@ import {
 } from "./transform-css.js";
 import type { TransformWarning } from "./transform-source.js";
 import type { CustomPropertiesConfig } from "./custom-properties.js";
+import {
+  resolveFlags,
+  type MinwindEngineId,
+  type MinwindMode,
+} from "./flags.js";
 
 // webpack/rspack adapter (U3 outside Vite). The shape mirrors the Vite
 // plugin: a pre-pass runs once before compilation (beforeCompile), a loader
@@ -45,8 +50,11 @@ export interface MinwindWebpackOptions {
   // Site-specific classes the transform must not touch.
   exclusions?: ExclusionConfig;
   customProperties?: CustomPropertiesConfig;
+  // User-facing morph vs compress. Defaults to compress.
+  mode?: MinwindMode;
+  engines?: ReadonlyArray<MinwindEngineId>;
   // Consolidation (repeated static lists collapse to one generated class).
-  // Defaults to true.
+  // Defaults from mode. Explicit false maps to morph; env still overrides.
   consolidate?: boolean;
   // Master switch. Defaults to true.
   enabled?: boolean;
@@ -158,6 +166,8 @@ export class MinwindWebpackPlugin {
   // Read by the loader between beforeCompile and the end of compilation.
   prepass: PrepassResult | undefined;
   readonly consolidate: boolean;
+  readonly mode: MinwindMode;
+  private readonly modeWarning: string | undefined;
   private readonly options: MinwindWebpackOptions;
   private readonly enabled: boolean;
   private detectedModules = 0;
@@ -168,8 +178,15 @@ export class MinwindWebpackPlugin {
 
   constructor(options: MinwindWebpackOptions = {}) {
     this.options = options;
-    this.consolidate = options.consolidate ?? true;
-    this.enabled = options.enabled ?? true;
+    const flags = resolveFlags(process.env, {
+      mode: options.mode,
+      engines: options.engines,
+      consolidate: options.consolidate,
+    });
+    this.consolidate = flags.consolidate;
+    this.enabled = (options.enabled ?? true) && flags.enabled;
+    this.mode = flags.mode;
+    this.modeWarning = flags.modeWarning;
   }
 
   // The loader reports each class-bearing module it saw (a transform result,
@@ -272,6 +289,8 @@ export class MinwindWebpackPlugin {
         verdicts: prepass.consolidationVerdicts,
         warnings: plugin.warnings,
         consolidate: plugin.consolidate,
+        mode: plugin.mode,
+        modeWarning: plugin.modeWarning,
         customProperties: prepass.customProperties,
       });
       const map = buildRenameMap(

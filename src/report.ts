@@ -29,7 +29,7 @@ export interface ReportVerdict {
 
 export interface TransformReport {
   version: 1;
-  flags: { enabled: boolean; consolidate: boolean };
+  flags: { enabled: boolean; consolidate: boolean; mode: "morph" | "compress" };
   summary: {
     renamed: number;
     excluded: number;
@@ -95,6 +95,8 @@ export interface BuildReportInput {
   verdicts: ReadonlyArray<ConsolidationVerdict>;
   warnings: ReadonlyArray<TransformWarning | CssTransformWarning>;
   consolidate: boolean;
+  mode?: "morph" | "compress";
+  modeWarning?: string;
   customProperties?: CustomPropertyRegistry;
 }
 
@@ -128,13 +130,28 @@ export function buildReport(input: BuildReportInput): TransformReport {
     seen.add(key);
     warnings.push(record);
   }
+  if (input.modeWarning !== undefined) {
+    const record: Record<string, unknown> = {
+      kind: "mode-coerced",
+      message: input.modeWarning,
+    };
+    const key = warningKey(record);
+    if (!seen.has(key)) {
+      seen.add(key);
+      warnings.push(record);
+    }
+  }
   warnings.sort(function (a, b) {
     return compareCodeUnits(warningKey(a), warningKey(b));
   });
 
   const report: TransformReport = {
     version: 1,
-    flags: { enabled: true, consolidate: input.consolidate },
+    flags: {
+      enabled: true,
+      consolidate: input.consolidate,
+      mode: input.mode ?? (input.consolidate ? "compress" : "morph"),
+    },
     summary: {
       renamed: renames.length,
       excluded: exclusions.length,
