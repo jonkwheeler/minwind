@@ -16,6 +16,7 @@ import { fileURLToPath } from "node:url";
 import { build, type Plugin } from "vite";
 import { hashClassName } from "../src/names.js";
 import { resolveFlags, minwind } from "../src/plugin.js";
+import { MODULES_COMPRESS_WARNING } from "../src/flags.js";
 import {
   writeArtifacts,
   type RenameMap,
@@ -268,6 +269,9 @@ describe("resolveFlags (R9)", function () {
       assert.deepStrictEqual(resolveFlags(), {
         enabled: true,
         consolidate: true,
+        mode: "compress",
+        engines: ["tailwind"],
+        modeWarning: undefined,
       });
     });
   });
@@ -277,6 +281,9 @@ describe("resolveFlags (R9)", function () {
       assert.deepStrictEqual(resolveFlags(), {
         enabled: false,
         consolidate: false,
+        mode: "compress",
+        engines: ["tailwind"],
+        modeWarning: undefined,
       });
     });
   });
@@ -286,6 +293,9 @@ describe("resolveFlags (R9)", function () {
       assert.deepStrictEqual(resolveFlags(), {
         enabled: false,
         consolidate: false,
+        mode: "compress",
+        engines: ["tailwind"],
+        modeWarning: undefined,
       });
     });
   });
@@ -295,6 +305,9 @@ describe("resolveFlags (R9)", function () {
       assert.deepStrictEqual(resolveFlags(), {
         enabled: true,
         consolidate: false,
+        mode: "morph",
+        engines: ["tailwind"],
+        modeWarning: undefined,
       });
     });
   });
@@ -326,6 +339,45 @@ describe("resolveFlags (R9)", function () {
         }, /MINWIND_CONSOLIDATE=on.*MINWIND_RENAME/);
       },
     );
+  });
+
+  it("mode morph disables consolidation", async function () {
+    await withFlags({}, function () {
+      assert.deepStrictEqual(resolveFlags(process.env, { mode: "morph" }), {
+        enabled: true,
+        consolidate: false,
+        mode: "morph",
+        engines: ["tailwind"],
+        modeWarning: undefined,
+      });
+    });
+  });
+
+  it("MINWIND_CONSOLIDATE=off overrides mode compress", async function () {
+    await withFlags({ MINWIND_CONSOLIDATE: "off" }, function () {
+      assert.deepStrictEqual(
+        resolveFlags(process.env, { mode: "compress" }),
+        {
+          enabled: true,
+          consolidate: false,
+          mode: "morph",
+          engines: ["tailwind"],
+          modeWarning: undefined,
+        },
+      );
+    });
+  });
+
+  it("Modules-only compress coerces to morph with a warning", async function () {
+    await withFlags({}, function () {
+      const flags = resolveFlags(process.env, {
+        mode: "compress",
+        engines: ["css-modules"],
+      });
+      assert.strictEqual(flags.mode, "morph");
+      assert.strictEqual(flags.consolidate, false);
+      assert.strictEqual(flags.modeWarning, MODULES_COMPRESS_WARNING);
+    });
   });
 });
 
@@ -431,6 +483,7 @@ describe("minwind production build (R1, R3, R8, R11)", function () {
       assert.deepStrictEqual(report.flags, {
         enabled: true,
         consolidate: true,
+        mode: "compress",
       });
       assert.deepStrictEqual(
         report.renames.map(function (entry: { token: string }) {
@@ -539,9 +592,38 @@ describe("minwind production build (R1, R3, R8, R11)", function () {
       assert.deepStrictEqual(report.flags, {
         enabled: true,
         consolidate: false,
+        mode: "morph",
       });
       assert.deepStrictEqual(report.consolidation.verdicts, []);
       assert.strictEqual(report.summary.consolidatedRules, 0);
+
+      await cleanOutputs();
+    });
+  });
+
+  it("renames without consolidating when mode is morph", async function () {
+    await withFlags({}, async function () {
+      await cleanOutputs();
+      const files = await buildFixture("dist-morph", [
+        ...minwind({ root: FIXTURE, cssEntry: CSS_ENTRY, mode: "morph" }),
+      ]);
+
+      const js = findFile(files, /assets\/.*\.js$/);
+      assert.ok(
+        js.text.includes(`${FLEX} ${ITEMS_CENTER} ${P_4}`),
+        "the repeated list keeps per-token renames",
+      );
+      assert.ok(!js.text.includes(CONSOLIDATED_NAME));
+
+      const report = JSON.parse(
+        await readFile(path.join(ARTIFACT_DIR, "report.json"), "utf8"),
+      );
+      assert.deepStrictEqual(report.flags, {
+        enabled: true,
+        consolidate: false,
+        mode: "morph",
+      });
+      assert.deepStrictEqual(report.consolidation.verdicts, []);
 
       await cleanOutputs();
     });
@@ -1039,7 +1121,7 @@ describe("writeArtifacts (R11, KTD9)", function () {
   function makeReport(warningCount: number): TransformReport {
     return {
       version: 1,
-      flags: { enabled: true, consolidate: true },
+      flags: { enabled: true, consolidate: true, mode: "compress" },
       summary: {
         renamed: 1,
         excluded: 0,

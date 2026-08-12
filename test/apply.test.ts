@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
 import { applyBuildOutput } from "../src/apply.js";
+import { parseArgs } from "../src/apply-cli.js";
 import { createNameRegistry, type NameRegistry } from "../src/names.js";
 import { transformBundle } from "../src/transform-bundle.js";
 import { transformModule } from "../src/transform-source.js";
@@ -37,6 +38,23 @@ const LAYERED_CSS =
   ".p-4{padding:1rem}" +
   ".mb-16{margin-bottom:4rem}" +
   "}";
+
+describe("parseArgs mode flags", function () {
+  it("defaults to compress", function () {
+    const options = parseArgs(["/tmp/out"]);
+    assert.strictEqual(options.mode, "compress");
+    assert.strictEqual(options.consolidate, true);
+  });
+
+  it("maps --mode morph and --no-consolidate to morph", function () {
+    assert.strictEqual(parseArgs(["/tmp/out", "--mode", "morph"]).mode, "morph");
+    assert.strictEqual(parseArgs(["/tmp/out", "--no-consolidate"]).mode, "morph");
+    assert.strictEqual(
+      parseArgs(["/tmp/out", "--no-consolidate"]).consolidate,
+      false,
+    );
+  });
+});
 
 describe("transformModule on emitted HTML", function () {
   it("renames class attributes in a built page", function () {

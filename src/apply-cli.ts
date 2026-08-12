@@ -4,6 +4,7 @@ import process from "node:process";
 import { pathToFileURL } from "node:url";
 import { applyBuildOutput, filterRegistry } from "./apply.js";
 import { assertConsolidatedNames } from "./consolidate.js";
+import { resolveFlags, type MinwindMode } from "./flags.js";
 import { runPrepass } from "./prepass.js";
 import { buildRenameMap, buildReport, writeArtifacts } from "./report.js";
 
@@ -25,7 +26,10 @@ plugins run, so output matches what a plugin-equipped build would produce.
 Options:
   --root <path>       Site root scanned by the pre-pass (default: cwd)
   --css-entry <path>  Tailwind CSS entry (default: <root>/src/app.css)
-  --no-consolidate    Rename only; skip list consolidation
+  --mode <morph|compress>
+                      morph = rename only; compress = rename + consolidation
+                      (default: compress)
+  --no-consolidate    Alias for --mode morph
   --dry-run           Report what would change without writing files
 
 Exit codes:
@@ -38,6 +42,7 @@ interface CliOptions {
   root: string;
   cssEntry: string | undefined;
   consolidate: boolean;
+  mode: "morph" | "compress";
   dryRun: boolean;
 }
 
@@ -50,7 +55,8 @@ export function parseArgs(argv: Array<string>): CliOptions {
   let dir: string | null = null;
   let root = process.cwd();
   let cssEntry: string | undefined;
-  let consolidate = true;
+  let mode: MinwindMode | undefined;
+  let consolidateOverride: boolean | undefined;
   let dryRun = false;
 
   let i = 0;
@@ -72,8 +78,23 @@ export function parseArgs(argv: Array<string>): CliOptions {
     } else if (arg.startsWith("--css-entry=")) {
       cssEntry = arg.slice("--css-entry=".length);
       i += 1;
+    } else if (arg === "--mode") {
+      const value = argv[i + 1];
+      if (value === undefined) usageError("--mode requires a value");
+      if (value !== "morph" && value !== "compress") {
+        usageError(`--mode must be morph or compress, got "${value}"`);
+      }
+      mode = value;
+      i += 2;
+    } else if (arg.startsWith("--mode=")) {
+      const value = arg.slice("--mode=".length);
+      if (value !== "morph" && value !== "compress") {
+        usageError(`--mode must be morph or compress, got "${value}"`);
+      }
+      mode = value;
+      i += 1;
     } else if (arg === "--no-consolidate") {
-      consolidate = false;
+      consolidateOverride = false;
       i += 1;
     } else if (arg === "--dry-run") {
       dryRun = true;
@@ -88,7 +109,18 @@ export function parseArgs(argv: Array<string>): CliOptions {
   }
 
   if (dir === null) usageError("missing build output directory argument");
-  return { dir, root, cssEntry, consolidate, dryRun };
+  const flags = resolveFlags(process.env, {
+    mode,
+    consolidate: consolidateOverride,
+  });
+  return {
+    dir,
+    root,
+    cssEntry,
+    consolidate: flags.consolidate,
+    mode: flags.mode,
+    dryRun,
+  };
 }
 
 export async function runApplyCli(argv: Array<string>): Promise<number> {
@@ -128,6 +160,7 @@ export async function runApplyCli(argv: Array<string>): Promise<number> {
       verdicts: prepass.consolidationVerdicts,
       warnings: result.warnings,
       consolidate: options.consolidate,
+      mode: options.mode,
     });
     const map = buildRenameMap(effective, prepass.consolidationVerdicts);
     await writeArtifacts(options.root, report, map);

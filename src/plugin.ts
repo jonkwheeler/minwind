@@ -27,6 +27,15 @@ import {
 import { assertPresence, transformStylesheet } from "./transform-css.js";
 import { shouldTransformModule, transformSource } from "./transform-source.js";
 import type { CustomPropertiesConfig } from "./custom-properties.js";
+import {
+  resolveFlags,
+  type MinwindEngineId,
+  type MinwindFlags,
+  type MinwindMode,
+} from "./flags.js";
+
+export type { MinwindEngineId, MinwindFlags, MinwindMode };
+export { resolveFlags };
 
 // U6 plugin wiring (R4, R8, R9, R11). One factory returns two build-only
 // plugins sharing per-build state: the source plugin (enforce 'pre', so it
@@ -59,50 +68,11 @@ export interface MinwindOptions {
   // Explicitly application-owned CSS custom properties. minwind never
   // infers ownership; unprovable source usage keeps a property unchanged.
   customProperties?: CustomPropertiesConfig;
-}
-
-export interface MinwindFlags {
-  // Master && rename: when false, every hook is a no-op and the build output
-  // is byte-identical to a plugin-free build (AE5).
-  enabled: boolean;
-  // Consolidation operates on renamed rules (KTD6), so it implies rename.
-  consolidate: boolean;
-}
-
-const FLAG_NAMES = {
-  master: "MINWIND",
-  rename: "MINWIND_RENAME",
-  consolidate: "MINWIND_CONSOLIDATE",
-} as const;
-
-function readFlag(env: NodeJS.ProcessEnv, name: string): boolean | undefined {
-  const value = env[name];
-  if (value === undefined) return undefined;
-  if (value === "on") return true;
-  if (value === "off") return false;
-  throw new Error(
-    `minwind: ${name} must be "on" or "off", got "${value}"` +
-      " (unset means on)",
-  );
-}
-
-// R9 flag resolution. Defaults are fully on. Rename-off plus an explicit
-// consolidate-on is contradictory (KTD6: consolidation operates on renamed
-// rules), so it fails fast instead of silently ignoring a flag.
-export function resolveFlags(
-  env: NodeJS.ProcessEnv = process.env,
-): MinwindFlags {
-  const master = readFlag(env, FLAG_NAMES.master) ?? true;
-  const rename = readFlag(env, FLAG_NAMES.rename) ?? true;
-  const consolidate = readFlag(env, FLAG_NAMES.consolidate) ?? true;
-  if (!rename && env[FLAG_NAMES.consolidate] === "on") {
-    throw new Error(
-      `minwind: MINWIND_CONSOLIDATE=on requires MINWIND_RENAME=on:` +
-        " consolidation operates on renamed rules (KTD6)",
-    );
-  }
-  const enabled = master && rename;
-  return { enabled, consolidate: enabled && consolidate };
+  // User-facing morph (rename only) vs compress (rename + consolidation).
+  // Defaults to compress. Env MINWIND_* flags override when set.
+  mode?: MinwindMode;
+  // Engines participating in this build. Defaults to Tailwind-only.
+  engines?: ReadonlyArray<MinwindEngineId>;
 }
 
 // Per-build state. SolidStart passes the same plugin objects to vinxi's ssr,
@@ -247,7 +217,13 @@ export function minwind(options: MinwindOptions = {}): Array<Plugin> {
 
     buildStart: async function () {
       const root = currentRoot();
-      const active = resolveFlags();
+      const active = resolveFlags(process.env, {
+        mode: options.mode,
+        engines: options.engines,
+      });
+      if (active.modeWarning !== undefined) {
+        this.warn(active.modeWarning);
+      }
       if (!active.enabled) {
         state = undefined;
         return;
@@ -464,6 +440,8 @@ export function minwind(options: MinwindOptions = {}): Array<Plugin> {
           verdicts: current.prepass.consolidationVerdicts,
           warnings: sharedWarnings,
           consolidate: current.flags.consolidate,
+          mode: current.flags.mode,
+          modeWarning: current.flags.modeWarning,
           customProperties: current.prepass.customProperties,
         });
         const map = buildRenameMap(
