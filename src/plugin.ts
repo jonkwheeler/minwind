@@ -41,6 +41,7 @@ import {
   type MinwindMode,
 } from "./flags.js";
 import {
+  assertModulesQuotes,
   createGenerateScopedName,
   LIGHTNING_MODULES_ERROR,
   MODULES_HOOK_MISSING_ERROR,
@@ -234,6 +235,7 @@ export function minwind(options: MinwindOptions = {}): Array<Plugin> {
       });
       if (!flags.enabled) return;
       if (!enginesInclude(flags.engines, "css-modules")) return;
+      assertModulesQuotes(options.naming);
       const root = options.root ?? userConfig.root ?? process.cwd();
       const words =
         options.naming !== undefined && options.naming.strategy === "words"

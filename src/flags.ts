@@ -56,6 +56,20 @@ function isEngineId(value: string): value is MinwindEngineId {
   return value === "tailwind" || value === "css-modules";
 }
 
+export function parseEngineList(value: string): Array<MinwindEngineId> {
+  const parts = value.split(",");
+  const parsed: Array<MinwindEngineId> = [];
+  for (const part of parts) {
+    const trimmed = part.trim();
+    if (trimmed === "") continue;
+    if (!isEngineId(trimmed)) {
+      throw new Error(`minwind: unknown engine "${trimmed}"`);
+    }
+    parsed.push(trimmed);
+  }
+  return normalizeEngines(parsed);
+}
+
 function normalizeEngines(
   engines: ReadonlyArray<MinwindEngineId> | undefined,
 ): Array<MinwindEngineId> {

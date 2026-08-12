@@ -1,5 +1,7 @@
 import assert from "node:assert";
+import path from "node:path";
 import { describe, it } from "node:test";
+import { fileURLToPath } from "node:url";
 import { createNameRegistry, hashClassName } from "../src/names.js";
 import type { PrepassResult } from "../src/prepass.js";
 import {
@@ -268,14 +270,66 @@ describe("MinwindWebpackPlugin hooks", function () {
     assert.strictEqual(plugin.mode, "morph");
   });
 
-  it("createGetLocalIdent matches file-qualified module hashes (AE1b)", function () {
-    const root = "/app";
-    const file = "/app/src/Button.module.css";
-    const ident = MinwindWebpackPlugin.createGetLocalIdent(root);
-    assert.strictEqual(
-      ident({ resourcePath: file }, "[hash]", "root"),
-      hashClassName("src/Button.module.css\0root"),
-    );
+  it("createGetLocalIdent rejects quotes naming", function () {
+    assert.throws(function () {
+      MinwindWebpackPlugin.createGetLocalIdent("/app", {
+        naming: { strategy: "quotes", corpus: ["a b"] },
+      });
+    }, /quotes/);
+  });
+
+  it("plugin constructor rejects quotes with Modules engine", function () {
+    assert.throws(function () {
+      new MinwindWebpackPlugin({
+        engines: ["css-modules"],
+        naming: { strategy: "quotes", corpus: ["a b"] },
+      });
+    }, /quotes/);
+  });
+
+  it("owns a collision space and seeds it from Tailwind in beforeCompile (KTD5)", async function () {
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const dual = path.join(here, "fixtures", "dual-site");
+    const plugin = new MinwindWebpackPlugin({
+      root: dual,
+      engines: ["tailwind", "css-modules"],
+      cssEntry: path.join(dual, "src", "app.css"),
+    });
+    const { compiler, taps } = fakeCompiler();
+    plugin.apply(compiler);
+    const beforeCompile = taps.get(
+      "beforeCompile:minwind",
+    ) as () => Promise<void>;
+    await beforeCompile();
+    const twName = hashClassName("flex");
+    assert.throws(function () {
+      plugin.collision.claim("src/Card.module.css\0flex", twName);
+    }, /name collision/);
+  });
+
+  it("createGetLocalIdent words names stay distinct from seeded Tailwind names (F1)", function () {
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const dual = path.join(here, "fixtures", "dual-site");
+    const card = path.join(dual, "src", "Card.module.css");
+    const tw = createNameRegistry({
+      universe: new Set(["flex"]),
+      sourceTokens: new Set(["flex"]),
+      hash: function () {
+        return "quill";
+      },
+    });
+    const plugin = new MinwindWebpackPlugin({
+      engines: ["tailwind", "css-modules"],
+      naming: { strategy: "words", vocabulary: ["quill", "willow"] },
+    });
+    plugin.collision.seed(tw);
+    const ident = MinwindWebpackPlugin.createGetLocalIdent(dual, {
+      naming: { strategy: "words", vocabulary: ["quill", "willow"] },
+      collision: plugin.collision,
+    });
+    const modName = ident({ resourcePath: card }, "[hash]", "flex");
+    assert.strictEqual(tw.nameFor("flex"), "quill");
+    assert.strictEqual(modName, "willow");
   });
 
   it("fires the zero-rename tripwire when modules were detected but none renamed", async function () {

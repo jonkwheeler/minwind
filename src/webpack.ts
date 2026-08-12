@@ -28,13 +28,16 @@ import {
 import type { TransformWarning } from "./transform-source.js";
 import type { CustomPropertiesConfig } from "./custom-properties.js";
 import {
+  enginesInclude,
   isModulesOnly,
   resolveFlags,
   type MinwindEngineId,
   type MinwindMode,
 } from "./flags.js";
 import {
+  assertModulesQuotes,
   createGetLocalIdent,
+  NameCollisionSpace,
   prepareModulesNaming,
   type ScopedNameOptions,
 } from "./engines/css-modules.js";
@@ -145,7 +148,7 @@ export function rewriteCssAssets(
     warnings.push(...renamed.warnings);
     renamedAssets.push(renamed.css);
     let finalCss = renamed.css;
-    if (consolidate) {
+    if (consolidate && /@layer\s+utilities\b/.test(original)) {
       const merged = consolidateStylesheet({
         css: renamed.css,
         verdicts: prepass.consolidationVerdicts,
@@ -174,11 +177,13 @@ export class MinwindWebpackPlugin {
   );
 
   static createGetLocalIdent(root: string, options?: ScopedNameOptions) {
+    assertModulesQuotes(options?.naming);
     if (options?.naming !== undefined && options.naming.strategy === "words") {
+      const reserved = options.collision?.reservedNames();
       const prepared = prepareModulesNaming(
         root,
         options.naming,
-        undefined,
+        reserved,
         undefined,
       );
       return createGetLocalIdent(root, {
@@ -192,6 +197,7 @@ export class MinwindWebpackPlugin {
 
   // Read by the loader between beforeCompile and the end of compilation.
   prepass: PrepassResult | undefined;
+  readonly collision: NameCollisionSpace;
   readonly consolidate: boolean;
   readonly mode: MinwindMode;
   private readonly modeWarning: string | undefined;
@@ -204,6 +210,7 @@ export class MinwindWebpackPlugin {
   private readonly consolidated: Array<ConsolidatedRuleInfo> = [];
 
   constructor(options: MinwindWebpackOptions = {}) {
+    this.collision = new NameCollisionSpace();
     this.options = options;
     const flags = resolveFlags(process.env, {
       mode: options.mode,
@@ -214,6 +221,9 @@ export class MinwindWebpackPlugin {
     this.enabled = (options.enabled ?? true) && flags.enabled;
     this.mode = flags.mode;
     this.modeWarning = flags.modeWarning;
+    if (enginesInclude(flags.engines, "css-modules")) {
+      assertModulesQuotes(options.naming);
+    }
   }
 
   // The loader reports each class-bearing module it saw (a transform result,
@@ -257,6 +267,12 @@ export class MinwindWebpackPlugin {
           prepass.registry,
           prepass.consolidationVerdicts,
         );
+      }
+      if (
+        enginesInclude(flags.engines, "css-modules") &&
+        !isModulesOnly(flags.engines)
+      ) {
+        plugin.collision.seed(prepass.registry);
       }
       plugin.prepass = prepass;
     });

@@ -4,18 +4,34 @@ import process from "node:process";
 import { pathToFileURL } from "node:url";
 import { applyBuildOutput, filterRegistry } from "./apply.js";
 import { assertConsolidatedNames } from "./consolidate.js";
-import { resolveFlags, type MinwindMode } from "./flags.js";
-import { APPLY_MODULES_ERROR } from "./engines/css-modules.js";
-import { runPrepass } from "./prepass.js";
+import {
+  enginesInclude,
+  isModulesOnly,
+  parseEngineList,
+  resolveFlags,
+  type MinwindEngineId,
+  type MinwindMode,
+} from "./flags.js";
+import {
+  assertModulesQuotes,
+  assertSharedCollision,
+  MODULES_QUOTES_ERROR,
+  prepareModulesNaming,
+  reservedFromRegistry,
+} from "./engines/css-modules.js";
+import type { NamingConfig } from "./naming.js";
+import { emptyPrepassResult, runPrepass } from "./prepass.js";
 import { buildRenameMap, buildReport, writeArtifacts } from "./report.js";
 
 // `minwind apply` — the post-build path for bundlers without a plugin hook
 // (Turbopack, esbuild, Parcel, plain Rollup). Runs the same pre-pass the
 // plugins run against the site source, then rewrites an already-emitted
-// output directory in place: HTML class attributes, stylesheet selectors
-// (plus consolidation), and JS bundles (conservatively). Naming is
-// content-hash only — themed naming needs the plugin options, so sites that
-// want words/quotes use the Vite or webpack plugin.
+// output directory in place. Tailwind apply rewrites HTML class attributes,
+// stylesheet selectors (plus consolidation), and conservative JS class
+// literals. Modules apply proves export maps and remaps those bundler names
+// in JS, CSS, and HTML. Tailwind-only apply stays content-hash unless
+// `--naming` is set. Modules apply accepts `hash` or `words`
+// (`--vocabulary` required for words).
 
 const USAGE = `Usage: minwind apply <build-output-directory> [options]
 
@@ -31,8 +47,11 @@ Options:
                       morph = rename only; compress = rename + consolidation
                       (default: compress)
   --no-consolidate    Alias for --mode morph
-  --engines <ids>     Comma-separated engines (default: tailwind).
-                      css-modules is unsupported on apply
+  --engines <ids>     Comma-separated engines (default: tailwind)
+  --naming <hash|words>
+                      Name strategy (default: hash). quotes is rejected when
+                      css-modules is on
+  --vocabulary <path> JSON array of strings; required for --naming words
   --dry-run           Report what would change without writing files
 
 Exit codes:
@@ -46,19 +65,40 @@ interface CliOptions {
   cssEntry: string | undefined;
   consolidate: boolean;
   mode: "morph" | "compress";
+  engines: Array<MinwindEngineId>;
+  naming: NamingConfig | undefined;
   dryRun: boolean;
+}
+
+function loadVocabulary(filePath: string): Array<string> {
+  let raw: string;
+  try {
+    raw = fs.readFileSync(filePath, "utf8");
+  } catch {
+    usageError(`--vocabulary file not found: ${filePath}`);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw) as unknown;
+  } catch {
+    usageError("--vocabulary must be a JSON array of strings");
+  }
+  if (!Array.isArray(parsed)) {
+    usageError("--vocabulary must be a JSON array of strings");
+  }
+  const words: Array<string> = [];
+  for (const item of parsed) {
+    if (typeof item !== "string") {
+      usageError("--vocabulary must be a JSON array of strings");
+    }
+    words.push(item);
+  }
+  return words;
 }
 
 function usageError(message: string): never {
   process.stderr.write(`Error: ${message}\n\n${USAGE}`);
   process.exit(1);
-}
-
-function rejectApplyModulesEngine(value: string): void {
-  const ids = value.split(",");
-  for (const id of ids) {
-    if (id.trim() === "css-modules") usageError(APPLY_MODULES_ERROR);
-  }
 }
 
 export function parseArgs(argv: Array<string>): CliOptions {
@@ -68,6 +108,9 @@ export function parseArgs(argv: Array<string>): CliOptions {
   let mode: MinwindMode | undefined;
   let consolidateOverride: boolean | undefined;
   let dryRun = false;
+  let enginesValue: string | undefined;
+  let namingStrategy: "hash" | "words" | "quotes" | undefined;
+  let vocabularyPath: string | undefined;
 
   let i = 0;
   while (i < argv.length) {
@@ -112,10 +155,33 @@ export function parseArgs(argv: Array<string>): CliOptions {
     } else if (arg === "--engines") {
       const value = argv[i + 1];
       if (value === undefined) usageError("--engines requires a value");
-      rejectApplyModulesEngine(value);
+      enginesValue = value;
       i += 2;
     } else if (arg.startsWith("--engines=")) {
-      rejectApplyModulesEngine(arg.slice("--engines=".length));
+      enginesValue = arg.slice("--engines=".length);
+      i += 1;
+    } else if (arg === "--naming") {
+      const value = argv[i + 1];
+      if (value === undefined) usageError("--naming requires a value");
+      if (value !== "hash" && value !== "words" && value !== "quotes") {
+        usageError(`--naming must be hash, words, or quotes, got "${value}"`);
+      }
+      namingStrategy = value;
+      i += 2;
+    } else if (arg.startsWith("--naming=")) {
+      const value = arg.slice("--naming=".length);
+      if (value !== "hash" && value !== "words" && value !== "quotes") {
+        usageError(`--naming must be hash, words, or quotes, got "${value}"`);
+      }
+      namingStrategy = value;
+      i += 1;
+    } else if (arg === "--vocabulary") {
+      const value = argv[i + 1];
+      if (value === undefined) usageError("--vocabulary requires a value");
+      vocabularyPath = value;
+      i += 2;
+    } else if (arg.startsWith("--vocabulary=")) {
+      vocabularyPath = arg.slice("--vocabulary=".length);
       i += 1;
     } else if (arg.startsWith("-")) {
       usageError(`unknown option: ${arg}`);
@@ -127,16 +193,48 @@ export function parseArgs(argv: Array<string>): CliOptions {
   }
 
   if (dir === null) usageError("missing build output directory argument");
+  let engines: Array<MinwindEngineId> | undefined;
+  if (enginesValue !== undefined) {
+    try {
+      engines = parseEngineList(enginesValue);
+    } catch (error) {
+      usageError(error instanceof Error ? error.message : String(error));
+    }
+  }
   const flags = resolveFlags(process.env, {
     mode,
+    engines,
     consolidate: consolidateOverride,
   });
+  let naming: NamingConfig | undefined;
+  if (namingStrategy === "quotes") {
+    naming = { strategy: "quotes", corpus: [] };
+  } else if (namingStrategy === "words") {
+    if (vocabularyPath === undefined) {
+      usageError("--naming words requires --vocabulary");
+    }
+    naming = {
+      strategy: "words",
+      vocabulary: loadVocabulary(vocabularyPath),
+    };
+  } else if (namingStrategy === "hash") {
+    naming = { strategy: "hash" };
+  }
+  if (enginesInclude(flags.engines, "css-modules")) {
+    try {
+      assertModulesQuotes(naming);
+    } catch {
+      usageError(MODULES_QUOTES_ERROR);
+    }
+  }
   return {
     dir,
     root,
     cssEntry,
     consolidate: flags.consolidate,
     mode: flags.mode,
+    engines: flags.engines,
+    naming,
     dryRun,
   };
 }
@@ -149,10 +247,33 @@ export async function runApplyCli(argv: Array<string>): Promise<number> {
     );
     return 1;
   }
-  const prepass = await runPrepass({
-    root: options.root,
-    cssEntry: options.cssEntry ?? path.join(options.root, "src", "app.css"),
-  });
+  const prepass = isModulesOnly(options.engines)
+    ? emptyPrepassResult()
+    : await runPrepass({
+        root: options.root,
+        cssEntry: options.cssEntry ?? path.join(options.root, "src", "app.css"),
+        naming: options.naming,
+      });
+  const modulesPrepared = enginesInclude(options.engines, "css-modules")
+    ? prepareModulesNaming(
+        options.root,
+        options.naming,
+        isModulesOnly(options.engines)
+          ? undefined
+          : reservedFromRegistry(prepass.registry),
+      )
+    : undefined;
+  const modules =
+    modulesPrepared === undefined
+      ? undefined
+      : {
+          root: options.root,
+          inventory: modulesPrepared.inventory,
+          registry: modulesPrepared.registry,
+        };
+  if (modules !== undefined && !isModulesOnly(options.engines)) {
+    assertSharedCollision(prepass.registry, modules.registry);
+  }
   if (options.consolidate) {
     assertConsolidatedNames(prepass.registry, prepass.consolidationVerdicts);
   }
@@ -163,6 +284,7 @@ export async function runApplyCli(argv: Array<string>): Promise<number> {
     quoteOrder: prepass.naming?.order,
     consolidate: options.consolidate,
     dryRun: options.dryRun,
+    modules,
   });
   if (!options.dryRun) {
     // Artifacts publish to the site root's .output/minwind — the same
@@ -184,7 +306,9 @@ export async function runApplyCli(argv: Array<string>): Promise<number> {
     await writeArtifacts(options.root, report, map);
   }
   const renamed =
-    prepass.registry.entries().length - result.keptOriginal.length;
+    prepass.registry.entries().length +
+    (modules === undefined ? 0 : modules.registry.entries().length) -
+    result.keptOriginal.length;
   process.stdout.write(
     `minwind apply${options.dryRun ? " (dry run)" : ""}: renamed ${renamed}` +
       ` class(es) across ${result.rewrittenFiles} file(s)` +
