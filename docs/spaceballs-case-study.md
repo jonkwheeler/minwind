@@ -13,7 +13,8 @@ ships, props, and recognizable single words; avoid phrases or words that sound
 like sentence fragments when placed beside arbitrary neighbors.
 
 Order the vocabulary from most to least iconic. That order becomes the priority
-for prominence-aware assignment.
+for prominence-aware assignment. More copy-paste packs (Star Wars, Zelda, The
+Witcher, and others) are in [examples/themes](../examples/themes).
 
 ```ts
 export const SPACEBALLS_VOCABULARY: ReadonlyArray<string> = [
