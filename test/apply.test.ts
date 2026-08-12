@@ -47,12 +47,42 @@ describe("parseArgs mode flags", function () {
   });
 
   it("maps --mode morph and --no-consolidate to morph", function () {
-    assert.strictEqual(parseArgs(["/tmp/out", "--mode", "morph"]).mode, "morph");
-    assert.strictEqual(parseArgs(["/tmp/out", "--no-consolidate"]).mode, "morph");
+    assert.strictEqual(
+      parseArgs(["/tmp/out", "--mode", "morph"]).mode,
+      "morph",
+    );
+    assert.strictEqual(
+      parseArgs(["/tmp/out", "--no-consolidate"]).mode,
+      "morph",
+    );
     assert.strictEqual(
       parseArgs(["/tmp/out", "--no-consolidate"]).consolidate,
       false,
     );
+  });
+
+  it("rejects the CSS Modules engine (AE apply boundary)", function () {
+    const exit = process.exit;
+    const writes: Array<string> = [];
+    const write = process.stderr.write;
+    process.stderr.write = function (chunk: string | Uint8Array) {
+      writes.push(String(chunk));
+      return true;
+    } as typeof process.stderr.write;
+    process.exit = function (code?: number): never {
+      throw new Error(`exit ${code}`);
+    } as typeof process.exit;
+    try {
+      assert.throws(function () {
+        parseArgs(["/tmp/out", "--engines", "css-modules"]);
+      }, /exit 1/);
+      assert.ok(
+        writes.join("").includes("does not support the CSS Modules engine"),
+      );
+    } finally {
+      process.exit = exit;
+      process.stderr.write = write;
+    }
   });
 });
 

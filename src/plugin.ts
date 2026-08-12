@@ -17,7 +17,11 @@ import {
 } from "./consolidate.js";
 import type { ExclusionConfig, NameRegistry } from "./names.js";
 import type { NamingConfig } from "./naming.js";
-import { emptyPrepassResult, runPrepass, type PrepassResult } from "./prepass.js";
+import {
+  emptyPrepassResult,
+  runPrepass,
+  type PrepassResult,
+} from "./prepass.js";
 import {
   buildRenameMap,
   buildReport,
@@ -31,6 +35,7 @@ import {
   enginesInclude,
   isModulesOnly,
   resolveFlags,
+  MODULES_CONSOLIDATE_SKIP_WARNING,
   type MinwindEngineId,
   type MinwindFlags,
   type MinwindMode,
@@ -39,6 +44,8 @@ import {
   createGenerateScopedName,
   LIGHTNING_MODULES_ERROR,
   MODULES_HOOK_MISSING_ERROR,
+  NameCollisionSpace,
+  prepareModulesNaming,
 } from "./engines/css-modules.js";
 
 export type { MinwindEngineId, MinwindFlags, MinwindMode };
@@ -204,6 +211,7 @@ export function minwind(options: MinwindOptions = {}): Array<Plugin> {
 
   let viteRoot: string | undefined;
   let state: BuildState | undefined;
+  const collision = new NameCollisionSpace();
 
   function currentRoot(): string {
     return options.root ?? viteRoot ?? process.cwd();
@@ -227,10 +235,22 @@ export function minwind(options: MinwindOptions = {}): Array<Plugin> {
       if (!flags.enabled) return;
       if (!enginesInclude(flags.engines, "css-modules")) return;
       const root = options.root ?? userConfig.root ?? process.cwd();
+      const words =
+        options.naming !== undefined && options.naming.strategy === "words"
+          ? prepareModulesNaming(
+              root,
+              options.naming,
+              undefined,
+              options.exclusions,
+            )
+          : undefined;
       return {
         css: {
           modules: {
-            generateScopedName: createGenerateScopedName(root),
+            generateScopedName: createGenerateScopedName(root, {
+              registry: words?.registry,
+              collision,
+            }),
           },
         },
       };
@@ -272,6 +292,13 @@ export function minwind(options: MinwindOptions = {}): Array<Plugin> {
       if (active.modeWarning !== undefined) {
         this.warn(active.modeWarning);
       }
+      if (
+        active.consolidate &&
+        enginesInclude(active.engines, "css-modules") &&
+        enginesInclude(active.engines, "tailwind")
+      ) {
+        this.warn(MODULES_CONSOLIDATE_SKIP_WARNING);
+      }
       if (!active.enabled) {
         state = undefined;
         return;
@@ -286,6 +313,12 @@ export function minwind(options: MinwindOptions = {}): Array<Plugin> {
               exclusions: options.exclusions,
               customProperties: options.customProperties,
             });
+        if (
+          enginesInclude(active.engines, "css-modules") &&
+          !isModulesOnly(active.engines)
+        ) {
+          collision.seed(prepass.registry);
+        }
         if (active.consolidate) {
           assertConsolidatedNames(
             prepass.registry,

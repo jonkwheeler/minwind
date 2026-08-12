@@ -9,7 +9,11 @@ import {
 } from "./consolidate.js";
 import type { ExclusionConfig } from "./names.js";
 import type { NamingConfig } from "./naming.js";
-import { emptyPrepassResult, runPrepass, type PrepassResult } from "./prepass.js";
+import {
+  emptyPrepassResult,
+  runPrepass,
+  type PrepassResult,
+} from "./prepass.js";
 import {
   buildRenameMap,
   buildReport,
@@ -23,8 +27,17 @@ import {
 } from "./transform-css.js";
 import type { TransformWarning } from "./transform-source.js";
 import type { CustomPropertiesConfig } from "./custom-properties.js";
-import { isModulesOnly, resolveFlags, type MinwindEngineId, type MinwindMode } from "./flags.js";
-import { createGetLocalIdent } from "./engines/css-modules.js";
+import {
+  isModulesOnly,
+  resolveFlags,
+  type MinwindEngineId,
+  type MinwindMode,
+} from "./flags.js";
+import {
+  createGetLocalIdent,
+  prepareModulesNaming,
+  type ScopedNameOptions,
+} from "./engines/css-modules.js";
 
 // webpack/rspack adapter (U3 outside Vite). The shape mirrors the Vite
 // plugin: a pre-pass runs once before compilation (beforeCompile), a loader
@@ -160,8 +173,21 @@ export class MinwindWebpackPlugin {
     new URL("./webpack-loader.js", import.meta.url),
   );
 
-  static createGetLocalIdent(root: string) {
-    return createGetLocalIdent(root);
+  static createGetLocalIdent(root: string, options?: ScopedNameOptions) {
+    if (options?.naming !== undefined && options.naming.strategy === "words") {
+      const prepared = prepareModulesNaming(
+        root,
+        options.naming,
+        undefined,
+        undefined,
+      );
+      return createGetLocalIdent(root, {
+        onName: options.onName,
+        registry: prepared.registry,
+        collision: options.collision,
+      });
+    }
+    return createGetLocalIdent(root, options);
   }
 
   // Read by the loader between beforeCompile and the end of compilation.

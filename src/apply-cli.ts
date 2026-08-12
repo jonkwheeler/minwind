@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import { applyBuildOutput, filterRegistry } from "./apply.js";
 import { assertConsolidatedNames } from "./consolidate.js";
 import { resolveFlags, type MinwindMode } from "./flags.js";
+import { APPLY_MODULES_ERROR } from "./engines/css-modules.js";
 import { runPrepass } from "./prepass.js";
 import { buildRenameMap, buildReport, writeArtifacts } from "./report.js";
 
@@ -30,6 +31,8 @@ Options:
                       morph = rename only; compress = rename + consolidation
                       (default: compress)
   --no-consolidate    Alias for --mode morph
+  --engines <ids>     Comma-separated engines (default: tailwind).
+                      css-modules is unsupported on apply
   --dry-run           Report what would change without writing files
 
 Exit codes:
@@ -49,6 +52,13 @@ interface CliOptions {
 function usageError(message: string): never {
   process.stderr.write(`Error: ${message}\n\n${USAGE}`);
   process.exit(1);
+}
+
+function rejectApplyModulesEngine(value: string): void {
+  const ids = value.split(",");
+  for (const id of ids) {
+    if (id.trim() === "css-modules") usageError(APPLY_MODULES_ERROR);
+  }
 }
 
 export function parseArgs(argv: Array<string>): CliOptions {
@@ -98,6 +108,14 @@ export function parseArgs(argv: Array<string>): CliOptions {
       i += 1;
     } else if (arg === "--dry-run") {
       dryRun = true;
+      i += 1;
+    } else if (arg === "--engines") {
+      const value = argv[i + 1];
+      if (value === undefined) usageError("--engines requires a value");
+      rejectApplyModulesEngine(value);
+      i += 2;
+    } else if (arg.startsWith("--engines=")) {
+      rejectApplyModulesEngine(arg.slice("--engines=".length));
       i += 1;
     } else if (arg.startsWith("-")) {
       usageError(`unknown option: ${arg}`);

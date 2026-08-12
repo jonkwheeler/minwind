@@ -1,7 +1,5 @@
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
-import { compile } from "@tailwindcss/node";
-import { Scanner } from "@tailwindcss/oxide";
 import * as ts from "typescript";
 import {
   DECLARATION_PATTERN,
@@ -30,6 +28,7 @@ import {
   type StylesheetModel,
 } from "./consolidate.js";
 import { compareCodeUnits } from "./util.js";
+import { compileTailwindStylesheet } from "./engines/tailwind.js";
 import {
   collectCustomPropertyNamesInCss,
   createCustomPropertyRegistry,
@@ -229,66 +228,14 @@ async function scanSources(root: string): Promise<SourceInventory> {
   return { scan, paths, texts };
 }
 
-// Mirror @tailwindcss/vite 4.1.18's own source computation so the pre-pass
-// universe matches the real build by construction.
-function scannerSources(
-  compilerRoot: "none" | { base: string; pattern: string } | null,
-  explicitSources: Array<{ base: string; pattern: string; negated: boolean }>,
-  projectRoot: string,
-): Array<{ base: string; pattern: string; negated: boolean }> {
-  let automatic: Array<{ base: string; pattern: string; negated: boolean }>;
-  if (compilerRoot === "none") {
-    automatic = [];
-  } else if (compilerRoot === null) {
-    automatic = [{ base: projectRoot, pattern: "**/*", negated: false }];
-  } else {
-    automatic = [
-      {
-        base: compilerRoot.base,
-        pattern: compilerRoot.pattern,
-        negated: false,
-      },
-    ];
-  }
-  return automatic.concat(explicitSources);
-}
-
 export async function runPrepass(
   options: PrepassOptions,
 ): Promise<PrepassResult> {
-  const css = await readFile(options.cssEntry, "utf8");
-
-  let compiler;
-  try {
-    compiler = await compile(css, {
-      base: path.dirname(options.cssEntry),
-      shouldRewriteUrls: true,
-      onDependency: function () {},
-    });
-  } catch (cause) {
-    // R10: a pre-pass compile failure is a loud build error, never a skip.
-    throw new Error(
-      `minwind: pre-pass failed to compile ${options.cssEntry}: ${String(cause)}`,
-      { cause },
-    );
-  }
-
-  const scanner = new Scanner({
-    sources: scannerSources(compiler.root, compiler.sources, options.root),
+  const compiled = await compileTailwindStylesheet({
+    cssEntry: options.cssEntry,
+    root: options.root,
   });
-  const candidates = scanner.scan();
-
-  // build() is stateful and single-shot: call once with the full candidate
-  // list, then discard the compiler.
-  let stylesheet: string;
-  try {
-    stylesheet = compiler.build(candidates);
-  } catch (cause) {
-    throw new Error(
-      `minwind: pre-pass failed to build ${options.cssEntry}: ${String(cause)}`,
-      { cause },
-    );
-  }
+  const stylesheet = compiled.stylesheet;
 
   const stylesheetModel = modelStylesheet(stylesheet);
   const sourceInventory = await scanSources(options.root);

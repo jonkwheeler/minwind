@@ -1,0 +1,6 @@
+@layer theme,base,components,utilities;
+@layer utilities {
+  .flex {
+    display: flex;
+  }
+}

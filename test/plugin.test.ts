@@ -20,6 +20,8 @@ import { MODULES_COMPRESS_WARNING } from "../src/flags.js";
 import {
   hashModuleLocal,
   LIGHTNING_MODULES_ERROR,
+  prepareModulesNaming,
+  moduleLocalKey,
 } from "../src/engines/css-modules.js";
 import {
   writeArtifacts,
@@ -359,16 +361,13 @@ describe("resolveFlags (R9)", function () {
 
   it("MINWIND_CONSOLIDATE=off overrides mode compress", async function () {
     await withFlags({ MINWIND_CONSOLIDATE: "off" }, function () {
-      assert.deepStrictEqual(
-        resolveFlags(process.env, { mode: "compress" }),
-        {
-          enabled: true,
-          consolidate: false,
-          mode: "morph",
-          engines: ["tailwind"],
-          modeWarning: undefined,
-        },
-      );
+      assert.deepStrictEqual(resolveFlags(process.env, { mode: "compress" }), {
+        enabled: true,
+        consolidate: false,
+        mode: "morph",
+        engines: ["tailwind"],
+        modeWarning: undefined,
+      });
     });
   });
 
@@ -1232,13 +1231,11 @@ describe("minwind CSS Modules naming hooks", function () {
   const MODULES_FIXTURE = path.join(HERE, "fixtures", "modules-site");
   const BUTTON_CSS = path.join(MODULES_FIXTURE, "src", "Button.module.css");
   const OTHER_CSS = path.join(MODULES_FIXTURE, "src", "other.module.css");
-  const COMPOSED_CSS = path.join(
-    MODULES_FIXTURE,
-    "src",
-    "composed.module.css",
-  );
+  const COMPOSED_CSS = path.join(MODULES_FIXTURE, "src", "composed.module.css");
 
-  async function buildModules(outDirName: string): Promise<Map<string, Buffer>> {
+  async function buildModules(
+    outDirName: string,
+  ): Promise<Map<string, Buffer>> {
     const outDir = path.join(MODULES_FIXTURE, outDirName);
     await build({
       root: MODULES_FIXTURE,
@@ -1301,21 +1298,106 @@ describe("minwind CSS Modules naming hooks", function () {
     });
     const resolved = plugins[0].configResolved;
     assert.ok(typeof resolved === "function");
-    assert.throws(function () {
-      resolved.call(
-        {},
-        {
-          root: MODULES_FIXTURE,
-          css: {
-            transformer: "lightningcss",
-            modules: {
-              generateScopedName: function () {
-                return "x";
+    const run = resolved as (this: unknown, config: object) => void;
+    assert.throws(
+      function () {
+        run.call(
+          {},
+          {
+            root: MODULES_FIXTURE,
+            css: {
+              transformer: "lightningcss",
+              modules: {
+                generateScopedName: function () {
+                  return "x";
+                },
               },
             },
           },
-        },
-      );
-    }, new RegExp(LIGHTNING_MODULES_ERROR.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+        );
+      },
+      new RegExp(
+        LIGHTNING_MODULES_ERROR.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+      ),
+    );
+  });
+
+  it("syncs words naming between JS exports and CSS selectors", async function () {
+    if (process.env.MINWIND_SKIP_BUILD === "1") return;
+    await rm(path.join(MODULES_FIXTURE, ".output"), {
+      recursive: true,
+      force: true,
+    });
+    const vocabulary = ["quill", "willow", "ember", "lark"];
+    const naming = { strategy: "words" as const, vocabulary };
+    const prepared = prepareModulesNaming(MODULES_FIXTURE, naming);
+    const rootName = prepared.registry.nameFor(
+      moduleLocalKey(MODULES_FIXTURE, BUTTON_CSS, "root"),
+    );
+    assert.ok(rootName !== undefined);
+    const outDir = path.join(MODULES_FIXTURE, "dist-modules-words");
+    await build({
+      root: MODULES_FIXTURE,
+      logLevel: "silent",
+      plugins: minwind({
+        root: MODULES_FIXTURE,
+        engines: ["css-modules"],
+        mode: "morph",
+        naming,
+      }),
+      build: {
+        outDir,
+        emptyOutDir: true,
+        rollupOptions: { input: path.join(MODULES_FIXTURE, "index.html") },
+      },
+    });
+    const files = await readOutputTree(outDir);
+    const js = findFile(files, /assets\/.*\.js$/);
+    const css = findFile(files, /assets\/.*\.css$/);
+    assert.ok(js.text.includes(rootName));
+    assert.ok(css.text.includes(`.${rootName}`));
+    assert.ok(vocabulary.includes(rootName));
+    await rm(outDir, { recursive: true, force: true });
+    await rm(path.join(MODULES_FIXTURE, ".output"), {
+      recursive: true,
+      force: true,
+    });
+  });
+});
+
+describe("minwind dual Tailwind and CSS Modules (AE3)", function () {
+  const DUAL = path.join(HERE, "fixtures", "dual-site");
+  const CARD = path.join(DUAL, "src", "Card.module.css");
+
+  it("builds with a Modules local named flex without a utilities-layer failure", async function () {
+    if (process.env.MINWIND_SKIP_BUILD === "1") return;
+    await rm(path.join(DUAL, ".output"), { recursive: true, force: true });
+    const outDir = path.join(DUAL, "dist-dual");
+    await build({
+      root: DUAL,
+      logLevel: "silent",
+      plugins: minwind({
+        root: DUAL,
+        engines: ["tailwind", "css-modules"],
+        mode: "morph",
+        cssEntry: path.join(DUAL, "src", "app.css"),
+      }),
+      build: {
+        outDir,
+        emptyOutDir: true,
+        rollupOptions: { input: path.join(DUAL, "index.html") },
+      },
+    });
+    const files = await readOutputTree(outDir);
+    const js = findFile(files, /assets\/.*\.js$/);
+    const css = findFile(files, /assets\/.*\.css$/);
+    const twFlex = hashClassName("flex");
+    const modFlex = hashModuleLocal(DUAL, CARD, "flex");
+    assert.notStrictEqual(twFlex, modFlex);
+    assert.ok(js.text.includes(twFlex) || css.text.includes(`.${twFlex}`));
+    assert.ok(js.text.includes(modFlex));
+    assert.ok(css.text.includes(`.${modFlex}`));
+    await rm(outDir, { recursive: true, force: true });
+    await rm(path.join(DUAL, ".output"), { recursive: true, force: true });
   });
 });
