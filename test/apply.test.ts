@@ -167,6 +167,8 @@ describe("parseArgs mode flags", function () {
       ".root { color: red }",
     );
     fs.writeFileSync(vocab, JSON.stringify(["alpha"]));
+    const previous = process.env.MINWIND_FORCE_NO_SASS;
+    process.env.MINWIND_FORCE_NO_SASS = "1";
     try {
       await assert.rejects(
         function () {
@@ -185,6 +187,11 @@ describe("parseArgs mode flags", function () {
         new RegExp(SCSS_SASS_ERROR.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
       );
     } finally {
+      if (previous === undefined) {
+        delete process.env.MINWIND_FORCE_NO_SASS;
+      } else {
+        process.env.MINWIND_FORCE_NO_SASS = previous;
+      }
       fs.rmSync(root, { recursive: true, force: true });
       fs.rmSync(out, { recursive: true, force: true });
     }

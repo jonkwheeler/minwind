@@ -257,6 +257,7 @@ function skipDirectory(name: string): boolean {
 }
 
 function tryLoadSass(): { compile: (file: string) => { css: string } } | null {
+  if (process.env.MINWIND_FORCE_NO_SASS === "1") return null;
   try {
     return requireFromHere("sass") as {
       compile: (file: string) => { css: string };
