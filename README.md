@@ -197,6 +197,10 @@ Available strategies:
 - `quotes` — class lists can spell fragments from a quote corpus, then fall
   back to vocabulary words and hashes.
 
+Copy-paste vocabularies for Star Wars, Star Trek, Super Mario, Zelda, The
+Witcher, Zoolander, and other cult packs are in
+[examples/themes](./examples/themes).
+
 Names are sanitized as CSS identifiers and never collide with excluded classes.
 Quote words participate only in multi-token lists; isolated words otherwise
 read like fragments detached from their sentence.
