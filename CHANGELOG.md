@@ -27,6 +27,9 @@ Tailwind-only Vite, webpack, and `minwind apply` defaults stay
 - `naming.alphabet` / `--hash-alphabet` sets the hash-body character set
   (lowercase letters and digits; first character stays a letter from that set).
   Hash strategy only.
+- `naming.salt` / `--hash-salt` mixes extra bytes into the digest so a site
+  can rotate every hash name without leaving content-hash stability. Hash
+  strategy only.
 - Built-in `words` themes (`naming.theme: "star-wars"` / `--theme star-wars`),
   including `game-of-thrones`, `high-valyrian`, `dothraki`,
   `stranger-things`, `twin-peaks`, `buffy`, `x-files`, `cowboy-bebop`,

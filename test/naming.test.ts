@@ -85,6 +85,28 @@ describe("resolveNaming hash strategy", function () {
       } as never);
     }, /cannot set alphabet/);
   });
+
+  it("resolveHasher mixes naming.salt into the digest", function () {
+    const hash = resolveHasher({ strategy: "hash", salt: "v2" });
+    assert.strictEqual(
+      hash("flex"),
+      hashClassName("flex", 4, undefined, undefined, "v2"),
+    );
+    assert.notStrictEqual(hash("flex"), hashClassName("flex"));
+  });
+
+  it("rejects salt on dialect and words", function () {
+    assert.throws(function () {
+      resolveHasher({ strategy: "boston", salt: "v2" } as never);
+    }, /cannot set salt/);
+    assert.throws(function () {
+      assertThemedConfig({
+        strategy: "words",
+        vocabulary: ["plaid"],
+        salt: "v2",
+      } as never);
+    }, /cannot set salt/);
+  });
 });
 
 describe("dialect naming hasher", function () {

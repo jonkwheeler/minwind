@@ -6,8 +6,10 @@ import { compareCodeUnits } from "./util.js";
 // keeps its name across builds and independent registry instances agree.
 // Unprefixed hash names match NAME_PATTERN. An optional prefix is prepended
 // after the hash body is built; the result must still be a generated ident
-// (hyphens allowed). Hash names stay letter-first. Vocabulary may prefix a
-// digit-leading word with `_` (`2b` -> `_2b`).
+// (hyphens allowed). An optional salt is mixed into the digest before the
+// token so a site can rotate names without leaving content-hash stability.
+// Hash names stay letter-first. Vocabulary may prefix a digit-leading word
+// with `_` (`2b` -> `_2b`).
 export const MIN_NAME_LENGTH = 4;
 export const DEFAULT_NAME_LENGTH = 4;
 export const MAX_NAME_LENGTH = 32;
@@ -109,20 +111,31 @@ export function resolveHashPrefix(prefix: string | undefined): string {
   return prefix;
 }
 
+export function resolveHashSalt(salt: string | undefined): string {
+  if (salt === undefined) return "";
+  if (salt === "") {
+    throw new Error("minwind: naming.salt must be a non-empty string");
+  }
+  return salt;
+}
+
 export function createHasher(
   length?: number,
   prefix?: string,
   alphabet?: string,
+  salt?: string,
 ): (token: string) => string {
   const resolved = resolveNameLength(length);
   const resolvedPrefix = resolveHashPrefix(prefix);
   resolveHashAlphabet(alphabet);
+  const resolvedSalt = resolveHashSalt(salt);
   return function (token: string): string {
     return hashClassName(
       token,
       resolved,
       resolvedPrefix === "" ? undefined : resolvedPrefix,
       alphabet,
+      resolvedSalt === "" ? undefined : resolvedSalt,
     );
   };
 }
@@ -176,14 +189,21 @@ export function hashClassName(
   length: number = DEFAULT_NAME_LENGTH,
   prefix?: string,
   alphabet?: string,
+  salt?: string,
 ): string {
   if (token === "") {
     throw new Error("minwind: cannot hash an empty class token");
   }
   const resolved = resolveNameLength(length);
   const resolvedPrefix = resolveHashPrefix(prefix);
+  const resolvedSalt = resolveHashSalt(salt);
   const { first, rest } = alphabetsOf(alphabet);
-  const digest = createHash("sha256").update(token, "utf8").digest();
+  const hasher = createHash("sha256");
+  if (resolvedSalt !== "") {
+    hasher.update(resolvedSalt, "utf8");
+    hasher.update("\0", "utf8");
+  }
+  const digest = hasher.update(token, "utf8").digest();
   let name = first[digest[0] % first.length];
   for (let index = 1; index < resolved; index += 1) {
     name += rest[digest[index] % rest.length];

@@ -10,6 +10,7 @@ import {
   NAME_PATTERN,
   resolveHashAlphabet,
   resolveHashPrefix,
+  resolveHashSalt,
 } from "./names.js";
 import { vocabularyForTheme, type ThemeId } from "./themes/index.js";
 import { compareCodeUnits } from "./util.js";
@@ -33,6 +34,9 @@ export type NamingConfig =
       // Character set for the hash body (`a-z0-9` by default). Position 0
       // still uses only the letters in the set. Hash strategy only.
       alphabet?: string;
+      // Mixed into the digest before the token. Same token + same salt
+      // keeps the name; a new salt rotates every name. Hash strategy only.
+      salt?: string;
     }
   | {
       strategy: DialectId;
@@ -110,6 +114,7 @@ export function assertMapsConfig(config: NamingConfig): void {
     "length",
     "prefix",
     "alphabet",
+    "salt",
   ]);
   if (config.maps === undefined) {
     throw new Error('minwind: naming.strategy "maps" requires maps');
@@ -126,6 +131,7 @@ export function assertDialectConfig(config: NamingConfig): void {
     "length",
     "prefix",
     "alphabet",
+    "salt",
   ]);
 }
 
@@ -140,11 +146,16 @@ export function assertHashConfig(config: NamingConfig): void {
   ]);
   resolveHashPrefix(config.prefix);
   resolveHashAlphabet(config.alphabet);
+  resolveHashSalt(config.salt);
 }
 
 export function assertThemedConfig(config: NamingConfig): void {
   if (!isThemedNaming(config)) return;
-  assertBannedNamingFields(config, config.strategy, ["prefix", "alphabet"]);
+  assertBannedNamingFields(config, config.strategy, [
+    "prefix",
+    "alphabet",
+    "salt",
+  ]);
 }
 
 function assertBannedNamingFields(
@@ -185,6 +196,13 @@ export function hashAlphabetOf(
   return config.alphabet;
 }
 
+export function hashSaltOf(
+  config: NamingConfig | undefined,
+): string | undefined {
+  if (config === undefined || config.strategy !== "hash") return undefined;
+  return config.salt;
+}
+
 export function resolveHasher(
   config: NamingConfig | undefined,
 ): (token: string) => string {
@@ -206,6 +224,7 @@ export function resolveHasher(
     hashLengthOf(config),
     hashPrefixOf(config),
     hashAlphabetOf(config),
+    hashSaltOf(config),
   );
 }
 

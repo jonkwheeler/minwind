@@ -152,6 +152,34 @@ describe("hashClassName", () => {
       hashClassName("flex", 4, undefined, "AB");
     }, /lowercase/);
   });
+
+  it("mixes salt into the digest without changing default names", function () {
+    assert.strictEqual(
+      hashClassName("flex", 4, undefined, undefined, undefined),
+      hashClassName("flex"),
+    );
+    const salted = hashClassName("flex", 4, undefined, undefined, "v2");
+    assert.notStrictEqual(salted, hashClassName("flex"));
+    assert.strictEqual(
+      salted,
+      hashClassName("flex", 4, undefined, undefined, "v2"),
+    );
+    assert.notStrictEqual(
+      salted,
+      hashClassName("flex", 4, undefined, undefined, "v3"),
+    );
+    assert.match(salted, NAME_PATTERN);
+    assert.notStrictEqual(
+      hashClassName("c", 4, undefined, undefined, "ab"),
+      hashClassName("bc", 4, undefined, undefined, "a"),
+    );
+  });
+
+  it("rejects an empty salt", function () {
+    assert.throws(function () {
+      hashClassName("flex", 4, undefined, undefined, "");
+    }, /naming.salt/);
+  });
 });
 
 describe("safeNameLength", function () {

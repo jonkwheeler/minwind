@@ -223,6 +223,7 @@ minwind apply <build-directory> [options]
 --hash-length <n>      Hash name length (default 4, minimum 4)
 --hash-prefix <s>      Prepended to hash names (hash strategy only)
 --hash-alphabet <s>    Hash body characters (lowercase letters and digits)
+--hash-salt <s>        Mixed into the hash digest (hash strategy only)
 --theme <id>           Built-in words pack (star-wars, klingon, …)
 --vocabulary <file>    JSON array of strings; custom words list
 --quotes <file>        JSON array of sentences; implies quotes naming
@@ -277,8 +278,10 @@ caching. Raise `length` when you want more collision headroom; the minimum is 4.
 Set `prefix` to prepend a string to each hash body (the digest stays the same).
 Hyphens are allowed (`tw-s2k9`). Set `alphabet` to restrict the hash body to
 those lowercase letters and digits; the first character still comes from the
-letters in the set. Prefix and alphabet are hash-strategy only: they do not
-apply to dialect mouths, maps, or leftover `words` / `quotes` hashes.
+letters in the set. Set `salt` to mix extra bytes into the digest: the same
+token keeps the same name for a given salt, and a new salt rotates every name.
+Prefix, alphabet, and salt are hash-strategy only: they do not apply to dialect
+mouths, maps, or leftover `words` / `quotes` hashes.
 
 ```ts
 minwind({
@@ -291,6 +294,10 @@ minwind({
 
 minwind({
   naming: { strategy: "hash", alphabet: "abcdefghijk" },
+});
+
+minwind({
+  naming: { strategy: "hash", salt: "v2" },
 });
 ```
 
@@ -322,7 +329,8 @@ Available strategies:
 
 - `hash` — stable content hashes; the default and smallest predictable option.
   Optional `prefix` prepends a string to each hash body. Optional `alphabet`
-  sets the characters used in that body.
+  sets the characters used in that body. Optional `salt` rotates the map
+  without leaving content-hash stability.
 - `words` — generated names drawn from a built-in `theme` or a custom
   `vocabulary`, then hash fallback.
 - `quotes` — sentences split into CSS idents and dealt in quote order. With

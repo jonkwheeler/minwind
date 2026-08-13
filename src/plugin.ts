@@ -75,7 +75,8 @@ export interface MinwindOptions {
   // Tailwind hyphens and respell English runs. Default (absent or 'hash') is
   // content-hash naming, the only strategy with cross-build name stability
   // (KTD5). `naming.prefix` prepends a string to hash bodies (hash strategy
-  // only). `naming.alphabet` sets the hash-body character set.
+  // only). `naming.alphabet` sets the hash-body character set. `naming.salt`
+  // rotates the map while keeping content-hash stability for a given salt.
   naming?: NamingConfig;
   // Classes the transform must not touch: exact names and prefixes for
   // runtime-injected or third-party markup classes (e.g. a syntax

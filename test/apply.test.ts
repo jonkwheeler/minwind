@@ -153,6 +153,14 @@ describe("parseArgs mode flags", function () {
     });
   });
 
+  it("accepts --hash-salt on the hash strategy", function () {
+    const options = parseArgs(["/tmp/out", "--hash-salt", "v2"]);
+    assert.deepStrictEqual(options.naming, {
+      strategy: "hash",
+      salt: "v2",
+    });
+  });
+
   it("rejects --hash-length below 4", function () {
     const exit = process.exit;
     const writes: Array<string> = [];
