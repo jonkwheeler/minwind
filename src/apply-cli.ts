@@ -19,7 +19,11 @@ import {
 } from "./engines/css-modules.js";
 import type { NamingConfig } from "./naming.js";
 import { DIALECT_IDS, isDialectId, type DialectId } from "./dialect.js";
-import { resolveNameLength, resolveHashPrefix } from "./names.js";
+import {
+  resolveNameLength,
+  resolveHashPrefix,
+  resolveHashAlphabet,
+} from "./names.js";
 import { isThemeId, THEME_IDS, type ThemeId } from "./themes/index.js";
 import { emptyPrepassResult, runPrepass } from "./prepass.js";
 import { buildRenameMap, buildReport, writeArtifacts } from "./report.js";
@@ -53,6 +57,7 @@ Options:
                       Name strategy (default: hash)
   --hash-length <n>   Hash name length (default 4, minimum 4)
   --hash-prefix <s>   Prepended to hash names (hash strategy only)
+  --hash-alphabet <s> Hash body characters (lowercase letters and digits)
   --theme <id>        Built-in words pack (star-wars, klingon, …)
   --vocabulary <path> JSON array of strings; custom words list
                       --naming words requires --theme or --vocabulary
@@ -156,6 +161,18 @@ function parseHashPrefix(raw: string): string {
   }
 }
 
+function parseHashAlphabet(raw: string): string {
+  try {
+    const resolved = resolveHashAlphabet(raw);
+    if (resolved === undefined) {
+      usageError("--hash-alphabet requires a value");
+    }
+    return resolved;
+  } catch (error) {
+    usageError(error instanceof Error ? error.message : String(error));
+  }
+}
+
 function parseNamingStrategy(
   value: string,
 ): "hash" | "words" | "quotes" | "maps" | DialectId {
@@ -189,6 +206,7 @@ export function parseArgs(argv: Array<string>): CliOptions {
   let themeId: ThemeId | undefined;
   let hashLength: number | undefined;
   let hashPrefix: string | undefined;
+  let hashAlphabet: string | undefined;
 
   let i = 0;
   while (i < argv.length) {
@@ -262,6 +280,14 @@ export function parseArgs(argv: Array<string>): CliOptions {
       i += 2;
     } else if (arg.startsWith("--hash-prefix=")) {
       hashPrefix = parseHashPrefix(arg.slice("--hash-prefix=".length));
+      i += 1;
+    } else if (arg === "--hash-alphabet") {
+      const value = argv[i + 1];
+      if (value === undefined) usageError("--hash-alphabet requires a value");
+      hashAlphabet = parseHashAlphabet(value);
+      i += 2;
+    } else if (arg.startsWith("--hash-alphabet=")) {
+      hashAlphabet = parseHashAlphabet(arg.slice("--hash-alphabet=".length));
       i += 1;
     } else if (arg === "--vocabulary") {
       const value = argv[i + 1];
@@ -357,6 +383,11 @@ export function parseArgs(argv: Array<string>): CliOptions {
         `--naming ${namingStrategy} cannot be used with --hash-prefix`,
       );
     }
+    if (hashAlphabet !== undefined) {
+      usageError(
+        `--naming ${namingStrategy} cannot be used with --hash-alphabet`,
+      );
+    }
     naming = { strategy: namingStrategy };
     if (mapsPath !== undefined) {
       naming.maps = loadJsonStringRecord(mapsPath, "--maps");
@@ -383,6 +414,9 @@ export function parseArgs(argv: Array<string>): CliOptions {
     if (hashPrefix !== undefined) {
       usageError("--naming maps cannot be used with --hash-prefix");
     }
+    if (hashAlphabet !== undefined) {
+      usageError("--naming maps cannot be used with --hash-alphabet");
+    }
     naming = {
       strategy: "maps",
       maps: loadJsonStringRecord(mapsPath, "--maps"),
@@ -399,6 +433,9 @@ export function parseArgs(argv: Array<string>): CliOptions {
     if (hashPrefix !== undefined) {
       usageError("--naming quotes cannot be used with --hash-prefix");
     }
+    if (hashAlphabet !== undefined) {
+      usageError("--naming quotes cannot be used with --hash-alphabet");
+    }
   } else if (namingStrategy === "words" || themeId !== undefined) {
     if (themeId === undefined && vocabularyPath === undefined) {
       usageError("--naming words requires --theme or --vocabulary");
@@ -412,14 +449,19 @@ export function parseArgs(argv: Array<string>): CliOptions {
     if (hashPrefix !== undefined) {
       usageError("--naming words cannot be used with --hash-prefix");
     }
+    if (hashAlphabet !== undefined) {
+      usageError("--naming words cannot be used with --hash-alphabet");
+    }
   } else if (
     namingStrategy === "hash" ||
     hashLength !== undefined ||
-    hashPrefix !== undefined
+    hashPrefix !== undefined ||
+    hashAlphabet !== undefined
   ) {
     naming = { strategy: "hash" };
     if (hashLength !== undefined) naming.length = hashLength;
     if (hashPrefix !== undefined) naming.prefix = hashPrefix;
+    if (hashAlphabet !== undefined) naming.alphabet = hashAlphabet;
   }
   return {
     dir,

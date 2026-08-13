@@ -118,6 +118,40 @@ describe("hashClassName", () => {
       hashClassName("flex", 4, "1");
     }, /ident prefix/);
   });
+
+  it("keeps default names when the alphabet is the built-in set", function () {
+    assert.strictEqual(
+      hashClassName(
+        "flex",
+        4,
+        undefined,
+        "abcdefghijklmnopqrstuvwxyz0123456789",
+      ),
+      hashClassName("flex"),
+    );
+  });
+
+  it("uses a custom alphabet for the hash body", function () {
+    const name = hashClassName("flex", 4, undefined, "abcd");
+    assert.match(name, /^[abcd]+$/);
+    assert.strictEqual(name.length, 4);
+    assert.notStrictEqual(name, hashClassName("flex"));
+  });
+
+  it("rejects an empty, duplicate, or letter-free alphabet", function () {
+    assert.throws(function () {
+      hashClassName("flex", 4, undefined, "");
+    }, /naming.alphabet/);
+    assert.throws(function () {
+      hashClassName("flex", 4, undefined, "abca");
+    }, /duplicate/);
+    assert.throws(function () {
+      hashClassName("flex", 4, undefined, "0123");
+    }, /letter/);
+    assert.throws(function () {
+      hashClassName("flex", 4, undefined, "AB");
+    }, /lowercase/);
+  });
 });
 
 describe("safeNameLength", function () {

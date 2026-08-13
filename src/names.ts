@@ -28,6 +28,52 @@ export function isGeneratedIdent(name: string): boolean {
 
 const FIRST_CHARACTER = "abcdefghijklmnopqrstuvwxyz";
 const CONTINUATION = "abcdefghijklmnopqrstuvwxyz0123456789";
+const HASH_ALPHABET_PATTERN = /^[a-z0-9]+$/;
+
+export function resolveHashAlphabet(
+  alphabet: string | undefined,
+): string | undefined {
+  if (alphabet === undefined) return undefined;
+  if (alphabet === "") {
+    throw new Error("minwind: naming.alphabet must be a non-empty string");
+  }
+  if (!HASH_ALPHABET_PATTERN.test(alphabet)) {
+    throw new Error(
+      "minwind: naming.alphabet must contain only lowercase letters and digits",
+    );
+  }
+  const seen = new Set<string>();
+  for (const char of alphabet) {
+    if (seen.has(char)) {
+      throw new Error(
+        `minwind: naming.alphabet has duplicate character ${JSON.stringify(char)}`,
+      );
+    }
+    seen.add(char);
+  }
+  if (!/[a-z]/.test(alphabet)) {
+    throw new Error(
+      "minwind: naming.alphabet must include at least one letter so names" +
+        " stay ident-safe",
+    );
+  }
+  return alphabet;
+}
+
+function alphabetsOf(alphabet: string | undefined): {
+  first: string;
+  rest: string;
+} {
+  const resolved = resolveHashAlphabet(alphabet);
+  if (resolved === undefined) {
+    return { first: FIRST_CHARACTER, rest: CONTINUATION };
+  }
+  let first = "";
+  for (const char of resolved) {
+    if (char >= "a" && char <= "z") first += char;
+  }
+  return { first, rest: resolved };
+}
 
 export function resolveNameLength(length: number | undefined): number {
   if (length === undefined) return DEFAULT_NAME_LENGTH;
@@ -66,14 +112,17 @@ export function resolveHashPrefix(prefix: string | undefined): string {
 export function createHasher(
   length?: number,
   prefix?: string,
+  alphabet?: string,
 ): (token: string) => string {
   const resolved = resolveNameLength(length);
   const resolvedPrefix = resolveHashPrefix(prefix);
+  resolveHashAlphabet(alphabet);
   return function (token: string): string {
     return hashClassName(
       token,
       resolved,
       resolvedPrefix === "" ? undefined : resolvedPrefix,
+      alphabet,
     );
   };
 }
@@ -126,16 +175,18 @@ export function hashClassName(
   token: string,
   length: number = DEFAULT_NAME_LENGTH,
   prefix?: string,
+  alphabet?: string,
 ): string {
   if (token === "") {
     throw new Error("minwind: cannot hash an empty class token");
   }
   const resolved = resolveNameLength(length);
   const resolvedPrefix = resolveHashPrefix(prefix);
+  const { first, rest } = alphabetsOf(alphabet);
   const digest = createHash("sha256").update(token, "utf8").digest();
-  let name = FIRST_CHARACTER[digest[0] % FIRST_CHARACTER.length];
+  let name = first[digest[0] % first.length];
   for (let index = 1; index < resolved; index += 1) {
-    name += CONTINUATION[digest[index] % CONTINUATION.length];
+    name += rest[digest[index] % rest.length];
   }
   return resolvedPrefix + name;
 }

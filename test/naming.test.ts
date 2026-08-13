@@ -63,6 +63,28 @@ describe("resolveNaming hash strategy", function () {
       } as never);
     }, /cannot set prefix/);
   });
+
+  it("resolveHasher uses naming.alphabet for the hash body", function () {
+    const hash = resolveHasher({ strategy: "hash", alphabet: "abcd" });
+    assert.strictEqual(
+      hash("flex"),
+      hashClassName("flex", 4, undefined, "abcd"),
+    );
+    assert.match(hash("flex"), /^[abcd]+$/);
+  });
+
+  it("rejects alphabet on dialect and words", function () {
+    assert.throws(function () {
+      resolveHasher({ strategy: "boston", alphabet: "abcd" } as never);
+    }, /cannot set alphabet/);
+    assert.throws(function () {
+      assertThemedConfig({
+        strategy: "words",
+        vocabulary: ["plaid"],
+        alphabet: "abcd",
+      } as never);
+    }, /cannot set alphabet/);
+  });
 });
 
 describe("dialect naming hasher", function () {

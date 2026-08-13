@@ -145,6 +145,14 @@ describe("parseArgs mode flags", function () {
     });
   });
 
+  it("accepts --hash-alphabet on the hash strategy", function () {
+    const options = parseArgs(["/tmp/out", "--hash-alphabet", "abcd"]);
+    assert.deepStrictEqual(options.naming, {
+      strategy: "hash",
+      alphabet: "abcd",
+    });
+  });
+
   it("rejects --hash-length below 4", function () {
     const exit = process.exit;
     const writes: Array<string> = [];

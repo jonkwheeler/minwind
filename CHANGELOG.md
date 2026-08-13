@@ -24,6 +24,9 @@ Tailwind-only Vite, webpack, and `minwind apply` defaults stay
   for `words` fallback hashes.
 - `naming.prefix` / `--hash-prefix` prepends a string to hash-strategy names
   (`tw` + `s2k9` → `tws2k9`). Does not change the digest. Hash strategy only.
+- `naming.alphabet` / `--hash-alphabet` sets the hash-body character set
+  (lowercase letters and digits; first character stays a letter from that set).
+  Hash strategy only.
 - Built-in `words` themes (`naming.theme: "star-wars"` / `--theme star-wars`),
   including `game-of-thrones`, `high-valyrian`, `dothraki`,
   `stranger-things`, `twin-peaks`, `buffy`, `x-files`, `cowboy-bebop`,

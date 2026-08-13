@@ -8,6 +8,7 @@ import {
   createHasher,
   hashClassName,
   NAME_PATTERN,
+  resolveHashAlphabet,
   resolveHashPrefix,
 } from "./names.js";
 import { vocabularyForTheme, type ThemeId } from "./themes/index.js";
@@ -29,6 +30,9 @@ export type NamingConfig =
       // are allowed (`tw-` + `s2k9` → `tw-s2k9`). Empty is rejected.
       // Hash strategy only: not words leftover hashes, not dialects.
       prefix?: string;
+      // Character set for the hash body (`a-z0-9` by default). Position 0
+      // still uses only the letters in the set. Hash strategy only.
+      alphabet?: string;
     }
   | {
       strategy: DialectId;
@@ -105,6 +109,7 @@ export function assertMapsConfig(config: NamingConfig): void {
     "prominence",
     "length",
     "prefix",
+    "alphabet",
   ]);
   if (config.maps === undefined) {
     throw new Error('minwind: naming.strategy "maps" requires maps');
@@ -120,6 +125,7 @@ export function assertDialectConfig(config: NamingConfig): void {
     "prominence",
     "length",
     "prefix",
+    "alphabet",
   ]);
 }
 
@@ -133,11 +139,12 @@ export function assertHashConfig(config: NamingConfig): void {
     "maps",
   ]);
   resolveHashPrefix(config.prefix);
+  resolveHashAlphabet(config.alphabet);
 }
 
 export function assertThemedConfig(config: NamingConfig): void {
   if (!isThemedNaming(config)) return;
-  assertBannedNamingFields(config, config.strategy, ["prefix"]);
+  assertBannedNamingFields(config, config.strategy, ["prefix", "alphabet"]);
 }
 
 function assertBannedNamingFields(
@@ -171,6 +178,13 @@ export function hashPrefixOf(
   return config.prefix;
 }
 
+export function hashAlphabetOf(
+  config: NamingConfig | undefined,
+): string | undefined {
+  if (config === undefined || config.strategy !== "hash") return undefined;
+  return config.alphabet;
+}
+
 export function resolveHasher(
   config: NamingConfig | undefined,
 ): (token: string) => string {
@@ -188,7 +202,11 @@ export function resolveHasher(
   if (config !== undefined && config.strategy === "hash") {
     assertHashConfig(config);
   }
-  return createHasher(hashLengthOf(config), hashPrefixOf(config));
+  return createHasher(
+    hashLengthOf(config),
+    hashPrefixOf(config),
+    hashAlphabetOf(config),
+  );
 }
 
 export interface NamingList {
