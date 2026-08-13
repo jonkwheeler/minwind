@@ -223,13 +223,15 @@ minwind apply <build-directory> [options]
 --theme <id>           Built-in words pack (star-wars, klingon, …)
 --vocabulary <file>    JSON array of strings; custom words list
 --quotes <file>        JSON array of sentences; implies quotes naming
---maps <file>          JSON object of word→spelling; implies maps naming
+--maps <file>          JSON object of word→spelling; maps naming, or
+                       overlay on a dialect id
 --dry-run              Report the result without changing the build
 ```
 
 Tailwind-only apply without `--naming` still uses stable hash names. Modules
 apply accepts `hash`, `words`, `quotes`, `maps`, or a dialect id. `--theme` or
-`--vocabulary` for `words`; `--quotes` for `quotes`; `--maps` for `maps`.
+`--vocabulary` for `words`; `--quotes` for `quotes`; `--maps` for `maps`, or
+with a dialect id to overlay those runs onto the mouth.
 
 ```bash
 npx minwind apply out --root . --engines css-modules --naming words --theme star-wars
@@ -319,7 +321,11 @@ Available strategies:
   land on the same ident fail the build.
 - `maps` — the same hyphen-preserving hasher with a site-supplied
   word→spelling table. `{ flex: "muscles" }` turns `flex-col` into
-  `muscles-col`. Unmapped runs stay themselves. Not a `words` pack.
+  `muscles-col`. Unmapped runs stay themselves. Pass the same `maps`
+  object on a dialect strategy to overlay: mapped runs replace the
+  mouth spelling, unmapped runs still use the mouth (`boston` plus
+  `{ flex: "muscles" }` turns `flex-col` into `muscles-cawl`). Not a
+  `words` pack.
 
 ```ts
 minwind({
@@ -328,6 +334,10 @@ minwind({
 
 minwind({
   naming: { strategy: "maps", maps: { flex: "muscles" } },
+});
+
+minwind({
+  naming: { strategy: "boston", maps: { flex: "muscles" } },
 });
 ```
 

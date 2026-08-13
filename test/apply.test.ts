@@ -175,6 +175,27 @@ describe("parseArgs mode flags", function () {
     }
   });
 
+  it("overlays --maps onto --naming boston", function () {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minwind-overlay-"));
+    const mapsFile = path.join(dir, "maps.json");
+    fs.writeFileSync(mapsFile, JSON.stringify({ flex: "muscles" }));
+    try {
+      const options = parseArgs([
+        "/tmp/out",
+        "--naming",
+        "boston",
+        "--maps",
+        mapsFile,
+      ]);
+      assert.deepStrictEqual(options.naming, {
+        strategy: "boston",
+        maps: { flex: "muscles" },
+      });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("rejects --naming maps without --maps", function () {
     const exit = process.exit;
     const writes: Array<string> = [];

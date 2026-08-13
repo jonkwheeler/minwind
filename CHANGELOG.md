@@ -39,7 +39,9 @@ Tailwind-only Vite, webpack, and `minwind apply` defaults stay
   build. Not a `words` pack.
 - `naming.strategy: "maps"` / `--maps <file>`: site-supplied word→spelling
   table on the dialect hasher (`flex-col` → `muscles-col` when
-  `flex` → `muscles`). Unmapped runs stay themselves.
+  `flex` → `muscles`). Unmapped runs stay themselves. The same `maps`
+  object on a dialect strategy overlays those runs onto the mouth
+  (`boston` plus `flex` → `muscles` turns `flex-col` into `muscles-cawl`).
 
 ### Breaking
 

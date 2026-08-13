@@ -63,6 +63,15 @@ describe("dialect naming hasher", function () {
       "reet-4",
     );
   });
+
+  it("overlays maps onto a dialect mouth", function () {
+    const hash = resolveHasher({
+      strategy: "boston",
+      maps: { flex: "muscles" },
+    });
+    assert.strictEqual(hash("flex-col"), "muscles-cawl");
+    assert.strictEqual(hash("p-4"), "pee-4");
+  });
 });
 
 describe("maps naming hasher", function () {

@@ -12,21 +12,27 @@ export function isDialectId(value: string): value is DialectId {
   return false;
 }
 
-export function dialectClassName(token: string, dialect: DialectId): string {
+export function dialectClassName(
+  token: string,
+  dialect: DialectId,
+  maps?: ReadonlyMap<string, string>,
+): string {
   const parts = tokenParts(token);
   const spoken: Array<string> = [];
   for (const part of parts) {
     if (dialect === "emojis" && part === "-") continue;
-    spoken.push(respellPart(part, dialect));
+    spoken.push(respellPart(part, dialect, maps));
   }
   return finishGeneratedName(spoken.join(""), token, "dialect");
 }
 
 export function createDialectHasher(
   dialect: DialectId,
+  maps?: Readonly<Record<string, string>>,
 ): (token: string) => string {
+  const lookup = maps === undefined ? undefined : normalizeMaps(maps);
   return function (token: string): string {
-    return dialectClassName(token, dialect);
+    return dialectClassName(token, dialect, lookup);
   };
 }
 
@@ -58,9 +64,7 @@ function normalizeMaps(
     lookup.set(word, spelling);
   }
   if (lookup.size === 0) {
-    throw new Error(
-      'minwind: naming.strategy "maps" requires a non-empty maps object',
-    );
+    throw new Error("minwind: naming.maps requires a non-empty maps object");
   }
   return lookup;
 }
@@ -150,11 +154,19 @@ function applyWord(word: string, dialect: DialectId): string {
   return applyRules(word, dialect);
 }
 
-function respellPart(part: string, dialect: DialectId): string {
+function respellPart(
+  part: string,
+  dialect: DialectId,
+  maps?: ReadonlyMap<string, string>,
+): string {
   if (!/^[a-z0-9]+$/.test(part)) return part;
   if (/^[0-9]+$/.test(part)) {
     if (dialect === "emojis") return toEmojiDigits(part);
     return part;
+  }
+  if (maps !== undefined) {
+    const mapped = maps.get(part);
+    if (mapped !== undefined) return mapped;
   }
   return applyWord(part, dialect);
 }

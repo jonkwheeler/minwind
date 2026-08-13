@@ -2,6 +2,7 @@ import assert from "node:assert";
 import { describe, it } from "node:test";
 import {
   DIALECT_IDS,
+  createDialectHasher,
   createMapsHasher,
   dialectClassName,
   isDialectId,
@@ -151,6 +152,25 @@ describe("maps hasher", function () {
     assert.throws(function () {
       createMapsHasher({ Flex: "muscles", flex: "biceps" });
     }, /conflicting spellings/);
+  });
+});
+
+describe("dialect overlay maps", function () {
+  it("replaces mapped runs and keeps the mouth on the rest", function () {
+    const hash = createDialectHasher("boston", { flex: "muscles" });
+    assert.strictEqual(hash("flex-col"), "muscles-cawl");
+    assert.strictEqual(hash("p-4"), "pee-4");
+  });
+
+  it("respells hover:flex as hovah:muscles", function () {
+    const hash = createDialectHasher("boston", { flex: "muscles" });
+    assert.strictEqual(hash("hover:flex"), "hovah:muscles");
+  });
+
+  it("rejects an empty overlay maps object", function () {
+    assert.throws(function () {
+      createDialectHasher("boston", {});
+    }, /non-empty maps/);
   });
 });
 

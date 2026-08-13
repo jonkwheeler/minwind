@@ -18,7 +18,12 @@ import { compareCodeUnits } from "./util.js";
 
 export type NamingConfig =
   | { strategy: "hash"; length?: number }
-  | { strategy: DialectId }
+  | {
+      strategy: DialectId;
+      // Optional overlay: word → spelling for alphanumeric runs. A hit
+      // replaces the mouth spelling; a miss still uses the mouth.
+      maps?: Readonly<Record<string, string>>;
+    }
   | {
       strategy: "maps";
       // Word → spelling for alphanumeric runs (`flex` in `flex-col`).
@@ -66,9 +71,10 @@ export function isThemedNaming(
   );
 }
 
-export function isDialectNaming(
-  config: NamingConfig | undefined,
-): config is { strategy: DialectId } {
+export function isDialectNaming(config: NamingConfig | undefined): config is {
+  strategy: DialectId;
+  maps?: Readonly<Record<string, string>>;
+} {
   return config !== undefined && isDialectId(config.strategy);
 }
 
@@ -100,7 +106,6 @@ export function assertDialectConfig(config: NamingConfig): void {
     "quotes",
     "prominence",
     "length",
-    "maps",
   ]);
 }
 
@@ -133,7 +138,7 @@ export function resolveHasher(
 ): (token: string) => string {
   if (config !== undefined && isDialectNaming(config)) {
     assertDialectConfig(config);
-    return createDialectHasher(config.strategy);
+    return createDialectHasher(config.strategy, config.maps);
   }
   if (config !== undefined && isMapsNaming(config)) {
     assertMapsConfig(config);

@@ -56,7 +56,8 @@ Options:
   --vocabulary <path> JSON array of strings; custom words list
                       --naming words requires --theme or --vocabulary
   --quotes <path>     JSON array of sentences; --naming quotes requires this
-  --maps <path>       JSON object of word→spelling; --naming maps requires this
+  --maps <path>       JSON object of word→spelling; --naming maps requires this.
+                      With a dialect id, overlays those runs onto the mouth
   --dry-run           Report what would change without writing files
 
 Exit codes:
@@ -322,11 +323,10 @@ export function parseArgs(argv: Array<string>): CliOptions {
     if (
       themeId !== undefined ||
       vocabularyPath !== undefined ||
-      quotesPath !== undefined ||
-      mapsPath !== undefined
+      quotesPath !== undefined
     ) {
       usageError(
-        `--naming ${namingStrategy} cannot be used with --theme, --vocabulary, --quotes, or --maps`,
+        `--naming ${namingStrategy} cannot be used with --theme, --vocabulary, or --quotes`,
       );
     }
     if (hashLength !== undefined) {
@@ -335,6 +335,9 @@ export function parseArgs(argv: Array<string>): CliOptions {
       );
     }
     naming = { strategy: namingStrategy };
+    if (mapsPath !== undefined) {
+      naming.maps = loadJsonStringRecord(mapsPath, "--maps");
+    }
   } else if (namingStrategy === "maps" || mapsPath !== undefined) {
     if (namingStrategy !== undefined && namingStrategy !== "maps") {
       usageError("--maps requires --naming maps");
