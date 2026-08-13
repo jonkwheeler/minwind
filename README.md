@@ -267,8 +267,9 @@ pnpm compare --site path/to/your/site
 
 The harness fails on a visual, console, navigation, theme, or interaction
 mismatch. The checked-in compare site is Tailwind-only; CSS Modules morph is
-proven by the Vite `test/fixtures/modules-site` fixture and the Next/Turbopack
-apply fixture (`test/fixtures/turbopack-modules-site`), not by `pnpm compare`.
+proven by the Vite and webpack builds of `test/fixtures/modules-site` and the
+Next/Turbopack apply fixture (`test/fixtures/turbopack-modules-site`), not by
+`pnpm compare`.
 
 ## Naming strategies
 
