@@ -1,7 +1,7 @@
 import { isGeneratedIdent } from "./names.js";
 import { DIALECT_IDS, type DialectId } from "./dialect-ids.js";
 import { applyRules } from "./dialect-rules.js";
-import { specialFor } from "./dialect-specials.js";
+import { specialFor } from "./dialect-maps/index.js";
 
 export { DIALECT_IDS, type DialectId };
 
