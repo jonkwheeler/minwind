@@ -25,7 +25,6 @@ export interface ApplyOptions {
   dir: string;
   registry: NameRegistry;
   consolidationVerdicts: ReadonlyArray<ConsolidationVerdict>;
-  quoteOrder?: ReadonlyMap<string, ReadonlyArray<string>>;
   consolidate: boolean;
   dryRun?: boolean;
   modules?: ModuleRemapContext;
@@ -179,7 +178,6 @@ export function applyBuildOutput(options: ApplyOptions): ApplyResult {
           consolidationVerdicts: consolidate
             ? consolidationVerdicts
             : undefined,
-          quoteOrder: options.quoteOrder,
         })
       : transformBundle({
           code,
@@ -188,7 +186,6 @@ export function applyBuildOutput(options: ApplyOptions): ApplyResult {
           consolidationVerdicts: consolidate
             ? consolidationVerdicts
             : undefined,
-          quoteOrder: options.quoteOrder,
         });
     if (isHtml) result.htmlFiles += 1;
     else result.jsFiles += 1;

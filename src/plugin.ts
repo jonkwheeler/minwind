@@ -16,7 +16,7 @@ import {
   type ConsolidatedRuleInfo,
 } from "./consolidate.js";
 import type { ExclusionConfig, NameRegistry } from "./names.js";
-import type { NamingConfig } from "./naming.js";
+import { isThemedNaming, type NamingConfig } from "./naming.js";
 import {
   emptyPrepassResult,
   runPrepass,
@@ -41,7 +41,6 @@ import {
   type MinwindMode,
 } from "./flags.js";
 import {
-  assertModulesQuotes,
   createGenerateScopedName,
   LIGHTNING_MODULES_ERROR,
   MODULES_HOOK_MISSING_ERROR,
@@ -71,9 +70,11 @@ export interface MinwindOptions {
   // <root>/src/app.css. This is the pre-pass universe only — the shipped CSS
   // still comes from the site's own build (KTD3).
   cssEntry?: string;
-  // Themed naming: 'words' deals a vocabulary, 'quotes' makes class lists
-  // read as quote fragments. Default (absent or 'hash') is content-hash
-  // naming, the only strategy with cross-build name stability (KTD5).
+  // Themed naming: 'words' deals a built-in theme or a custom vocabulary;
+  // 'quotes' deals sentence words in order. Dialect ids (`boston`, …) keep
+  // Tailwind hyphens and respell English runs. Default (absent or 'hash') is
+  // content-hash naming, the only strategy with cross-build name stability
+  // (KTD5).
   naming?: NamingConfig;
   // Classes the transform must not touch: exact names and prefixes for
   // runtime-injected or third-party markup classes (e.g. a syntax
@@ -235,23 +236,22 @@ export function minwind(options: MinwindOptions = {}): Array<Plugin> {
       });
       if (!flags.enabled) return;
       if (!enginesInclude(flags.engines, "css-modules")) return;
-      assertModulesQuotes(options.naming);
       const root = options.root ?? userConfig.root ?? process.cwd();
-      const words =
-        options.naming !== undefined && options.naming.strategy === "words"
-          ? prepareModulesNaming(
-              root,
-              options.naming,
-              undefined,
-              options.exclusions,
-            )
-          : undefined;
+      const themed = isThemedNaming(options.naming)
+        ? prepareModulesNaming(
+            root,
+            options.naming,
+            undefined,
+            options.exclusions,
+          )
+        : undefined;
       return {
         css: {
           modules: {
             generateScopedName: createGenerateScopedName(root, {
-              registry: words?.registry,
+              registry: themed?.registry,
               collision,
+              naming: options.naming,
             }),
           },
         },
@@ -328,8 +328,7 @@ export function minwind(options: MinwindOptions = {}): Array<Plugin> {
           );
         }
         if (
-          options.naming !== undefined &&
-          options.naming.strategy === "words" &&
+          isThemedNaming(options.naming) &&
           options.naming.prominence !== undefined &&
           prepass.naming !== undefined &&
           prepass.naming.prominent === 0
@@ -375,7 +374,6 @@ export function minwind(options: MinwindOptions = {}): Array<Plugin> {
           consolidationVerdicts: current.flags.consolidate
             ? current.prepass.consolidationVerdicts
             : undefined,
-          quoteOrder: current.prepass.naming?.order,
           customProperties: current.prepass.customProperties,
         });
         if (result === null) return null;

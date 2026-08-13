@@ -20,7 +20,6 @@ import { MODULES_COMPRESS_WARNING } from "../src/flags.js";
 import {
   hashModuleLocal,
   LIGHTNING_MODULES_ERROR,
-  MODULES_QUOTES_ERROR,
   prepareModulesNaming,
   moduleLocalKey,
 } from "../src/engines/css-modules.js";
@@ -1289,28 +1288,6 @@ describe("minwind CSS Modules naming hooks", function () {
       mode: "morph",
     });
     assert.strictEqual(plugins[0].apply, "build");
-  });
-
-  it("fails when Modules naming is quotes (AE6)", function () {
-    const plugins = minwind({
-      root: MODULES_FIXTURE,
-      engines: ["css-modules"],
-      mode: "morph",
-      naming: { strategy: "quotes", corpus: ["a b"] },
-    });
-    const configHook = plugins[0].config;
-    assert.ok(typeof configHook === "function");
-    const run = configHook as (
-      this: unknown,
-      userConfig: object,
-      env: { command: string },
-    ) => void;
-    assert.throws(
-      function () {
-        run.call({}, { root: MODULES_FIXTURE }, { command: "build" });
-      },
-      new RegExp(MODULES_QUOTES_ERROR.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
-    );
   });
 
   it("fails when Vite Lightning CSS Modules is active (AE6)", function () {

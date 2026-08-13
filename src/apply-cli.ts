@@ -13,13 +13,14 @@ import {
   type MinwindMode,
 } from "./flags.js";
 import {
-  assertModulesQuotes,
   assertSharedCollision,
-  MODULES_QUOTES_ERROR,
   prepareModulesNaming,
   reservedFromRegistry,
 } from "./engines/css-modules.js";
 import type { NamingConfig } from "./naming.js";
+import { DIALECT_IDS, isDialectId, type DialectId } from "./dialect.js";
+import { resolveNameLength } from "./names.js";
+import { isThemeId, THEME_IDS, type ThemeId } from "./themes/index.js";
 import { emptyPrepassResult, runPrepass } from "./prepass.js";
 import { buildRenameMap, buildReport, writeArtifacts } from "./report.js";
 
@@ -30,8 +31,8 @@ import { buildRenameMap, buildReport, writeArtifacts } from "./report.js";
 // stylesheet selectors (plus consolidation), and conservative JS class
 // literals. Modules apply proves export maps and remaps those bundler names
 // in JS, CSS, and HTML. Tailwind-only apply stays content-hash unless
-// `--naming` is set. Modules apply accepts `hash` or `words`
-// (`--vocabulary` required for words).
+// `--naming` is set. Modules apply accepts `hash`, `words`, `quotes`, or a
+// dialect id. `--theme` or `--vocabulary` for words; `--quotes` for quotes.
 
 const USAGE = `Usage: minwind apply <build-output-directory> [options]
 
@@ -48,10 +49,13 @@ Options:
                       (default: compress)
   --no-consolidate    Alias for --mode morph
   --engines <ids>     Comma-separated engines (default: tailwind)
-  --naming <hash|words>
-                      Name strategy (default: hash). quotes is rejected when
-                      css-modules is on
-  --vocabulary <path> JSON array of strings; required for --naming words
+  --naming <hash|words|quotes|${DIALECT_IDS.join("|")}>
+                      Name strategy (default: hash)
+  --hash-length <n>   Hash name length (default 4, minimum 4)
+  --theme <id>        Built-in words pack (star-wars, klingon, …)
+  --vocabulary <path> JSON array of strings; custom words list
+                      --naming words requires --theme or --vocabulary
+  --quotes <path>     JSON array of sentences; --naming quotes requires this
   --dry-run           Report what would change without writing files
 
 Exit codes:
@@ -70,26 +74,26 @@ interface CliOptions {
   dryRun: boolean;
 }
 
-function loadVocabulary(filePath: string): Array<string> {
+function loadJsonStringArray(filePath: string, flag: string): Array<string> {
   let raw: string;
   try {
     raw = fs.readFileSync(filePath, "utf8");
   } catch {
-    usageError(`--vocabulary file not found: ${filePath}`);
+    usageError(`${flag} file not found: ${filePath}`);
   }
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw) as unknown;
   } catch {
-    usageError("--vocabulary must be a JSON array of strings");
+    usageError(`${flag} must be a JSON array of strings`);
   }
   if (!Array.isArray(parsed)) {
-    usageError("--vocabulary must be a JSON array of strings");
+    usageError(`${flag} must be a JSON array of strings`);
   }
   const words: Array<string> = [];
   for (const item of parsed) {
     if (typeof item !== "string") {
-      usageError("--vocabulary must be a JSON array of strings");
+      usageError(`${flag} must be a JSON array of strings`);
     }
     words.push(item);
   }
@@ -101,6 +105,40 @@ function usageError(message: string): never {
   process.exit(1);
 }
 
+function parseThemeId(value: string): ThemeId {
+  if (!isThemeId(value)) {
+    usageError(
+      `--theme must be one of ${THEME_IDS.join(", ")}, got "${value}"`,
+    );
+  }
+  return value;
+}
+
+function parseHashLength(raw: string): number {
+  const parsed = Number(raw);
+  try {
+    return resolveNameLength(parsed);
+  } catch (error) {
+    usageError(error instanceof Error ? error.message : String(error));
+  }
+}
+
+function parseNamingStrategy(
+  value: string,
+): "hash" | "words" | "quotes" | DialectId {
+  if (
+    value === "hash" ||
+    value === "words" ||
+    value === "quotes" ||
+    isDialectId(value)
+  ) {
+    return value;
+  }
+  usageError(
+    `--naming must be hash, words, quotes, or a dialect id (${DIALECT_IDS.join(", ")}), got "${value}"`,
+  );
+}
+
 export function parseArgs(argv: Array<string>): CliOptions {
   let dir: string | null = null;
   let root = process.cwd();
@@ -109,8 +147,11 @@ export function parseArgs(argv: Array<string>): CliOptions {
   let consolidateOverride: boolean | undefined;
   let dryRun = false;
   let enginesValue: string | undefined;
-  let namingStrategy: "hash" | "words" | "quotes" | undefined;
+  let namingStrategy: "hash" | "words" | "quotes" | DialectId | undefined;
   let vocabularyPath: string | undefined;
+  let quotesPath: string | undefined;
+  let themeId: ThemeId | undefined;
+  let hashLength: number | undefined;
 
   let i = 0;
   while (i < argv.length) {
@@ -163,17 +204,19 @@ export function parseArgs(argv: Array<string>): CliOptions {
     } else if (arg === "--naming") {
       const value = argv[i + 1];
       if (value === undefined) usageError("--naming requires a value");
-      if (value !== "hash" && value !== "words" && value !== "quotes") {
-        usageError(`--naming must be hash, words, or quotes, got "${value}"`);
-      }
-      namingStrategy = value;
+      namingStrategy = parseNamingStrategy(value);
       i += 2;
     } else if (arg.startsWith("--naming=")) {
       const value = arg.slice("--naming=".length);
-      if (value !== "hash" && value !== "words" && value !== "quotes") {
-        usageError(`--naming must be hash, words, or quotes, got "${value}"`);
-      }
-      namingStrategy = value;
+      namingStrategy = parseNamingStrategy(value);
+      i += 1;
+    } else if (arg === "--hash-length") {
+      const value = argv[i + 1];
+      if (value === undefined) usageError("--hash-length requires a value");
+      hashLength = parseHashLength(value);
+      i += 2;
+    } else if (arg.startsWith("--hash-length=")) {
+      hashLength = parseHashLength(arg.slice("--hash-length=".length));
       i += 1;
     } else if (arg === "--vocabulary") {
       const value = argv[i + 1];
@@ -182,6 +225,22 @@ export function parseArgs(argv: Array<string>): CliOptions {
       i += 2;
     } else if (arg.startsWith("--vocabulary=")) {
       vocabularyPath = arg.slice("--vocabulary=".length);
+      i += 1;
+    } else if (arg === "--quotes") {
+      const value = argv[i + 1];
+      if (value === undefined) usageError("--quotes requires a value");
+      quotesPath = value;
+      i += 2;
+    } else if (arg.startsWith("--quotes=")) {
+      quotesPath = arg.slice("--quotes=".length);
+      i += 1;
+    } else if (arg === "--theme") {
+      const value = argv[i + 1];
+      if (value === undefined) usageError("--theme requires a value");
+      themeId = parseThemeId(value);
+      i += 2;
+    } else if (arg.startsWith("--theme=")) {
+      themeId = parseThemeId(arg.slice("--theme=".length));
       i += 1;
     } else if (arg.startsWith("-")) {
       usageError(`unknown option: ${arg}`);
@@ -207,25 +266,62 @@ export function parseArgs(argv: Array<string>): CliOptions {
     consolidate: consolidateOverride,
   });
   let naming: NamingConfig | undefined;
-  if (namingStrategy === "quotes") {
-    naming = { strategy: "quotes", corpus: [] };
-  } else if (namingStrategy === "words") {
-    if (vocabularyPath === undefined) {
-      usageError("--naming words requires --vocabulary");
+  if (themeId !== undefined && namingStrategy === "hash") {
+    usageError("--theme requires --naming words");
+  }
+  if (themeId !== undefined && vocabularyPath !== undefined) {
+    usageError("--theme and --vocabulary cannot both be set");
+  }
+  if (quotesPath !== undefined && namingStrategy === "hash") {
+    usageError("--quotes requires --naming quotes");
+  }
+  if (quotesPath !== undefined && namingStrategy === "words") {
+    usageError("--quotes cannot be used with --naming words");
+  }
+  if (
+    quotesPath !== undefined &&
+    (themeId !== undefined || vocabularyPath !== undefined)
+  ) {
+    usageError("--quotes cannot be used with --theme or --vocabulary");
+  }
+  if (namingStrategy !== undefined && isDialectId(namingStrategy)) {
+    if (
+      themeId !== undefined ||
+      vocabularyPath !== undefined ||
+      quotesPath !== undefined
+    ) {
+      usageError(
+        `--naming ${namingStrategy} cannot be used with --theme, --vocabulary, or --quotes`,
+      );
+    }
+    if (hashLength !== undefined) {
+      usageError(
+        `--naming ${namingStrategy} cannot be used with --hash-length`,
+      );
+    }
+    naming = { strategy: namingStrategy };
+  } else if (namingStrategy === "quotes" || quotesPath !== undefined) {
+    if (quotesPath === undefined) {
+      usageError("--naming quotes requires --quotes");
     }
     naming = {
-      strategy: "words",
-      vocabulary: loadVocabulary(vocabularyPath),
+      strategy: "quotes",
+      quotes: loadJsonStringArray(quotesPath, "--quotes"),
     };
-  } else if (namingStrategy === "hash") {
-    naming = { strategy: "hash" };
-  }
-  if (enginesInclude(flags.engines, "css-modules")) {
-    try {
-      assertModulesQuotes(naming);
-    } catch {
-      usageError(MODULES_QUOTES_ERROR);
+    if (hashLength !== undefined) naming.length = hashLength;
+  } else if (namingStrategy === "words" || themeId !== undefined) {
+    if (themeId === undefined && vocabularyPath === undefined) {
+      usageError("--naming words requires --theme or --vocabulary");
     }
+    naming = { strategy: "words" };
+    if (themeId !== undefined) naming.theme = themeId;
+    if (vocabularyPath !== undefined) {
+      naming.vocabulary = loadJsonStringArray(vocabularyPath, "--vocabulary");
+    }
+    if (hashLength !== undefined) naming.length = hashLength;
+  } else if (namingStrategy === "hash" || hashLength !== undefined) {
+    naming = { strategy: "hash" };
+    if (hashLength !== undefined) naming.length = hashLength;
   }
   return {
     dir,
@@ -281,7 +377,6 @@ export async function runApplyCli(argv: Array<string>): Promise<number> {
     dir: options.dir,
     registry: prepass.registry,
     consolidationVerdicts: prepass.consolidationVerdicts,
-    quoteOrder: prepass.naming?.order,
     consolidate: options.consolidate,
     dryRun: options.dryRun,
     modules,

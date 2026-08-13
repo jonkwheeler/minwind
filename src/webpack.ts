@@ -8,7 +8,7 @@ import {
   type ConsolidatedRuleInfo,
 } from "./consolidate.js";
 import type { ExclusionConfig } from "./names.js";
-import type { NamingConfig } from "./naming.js";
+import { isThemedNaming, type NamingConfig } from "./naming.js";
 import {
   emptyPrepassResult,
   runPrepass,
@@ -35,7 +35,6 @@ import {
   type MinwindMode,
 } from "./flags.js";
 import {
-  assertModulesQuotes,
   createGetLocalIdent,
   NameCollisionSpace,
   prepareModulesNaming,
@@ -58,7 +57,7 @@ export interface MinwindWebpackOptions {
   // Tailwind CSS entry compiled by the pre-pass; defaults to
   // <root>/src/app.css.
   cssEntry?: string;
-  // Themed naming (words/quotes) replaces content-hash naming.
+  // Themed naming (words): a built-in theme id or a custom vocabulary.
   naming?: NamingConfig;
   // Site-specific classes the transform must not touch.
   exclusions?: ExclusionConfig;
@@ -177,8 +176,7 @@ export class MinwindWebpackPlugin {
   );
 
   static createGetLocalIdent(root: string, options?: ScopedNameOptions) {
-    assertModulesQuotes(options?.naming);
-    if (options?.naming !== undefined && options.naming.strategy === "words") {
+    if (isThemedNaming(options?.naming)) {
       const reserved = options.collision?.reservedNames();
       const prepared = prepareModulesNaming(
         root,
@@ -221,9 +219,6 @@ export class MinwindWebpackPlugin {
     this.enabled = (options.enabled ?? true) && flags.enabled;
     this.mode = flags.mode;
     this.modeWarning = flags.modeWarning;
-    if (enginesInclude(flags.engines, "css-modules")) {
-      assertModulesQuotes(options.naming);
-    }
   }
 
   // The loader reports each class-bearing module it saw (a transform result,

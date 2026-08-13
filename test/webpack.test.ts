@@ -270,23 +270,6 @@ describe("MinwindWebpackPlugin hooks", function () {
     assert.strictEqual(plugin.mode, "morph");
   });
 
-  it("createGetLocalIdent rejects quotes naming", function () {
-    assert.throws(function () {
-      MinwindWebpackPlugin.createGetLocalIdent("/app", {
-        naming: { strategy: "quotes", corpus: ["a b"] },
-      });
-    }, /quotes/);
-  });
-
-  it("plugin constructor rejects quotes with Modules engine", function () {
-    assert.throws(function () {
-      new MinwindWebpackPlugin({
-        engines: ["css-modules"],
-        naming: { strategy: "quotes", corpus: ["a b"] },
-      });
-    }, /quotes/);
-  });
-
   it("owns a collision space and seeds it from Tailwind in beforeCompile (KTD5)", async function () {
     const here = path.dirname(fileURLToPath(import.meta.url));
     const dual = path.join(here, "fixtures", "dual-site");

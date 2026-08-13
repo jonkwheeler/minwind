@@ -9,12 +9,15 @@ import {
 } from "./class-contexts.js";
 import { SFC_PATTERN, walkModuleContexts } from "./sfc.js";
 import {
+  createHasher,
   createNameRegistry,
-  hashClassName,
   type ExclusionConfig,
   type NameRegistry,
 } from "./names.js";
 import {
+  hashLengthOf,
+  isThemedNaming,
+  resolveHasher,
   resolveNaming,
   type NamingConfig,
   type NamingResult,
@@ -45,7 +48,7 @@ import {
 export interface PrepassOptions {
   root: string;
   cssEntry: string;
-  // Themed naming (words/quotes) replaces content-hash naming; the default
+  // Themed naming (words) replaces content-hash naming; the default
   // (absent or 'hash') keeps KTD5 stability.
   naming?: NamingConfig;
   // Site-specific classes the transform must not touch (runtime-injected
@@ -241,9 +244,16 @@ export async function runPrepass(
   const sourceInventory = await scanSources(options.root);
   const scan = sourceInventory.scan;
 
+  const hasher = createHasher(hashLengthOf(options.naming));
+  const classHasher = resolveHasher(options.naming);
   let customProperties: CustomPropertyRegistry | undefined;
   if (options.customProperties !== undefined) {
-    const provisional = createCustomPropertyRegistry(options.customProperties);
+    const provisional = createCustomPropertyRegistry(
+      options.customProperties,
+      new Set(),
+      new Set(),
+      hasher,
+    );
     const unsafe = new Set<string>();
     for (let index = 0; index < sourceInventory.paths.length; index += 1) {
       const sourceScan = scanCustomPropertySource(
@@ -257,6 +267,7 @@ export async function runPrepass(
       options.customProperties,
       unsafe,
       collectCustomPropertyNamesInCss(stylesheet),
+      hasher,
     );
     customProperties.assertBijection();
   }
@@ -277,6 +288,7 @@ export async function runPrepass(
     sourceTokens,
     runtimeTokens: scan.runtimeTokens,
     exclusions: options.exclusions,
+    hash: classHasher,
   });
 
   // Themed naming: the provisional hash registry determines which tokens
@@ -285,7 +297,7 @@ export async function runPrepass(
   // against the universe and the source tokens so a generated name can
   // never collide with a class the stylesheet or the sources keep.
   let naming: NamingResult | undefined;
-  if (options.naming !== undefined && options.naming.strategy !== "hash") {
+  if (options.naming !== undefined && isThemedNaming(options.naming)) {
     const renamedTokens = registry.entries().map(function (entry) {
       return entry.token;
     });
@@ -326,9 +338,7 @@ export async function runPrepass(
         hash: function (token: string): string {
           const name = names.get(token);
           if (name !== undefined) return name;
-          // Defensive: the solver names every renamed token, so this is
-          // unreachable; hash rather than throw if that ever drifts.
-          return hashClassName(token);
+          return hasher(token);
         },
       });
     }
@@ -341,7 +351,7 @@ export async function runPrepass(
     function (token) {
       return registry.nameFor(token) !== undefined;
     },
-    { dynamicTokens: scan.dynamicTokens },
+    { dynamicTokens: scan.dynamicTokens, hash: hasher },
   );
 
   return {

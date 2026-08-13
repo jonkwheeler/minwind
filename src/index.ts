@@ -8,6 +8,21 @@ export type {
   MinwindOptions,
 } from "./plugin.js";
 export type { NamingConfig, NamingList, NamingResult } from "./naming.js";
+export {
+  resolveVocabulary,
+  vocabularyFromQuotes,
+  isThemedNaming,
+  isDialectNaming,
+} from "./naming.js";
+export type { DialectId } from "./dialect.js";
+export { DIALECT_IDS, dialectClassName, isDialectId } from "./dialect.js";
+export type { ThemeId } from "./themes/index.js";
+export {
+  THEME_IDS,
+  THEMES,
+  isThemeId,
+  vocabularyForTheme,
+} from "./themes/index.js";
 export type { CustomPropertiesConfig } from "./custom-properties.js";
 export type {
   ExclusionConfig,

@@ -3,11 +3,12 @@ import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
+import { THEME_IDS, THEMES, vocabularyForTheme } from "../src/themes/index.js";
 
 const NAME_PATTERN = /^[a-z][a-z0-9]*$/;
 const THEMES_DIR = join(
   dirname(fileURLToPath(import.meta.url)),
-  "../examples/themes",
+  "../src/themes",
 );
 
 // Common Tailwind / CSS words. A generated name that matches one of these
@@ -40,29 +41,40 @@ function wordsIn(source: string): Array<string> {
   });
 }
 
-describe("example theme vocabularies", function () {
+describe("built-in theme vocabularies", function () {
   const files = readdirSync(THEMES_DIR).filter(function (name) {
-    return name.endsWith(".ts");
+    return name.endsWith(".ts") && name !== "index.ts";
   });
 
-  it("includes the requested franchise packs", function () {
-    const expected = [
-      "star-wars.ts",
-      "star-trek.ts",
-      "super-mario.ts",
-      "zelda.ts",
-      "witcher.ts",
-      "zoolander.ts",
-    ];
-    for (const name of expected) {
-      assert.ok(files.includes(name), `missing ${name}`);
+  it("catalog ids match theme files", function () {
+    assert.deepStrictEqual(
+      Array.from(THEME_IDS).sort(),
+      files
+        .map(function (name) {
+          return name.slice(0, -3);
+        })
+        .sort(),
+    );
+    for (const id of THEME_IDS) {
+      assert.ok(THEMES[id].length >= 40, `${id} should have at least 40 words`);
     }
+  });
+
+  it("vocabularyForTheme returns the star-wars pack", function () {
+    assert.strictEqual(vocabularyForTheme("star-wars")[0], "vader");
+  });
+
+  it("vocabularyForTheme rejects unknown ids", function () {
+    assert.throws(function () {
+      vocabularyForTheme("spaceballs");
+    }, /unknown naming.theme/);
   });
 
   for (const file of files) {
     it(`${file} uses unique valid CSS idents`, function () {
       const source = readFileSync(join(THEMES_DIR, file), "utf8");
-      const words = wordsIn(source);
+      const arrayStart = source.indexOf("[");
+      const words = wordsIn(source.slice(arrayStart));
       assert.ok(
         words.length >= 40,
         `${file} should have at least 40 words, got ${words.length}`,

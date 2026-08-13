@@ -255,8 +255,9 @@ function analyzeArm(selector: CssNode, registry: NameRegistry): ArmInfo {
 
 // A ClassSelector location starts at the dot and ends after the identifier,
 // so the renamed span is [start + 1, end). Decode/encode are kept symmetric
-// (css-tree's spec-compliant pair) even though registry names match
-// [a-z][a-z0-9]* and encode is the identity on them.
+// (css-tree's spec-compliant pair). Hash and words names match
+// NAME_PATTERN so encode is the identity; dialect names keep colons and
+// hyphens, so encode still has work to do.
 function armNameEdits(
   arm: ArmInfo,
   text: string,

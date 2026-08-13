@@ -1,4 +1,4 @@
-// Copy into minwind({ naming: { strategy: "words", vocabulary } }).
+// Built-in words theme. Use naming: { strategy: "words", theme: "super-mario" }.
 // Order is prominence: the first words land on the document shell.
 
 export const SUPER_MARIO_VOCABULARY: ReadonlyArray<string> = [

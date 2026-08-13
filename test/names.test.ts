@@ -6,6 +6,8 @@ import {
   NAME_PATTERN,
   createNameRegistry,
   hashClassName,
+  isGeneratedIdent,
+  safeNameLength,
   type ExclusionConfig,
   type RegistryInput,
 } from "../src/names.js";
@@ -40,6 +42,21 @@ const SITE_EXCLUSIONS: ExclusionConfig = {
   prefixes: ["dissolve-"],
 };
 
+describe("isGeneratedIdent", function () {
+  it("accepts hash names and hyphenated dialect names", function () {
+    assert.strictEqual(isGeneratedIdent("xkzu"), true);
+    assert.strictEqual(isGeneratedIdent("_2b"), true);
+    assert.strictEqual(isGeneratedIdent("p-4"), true);
+    assert.strictEqual(isGeneratedIdent("hovah:bawdah"), true);
+  });
+
+  it("rejects empty, spaced, and digit-leading names", function () {
+    assert.strictEqual(isGeneratedIdent(""), false);
+    assert.strictEqual(isGeneratedIdent("p 4"), false);
+    assert.strictEqual(isGeneratedIdent("4px"), false);
+  });
+});
+
 describe("hashClassName", () => {
   it("produces ident-safe fixed-length names for known tokens", function () {
     for (const token of KNOWN_TOKENS) {
@@ -66,6 +83,32 @@ describe("hashClassName", () => {
     assert.throws(function () {
       hashClassName("");
     }, /empty/);
+  });
+
+  it("uses length 4 by default and rejects shorter lengths", function () {
+    assert.strictEqual(hashClassName("flex").length, 4);
+    assert.strictEqual(hashClassName("flex", 4), hashClassName("flex"));
+    assert.throws(function () {
+      hashClassName("flex", 3);
+    }, /naming.length/);
+  });
+
+  it("produces a longer ident when length is raised", function () {
+    const name = hashClassName("flex", 6);
+    assert.strictEqual(name.length, 6);
+    assert.match(name, NAME_PATTERN);
+    assert.notStrictEqual(name, hashClassName("flex"));
+  });
+});
+
+describe("safeNameLength", function () {
+  it("returns 4 when the token set is injective at the default length", function () {
+    assert.strictEqual(safeNameLength(["flex", "grid", "p-4"]), 4);
+  });
+
+  it("returns 5 when a reserved name occupies the length-4 hash", function () {
+    const taken = hashClassName("flex");
+    assert.strictEqual(safeNameLength(["flex"], new Set([taken])), 5);
   });
 });
 
@@ -316,6 +359,19 @@ describe("createNameRegistry collision policy (R10)", function () {
         }),
       );
     }, /collision.*ab12/);
+  });
+
+  it("names the next length that would miss a reserved hash", function () {
+    const taken = hashClassName("flex");
+    assert.notStrictEqual(taken, "flex");
+    assert.throws(function () {
+      createNameRegistry(
+        inputFor({
+          universe: ["flex", taken],
+          sourceTokens: ["flex"],
+        }),
+      );
+    }, /increase naming.length to 5/);
   });
 
   it("fails loudly when a hash produces a non-ident-safe name", function () {

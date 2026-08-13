@@ -14,10 +14,8 @@ import {
   hashModuleLocal,
   moduleLocalKey,
   MODULES_COMPOSE_ERROR,
-  MODULES_QUOTES_ERROR,
   NameCollisionSpace,
   SCSS_SASS_ERROR,
-  assertModulesQuotes,
 } from "../../src/engines/css-modules.js";
 import { hashClassName, createNameRegistry } from "../../src/names.js";
 
@@ -237,23 +235,6 @@ describe("NameCollisionSpace", function () {
     assert.throws(function () {
       space.claim("flex", "abcd");
     }, /name collision/);
-  });
-});
-
-describe("Modules quotes rejection", function () {
-  it("throws when naming strategy is quotes", function () {
-    assert.throws(
-      function () {
-        assertModulesQuotes({ strategy: "quotes", corpus: ["a b"] });
-      },
-      new RegExp(MODULES_QUOTES_ERROR.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
-    );
-  });
-
-  it("allows hash and words", function () {
-    assertModulesQuotes({ strategy: "hash" });
-    assertModulesQuotes({ strategy: "words", vocabulary: ["alpha"] });
-    assertModulesQuotes(undefined);
   });
 });
 

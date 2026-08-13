@@ -392,8 +392,8 @@ Options:
   --build-timeout <ms>  Kill a site build that runs longer than this
                         (default 600000; env MINWIND_COMPARE_BUILD_TIMEOUT_MS)
   --min-class-drop <pct>  Minimum median class-attribute length drop the
-                        gate requires (default 50). Themed naming (words or
-                        quotes) trades bytes for personality, so themed
+                        gate requires (default 50). Themed naming (words)
+                        trades bytes for personality, so themed
                         sites can lower the bar here — the rendering gates
                         (pixel equality, console errors, interactions) are
                         not negotiable.

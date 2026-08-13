@@ -77,7 +77,7 @@ describe("parseArgs mode flags", function () {
     assert.strictEqual(options.naming, undefined);
   });
 
-  it("rejects quotes with the CSS Modules engine (AE6)", function () {
+  it("requires --quotes for --naming quotes", function () {
     const exit = process.exit;
     const writes: Array<string> = [];
     const write = process.stderr.write;
@@ -90,19 +90,137 @@ describe("parseArgs mode flags", function () {
     } as typeof process.exit;
     try {
       assert.throws(function () {
-        parseArgs([
-          "/tmp/out",
-          "--engines",
-          "css-modules",
-          "--naming",
-          "quotes",
-        ]);
+        parseArgs(["/tmp/out", "--naming", "quotes"]);
       }, /exit 1/);
-      assert.ok(writes.join("").includes("quotes"));
-      assert.ok(!writes.join("").includes("does not support the CSS Modules"));
+      assert.ok(writes.join("").includes("--quotes"));
     } finally {
       process.exit = exit;
       process.stderr.write = write;
+    }
+  });
+
+  it("loads sentences from --quotes", function () {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minwind-quotes-"));
+    const file = path.join(dir, "quotes.json");
+    fs.writeFileSync(
+      file,
+      JSON.stringify(["Ask not what your country can do for you"]),
+    );
+    try {
+      const options = parseArgs(["/tmp/out", "--quotes", file]);
+      assert.deepStrictEqual(options.naming, {
+        strategy: "quotes",
+        quotes: ["Ask not what your country can do for you"],
+      });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts --hash-length on the hash strategy", function () {
+    const options = parseArgs(["/tmp/out", "--hash-length", "6"]);
+    assert.deepStrictEqual(options.naming, { strategy: "hash", length: 6 });
+  });
+
+  it("rejects --hash-length below 4", function () {
+    const exit = process.exit;
+    const writes: Array<string> = [];
+    const write = process.stderr.write;
+    process.stderr.write = function (chunk: string | Uint8Array) {
+      writes.push(String(chunk));
+      return true;
+    } as typeof process.stderr.write;
+    process.exit = function (code?: number): never {
+      throw new Error(`exit ${code}`);
+    } as typeof process.exit;
+    try {
+      assert.throws(function () {
+        parseArgs(["/tmp/out", "--hash-length", "3"]);
+      }, /exit 1/);
+      assert.ok(writes.join("").includes("naming.length"));
+    } finally {
+      process.exit = exit;
+      process.stderr.write = write;
+    }
+  });
+
+  it("accepts --naming boston", function () {
+    const options = parseArgs(["/tmp/out", "--naming", "boston"]);
+    assert.deepStrictEqual(options.naming, { strategy: "boston" });
+  });
+
+  it("rejects --naming boston together with --theme", function () {
+    const exit = process.exit;
+    const writes: Array<string> = [];
+    const write = process.stderr.write;
+    process.stderr.write = function (chunk: string | Uint8Array) {
+      writes.push(String(chunk));
+      return true;
+    } as typeof process.stderr.write;
+    process.exit = function (code?: number): never {
+      throw new Error(`exit ${code}`);
+    } as typeof process.exit;
+    try {
+      assert.throws(function () {
+        parseArgs(["/tmp/out", "--naming", "boston", "--theme", "star-wars"]);
+      }, /exit 1/);
+      assert.ok(writes.join("").includes("boston"));
+    } finally {
+      process.exit = exit;
+      process.stderr.write = write;
+    }
+  });
+
+  it("accepts --theme star-wars for words naming", function () {
+    const options = parseArgs(["/tmp/out", "--theme", "star-wars"]);
+    assert.deepStrictEqual(options.naming, {
+      strategy: "words",
+      theme: "star-wars",
+    });
+  });
+
+  it("rejects an unknown --theme", function () {
+    const exit = process.exit;
+    const writes: Array<string> = [];
+    const write = process.stderr.write;
+    process.stderr.write = function (chunk: string | Uint8Array) {
+      writes.push(String(chunk));
+      return true;
+    } as typeof process.stderr.write;
+    process.exit = function (code?: number): never {
+      throw new Error(`exit ${code}`);
+    } as typeof process.exit;
+    try {
+      assert.throws(function () {
+        parseArgs(["/tmp/out", "--theme", "spaceballs"]);
+      }, /exit 1/);
+      assert.ok(writes.join("").includes("star-wars"));
+    } finally {
+      process.exit = exit;
+      process.stderr.write = write;
+    }
+  });
+
+  it("rejects --theme together with --vocabulary", function () {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minwind-vocab-"));
+    const vocab = path.join(dir, "words.json");
+    fs.writeFileSync(vocab, JSON.stringify(["alpha"]));
+    const exit = process.exit;
+    const write = process.stderr.write;
+    process.stderr.write = function () {
+      return true;
+    } as typeof process.stderr.write;
+    process.exit = function (code?: number): never {
+      throw new Error(`exit ${code}`);
+    } as typeof process.exit;
+    try {
+      assert.throws(function () {
+        parseArgs(["/tmp/out", "--theme", "star-wars", "--vocabulary", vocab]);
+      }, /exit 1/);
+    } finally {
+      process.exit = exit;
+      process.stderr.write = write;
+      fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 
@@ -129,7 +247,7 @@ describe("parseArgs mode flags", function () {
     }
   });
 
-  it("requires --vocabulary for --naming words", function () {
+  it("requires --theme or --vocabulary for --naming words", function () {
     const exit = process.exit;
     const writes: Array<string> = [];
     const write = process.stderr.write;

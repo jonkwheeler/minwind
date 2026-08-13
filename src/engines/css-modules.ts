@@ -10,7 +10,15 @@ import {
   type ExclusionConfig,
   type NameRegistry,
 } from "../names.js";
-import { resolveNaming, type NamingConfig } from "../naming.js";
+import {
+  hashLengthOf,
+  isDialectNaming,
+  isThemedNaming,
+  resolveHasher,
+  resolveNaming,
+  type NamingConfig,
+} from "../naming.js";
+import { dialectClassName } from "../dialect.js";
 import { compareCodeUnits } from "../util.js";
 
 // CSS Modules identity: file-qualified locals, hashed on the fly for the
@@ -59,8 +67,9 @@ export function hashModuleLocal(
   root: string,
   filename: string,
   local: string,
+  length?: number,
 ): string {
-  return hashClassName(moduleLocalKey(root, filename, local));
+  return hashClassName(moduleLocalKey(root, filename, local), length);
 }
 
 export interface ModuleLocal {
@@ -163,7 +172,11 @@ function lookupScopedName(
     }
     return name;
   }
-  return hashModuleLocal(root, filename, local);
+  const key = moduleLocalKey(root, filename, local);
+  if (isDialectNaming(options.naming)) {
+    return dialectClassName(key, options.naming.strategy);
+  }
+  return hashModuleLocal(root, filename, local, hashLengthOf(options.naming));
 }
 
 export function createGenerateScopedName(
@@ -241,16 +254,6 @@ export const MODULES_WORDS_UNKNOWN_ERROR =
   " in the inventory";
 
 export const MODULES_COMPOSE_ERROR = "minwind: unresolved CSS Modules composes";
-
-export const MODULES_QUOTES_ERROR =
-  'minwind: naming.strategy "quotes" is not supported with the CSS Modules' +
-  " engine";
-
-export function assertModulesQuotes(naming: NamingConfig | undefined): void {
-  if (naming !== undefined && naming.strategy === "quotes") {
-    throw new Error(MODULES_QUOTES_ERROR);
-  }
-}
 
 function skipDirectory(name: string): boolean {
   return SKIP_DIRECTORY_NAMES.has(name) || name.startsWith("dist");
@@ -513,6 +516,7 @@ export function createModuleNameRegistry(
   reserved?: ReadonlySet<string>,
   exclusions?: ExclusionConfig,
 ): NameRegistry {
+  const hasher = resolveHasher(naming);
   const keys = inventory.locals.map(function (entry) {
     return entry.key;
   });
@@ -522,8 +526,9 @@ export function createModuleNameRegistry(
     universe,
     sourceTokens,
     exclusions,
+    hash: hasher,
   });
-  if (naming === undefined || naming.strategy !== "words") {
+  if (!isThemedNaming(naming)) {
     return registry;
   }
   const renamedTokens = registry.entries().map(function (entry) {
@@ -540,7 +545,7 @@ export function createModuleNameRegistry(
     sourceTokens,
     exclusions,
     hash: function (token: string): string {
-      return names.get(token) ?? hashClassName(token);
+      return names.get(token) ?? hasher(token);
     },
   });
   registry.assertBijection();
@@ -554,7 +559,7 @@ export function prepareModulesNaming(
   exclusions?: ExclusionConfig,
 ): { inventory: ModuleInventory; registry: NameRegistry } {
   const inventory = collectModuleInventory(root);
-  if (naming !== undefined && naming.strategy === "words") {
+  if (isThemedNaming(naming)) {
     assertWordsInventory(inventory);
   }
   return {

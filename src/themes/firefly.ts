@@ -1,4 +1,4 @@
-// Copy into minwind({ naming: { strategy: "words", vocabulary } }).
+// Built-in words theme. Use naming: { strategy: "words", theme: "firefly" }.
 // Order is prominence: the first words land on the document shell.
 
 export const FIREFLY_VOCABULARY: ReadonlyArray<string> = [

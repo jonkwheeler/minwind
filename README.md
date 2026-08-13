@@ -111,10 +111,7 @@ Run the normal production build. The plugin does nothing during development.
 minwind({
   mode: "morph",
   engines: ["css-modules"],
-  naming: {
-    strategy: "words",
-    vocabulary: ["quill", "willow", "ember", "lark"],
-  },
+  naming: { strategy: "words", theme: "star-wars" },
 });
 ```
 
@@ -128,10 +125,8 @@ CSS Modules morph owns Vite `css.modules.generateScopedName` so `styles.foo`
 PostCSS Modules. Vite Lightning CSS Modules is unsupported and fails the build
 when the Modules engine is enabled. Themed `words` naming needs a complete
 Modules inventory; SCSS Modules + `words` needs the optional `sass` peer.
-
-`quotes` naming is a hard error when the CSS Modules engine is on. Use `hash`
-or `words`. For webpack/rspack `getLocalIdent` wiring, including dual-stack
-collision, see [webpack and rspack](#webpack-and-rspack).
+For webpack/rspack `getLocalIdent` wiring, including dual-stack collision,
+see [webpack and rspack](#webpack-and-rspack).
 
 ## webpack and rspack
 
@@ -210,7 +205,6 @@ CSS/SCSS Modules are supported on apply for bundlers without a name-generator
 hook (Turbopack). Pass `--engines css-modules` (or `tailwind,css-modules`).
 Apply proves Module names from CSS Module JS export maps, then rewrites those
 proven bundler names in JS, CSS, and HTML. Unprovable strings stay original.
-`--naming quotes` with the Modules engine is a hard error.
 
 ```text
 minwind apply <build-directory> [options]
@@ -220,17 +214,26 @@ minwind apply <build-directory> [options]
 --mode morph|compress  morph = rename only; compress = rename + consolidation
 --no-consolidate       Alias for --mode morph
 --engines <ids>        Comma-separated engines (default: tailwind)
---naming hash|words    Name strategy (default: hash). quotes is rejected when
-                       css-modules is on
---vocabulary <file>    JSON array of strings; required for --naming words
+--naming hash|words|quotes|<dialect>
+                       Name strategy (default: hash). Dialect ids:
+                       boston, australia, texas, england, scotland,
+                       ireland, wales, newyork, canada, savannah,
+                       ghetto, degenerate, emojis
+--hash-length <n>      Hash name length (default 4, minimum 4)
+--theme <id>           Built-in words pack (star-wars, klingon, …)
+--vocabulary <file>    JSON array of strings; custom words list
+--quotes <file>        JSON array of sentences; implies quotes naming
 --dry-run              Report the result without changing the build
 ```
 
 Tailwind-only apply without `--naming` still uses stable hash names. Modules
-apply accepts `hash` or `words` (`--vocabulary` is required for `words`).
+apply accepts `hash`, `words`, `quotes`, or a dialect id. `--theme` or
+`--vocabulary` for `words`; `--quotes` for `quotes`.
 
 ```bash
+npx minwind apply out --root . --engines css-modules --naming words --theme star-wars
 npx minwind apply out --root . --engines css-modules --naming words --vocabulary words.json
+npx minwind apply out --naming boston
 ```
 
 ## Verify the result
@@ -264,15 +267,34 @@ apply fixture (`test/fixtures/turbopack-modules-site`), not by `pnpm compare`.
 
 The default strategy uses stable four-character content hashes. An unchanged
 Tailwind token keeps the same name across builds, which preserves long-term
-caching.
-
-You can instead provide a vocabulary or quote corpus:
+caching. Raise `length` when you want more collision headroom; the minimum is 4.
 
 ```ts
 minwind({
+  naming: { strategy: "hash", length: 6 },
+});
+```
+
+You can instead deal names from a built-in theme. Tokens the pack cannot cover
+fall back to the same content-hash names (including `length`):
+
+```ts
+minwind({
+  naming: { strategy: "words", theme: "star-wars", length: 6 },
+});
+```
+
+Or pass your own list. `theme` and `vocabulary` cannot both be set; to extend a
+pack, spread it into `vocabulary`:
+
+```ts
+import { THEMES } from "minwind";
+
+minwind({
   naming: {
     strategy: "words",
-    vocabulary: ["quill", "willow", "ember", "lark", "glen", "harbor"],
+    vocabulary: [...THEMES["star-wars"], "myword"],
+    length: 6,
   },
 });
 ```
@@ -280,18 +302,130 @@ minwind({
 Available strategies:
 
 - `hash` — stable content hashes; the default and smallest predictable option.
-- `words` — generated names drawn from your vocabulary.
-- `quotes` — class lists can spell fragments from a quote corpus, then fall
-  back to vocabulary words and hashes. Not supported with the CSS Modules
-  engine.
+- `words` — generated names drawn from a built-in `theme` or a custom
+  `vocabulary`, then hash fallback.
+- `quotes` — sentences split into CSS idents and dealt in quote order. With
+  a prominence manifest, the document shell wears the start of the line.
+  Leftover tokens still hash. Personality, not extra compression. See
+  [Subliminal messages](#subliminal-messages).
+- `boston`, `australia`, `texas`, `england`, `scotland`, `ireland`,
+  `wales`, `newyork`, `canada`, `savannah`, `ghetto`, `degenerate`,
+  `emojis` — keep the Tailwind hyphen string (emoji drops hyphens) and
+  respell each word in that mouth. `hover:items-center` becomes
+  `hovah:items-centah`. Abbreviations expand (`px-6` → `pee-ecks-6`).
+  Emoji concatenates (`bg-red-500` → `🎨🔴5️⃣0️⃣0️⃣`). Not a `words`
+  pack. Two tokens that land on the same ident fail the build.
 
-Copy-paste vocabularies for Star Wars, Star Trek, Super Mario, Zelda, The
-Witcher, Zoolander, and other cult packs are in
-[examples/themes](./examples/themes).
+```ts
+minwind({
+  naming: { strategy: "boston" },
+});
+```
+
+```html
+<!-- source -->
+<div class="mx-auto flex px-6 items-center hover:border"></div>
+
+<!-- boston -->
+<div class="em-ecks-auto flex pee-ecks-6 items-centah hovah:bawdah"></div>
+
+<!-- emojis -->
+<div class="↔️🚗 💪 ↔️6️⃣ 🧺🎯 🛸:🖼️"></div>
+```
+
+Built-in theme ids: `star-wars`, `huttese`, `mandoa`, `aurebesh`, `star-trek`,
+`klingon`, `game-of-thrones`, `high-valyrian`, `dothraki`, `stranger-things`,
+`twin-peaks`, `buffy`, `x-files`, `cowboy-bebop`, `mr-robot`,
+`battlestar-galactica`, `lost`, `severance`, `dark`, `the-expanse`,
+`rick-and-morty`, `super-mario`, `zelda`, `witcher`, `zoolander`, `lebowski`,
+`portal`, `dune`, `princess-bride`, `office-space`, `firefly`, `disney`,
+`pirates`, `classic-cartoon`, `pokemon`, `lotr`, `harry-potter`, `futurama`.
+See [examples/themes](./examples/themes) for what the shell might read.
 
 Names are sanitized as CSS identifiers and never collide with excluded classes.
-Quote words participate only in multi-token lists; isolated words otherwise
-read like fragments detached from their sentence.
+
+### Bring your own names
+
+Built-in packs are a demo. The interesting DOM is yours.
+
+A golf major can ship player names and course slang (`augusta`, `amen`,
+`albatross`). Any sport can do the same with roster, venues, and broadcast
+calls. A brand can use product names and the jokes only that team tells. If
+you are building something people will inspect, the class list should be
+the thing they screenshot.
+
+```ts
+minwind({
+  naming: {
+    strategy: "words",
+    vocabulary: ["augusta", "amen", "albatross", "birdie", "fore"],
+    prominence: loadProminence(),
+  },
+});
+```
+
+Speeches and slogans use `quotes` the same way. See
+[Subliminal messages](#subliminal-messages) for the inspector recipe and
+the one-token-one-name limits.
+
+Safe-for-work is optional. The list that goes viral is the one a stranger
+would send to the group chat with "I can't believe this is in the DOM."
+Innuendo, cursed fandom, locker-room vernacular, an in-joke legal would
+sweat: those belong. Generic words like `button` and `hero` do not.
+
+Drop [examples/themes/SKILL.md](./examples/themes/SKILL.md) into a project's
+`.cursor/skills/` (or paste it as a prompt) and ask the agent for a list.
+Every entry has to be a CSS identifier (`/^(?:[a-z][a-z0-9]*|_[a-z0-9]+)$/`),
+unique, and at least 40 words so leftovers can still hash. Digit-leading
+words get a leading underscore (`2b` becomes `_2b`).
+
+### Subliminal messages
+
+Class names are not painted as text. Visitors see the page. Anyone who
+opens Inspect or views source sees your words instead of `flex` and
+`px-4`. The names are in the HTML. Treat it as an Easter egg.
+
+**A line of speech.** Use `quotes` and a prominence manifest so the first
+unique utilities on the document shell take the first unique words of the
+line:
+
+```ts
+minwind({
+  naming: {
+    strategy: "quotes",
+    quotes: [
+      "Ask not what your country can do for you. Ask what you can do for your country.",
+    ],
+    prominence: loadProminence(),
+  },
+});
+```
+
+```bash
+MINWIND=off pnpm build
+npx minwind prominence .output/public
+pnpm build
+```
+
+Open the production page, Inspect, and read `<html>` plus the next few
+class-bearing elements.
+
+Those elements received the start of the quote. They will not always
+spell it from left to right. Each original utility still maps to one
+name everywhere, and a class attribute still lists names in source
+order. Duplicate quote words are used once (`you` in that speech is one
+ident). Leftover utilities hash. Raise `--window` if the first 32
+class-bearing elements do not expose enough unique tokens for the line.
+
+A nested shell where each node introduces a new utility gets closer to a
+readable sequence. A long class list on `<html>` will mix the words. For
+a punchline that survives any neighbor, use `words` and put the screenshot
+names first in `vocabulary`. That is the usual Easter egg: every inspected
+node is on-theme, none of them have to spell.
+
+The Vite and webpack plugins take `prominence`. `minwind apply` deals
+`quotes` without that manifest, so the most frequent tokens get the start
+of the line rather than the inspector's first nodes.
 
 ### Prominence-aware words
 
@@ -321,15 +455,14 @@ function loadProminence(): Record<string, number> | undefined {
 minwind({
   naming: {
     strategy: "words",
-    vocabulary: MY_VOCABULARY,
+    theme: "star-wars",
     prominence: loadProminence(),
   },
 });
 ```
 
 See the [Spaceballs naming case study](./docs/spaceballs-case-study.md) for a
-real deployment, including why themed words worked better than quotes and how
-the prominence window affected compression.
+real deployment, including how the prominence window affected compression.
 
 ## Consolidation
 
