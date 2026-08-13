@@ -214,21 +214,22 @@ minwind apply <build-directory> [options]
 --mode morph|compress  morph = rename only; compress = rename + consolidation
 --no-consolidate       Alias for --mode morph
 --engines <ids>        Comma-separated engines (default: tailwind)
---naming hash|words|quotes|<dialect>
+--naming hash|words|quotes|maps|<dialect>
                        Name strategy (default: hash). Dialect ids:
                        boston, australia, texas, england, scotland,
                        ireland, wales, newyork, canada, savannah,
-                       ghetto, degenerate, emojis
+                       ghetto, degenerate, emojis, yorkshire
 --hash-length <n>      Hash name length (default 4, minimum 4)
 --theme <id>           Built-in words pack (star-wars, klingon, …)
 --vocabulary <file>    JSON array of strings; custom words list
 --quotes <file>        JSON array of sentences; implies quotes naming
+--maps <file>          JSON object of word→spelling; implies maps naming
 --dry-run              Report the result without changing the build
 ```
 
 Tailwind-only apply without `--naming` still uses stable hash names. Modules
-apply accepts `hash`, `words`, `quotes`, or a dialect id. `--theme` or
-`--vocabulary` for `words`; `--quotes` for `quotes`.
+apply accepts `hash`, `words`, `quotes`, `maps`, or a dialect id. `--theme` or
+`--vocabulary` for `words`; `--quotes` for `quotes`; `--maps` for `maps`.
 
 ```bash
 npx minwind apply out --root . --engines css-modules --naming words --theme star-wars
@@ -310,15 +311,23 @@ Available strategies:
   [Subliminal messages](#subliminal-messages).
 - `boston`, `australia`, `texas`, `england`, `scotland`, `ireland`,
   `wales`, `newyork`, `canada`, `savannah`, `ghetto`, `degenerate`,
-  `emojis` — keep the Tailwind hyphen string (emoji drops hyphens) and
-  respell each word in that mouth. `hover:items-center` becomes
-  `hovah:items-centah`. Abbreviations expand (`px-6` → `pee-ecks-6`).
-  Emoji concatenates (`bg-red-500` → `🎨🔴5️⃣0️⃣0️⃣`). Not a `words`
-  pack. Two tokens that land on the same ident fail the build.
+  `emojis`, `yorkshire` — keep the Tailwind hyphen string (emoji drops
+  hyphens) and respell each word in that mouth. `hover:items-center`
+  becomes `hovah:items-centah`. Yorkshire `right-4` is `reet-4`.
+  Abbreviations expand (`px-6` → `pee-ecks-6`). Emoji concatenates
+  (`bg-red-500` → `🎨🔴5️⃣0️⃣0️⃣`). Not a `words` pack. Two tokens that
+  land on the same ident fail the build.
+- `maps` — the same hyphen-preserving hasher with a site-supplied
+  word→spelling table. `{ flex: "muscles" }` turns `flex-col` into
+  `muscles-col`. Unmapped runs stay themselves. Not a `words` pack.
 
 ```ts
 minwind({
   naming: { strategy: "boston" },
+});
+
+minwind({
+  naming: { strategy: "maps", maps: { flex: "muscles" } },
 });
 ```
 

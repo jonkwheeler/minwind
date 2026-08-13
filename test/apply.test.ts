@@ -149,7 +149,33 @@ describe("parseArgs mode flags", function () {
     assert.deepStrictEqual(options.naming, { strategy: "boston" });
   });
 
-  it("rejects --naming boston together with --theme", function () {
+  it("accepts --naming yorkshire", function () {
+    const options = parseArgs(["/tmp/out", "--naming", "yorkshire"]);
+    assert.deepStrictEqual(options.naming, { strategy: "yorkshire" });
+  });
+
+  it("loads maps from --maps", function () {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minwind-maps-"));
+    const mapsFile = path.join(dir, "maps.json");
+    fs.writeFileSync(mapsFile, JSON.stringify({ flex: "muscles" }));
+    try {
+      const options = parseArgs([
+        "/tmp/out",
+        "--naming",
+        "maps",
+        "--maps",
+        mapsFile,
+      ]);
+      assert.deepStrictEqual(options.naming, {
+        strategy: "maps",
+        maps: { flex: "muscles" },
+      });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects --naming maps without --maps", function () {
     const exit = process.exit;
     const writes: Array<string> = [];
     const write = process.stderr.write;
@@ -162,9 +188,37 @@ describe("parseArgs mode flags", function () {
     } as typeof process.exit;
     try {
       assert.throws(function () {
-        parseArgs(["/tmp/out", "--naming", "boston", "--theme", "star-wars"]);
+        parseArgs(["/tmp/out", "--naming", "maps"]);
       }, /exit 1/);
-      assert.ok(writes.join("").includes("boston"));
+      assert.ok(writes.join("").includes("maps"));
+    } finally {
+      process.exit = exit;
+      process.stderr.write = write;
+    }
+  });
+
+  it("rejects --naming yorkshire together with --theme", function () {
+    const exit = process.exit;
+    const writes: Array<string> = [];
+    const write = process.stderr.write;
+    process.stderr.write = function (chunk: string | Uint8Array) {
+      writes.push(String(chunk));
+      return true;
+    } as typeof process.stderr.write;
+    process.exit = function (code?: number): never {
+      throw new Error(`exit ${code}`);
+    } as typeof process.exit;
+    try {
+      assert.throws(function () {
+        parseArgs([
+          "/tmp/out",
+          "--naming",
+          "yorkshire",
+          "--theme",
+          "star-wars",
+        ]);
+      }, /exit 1/);
+      assert.ok(writes.join("").includes("yorkshire"));
     } finally {
       process.exit = exit;
       process.stderr.write = write;

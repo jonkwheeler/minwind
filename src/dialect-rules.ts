@@ -219,6 +219,10 @@ function ghettoize(word: string): string {
   ]);
 }
 
+function yorkshireize(word: string): string {
+  return applyPairs(word, [["ight", "eet"]]);
+}
+
 export function applyRules(word: string, dialect: DialectId): string {
   if (dialect === "boston") {
     return bostonize(word);
@@ -255,6 +259,9 @@ export function applyRules(word: string, dialect: DialectId): string {
   }
   if (dialect === "degenerate") {
     return degenerateize(word);
+  }
+  if (dialect === "yorkshire") {
+    return yorkshireize(word);
   }
   return word;
 }

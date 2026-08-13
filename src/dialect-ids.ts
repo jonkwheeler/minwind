@@ -12,6 +12,7 @@ export const DIALECT_IDS = [
   "ghetto",
   "degenerate",
   "emojis",
+  "yorkshire",
 ] as const;
 
 export type DialectId = (typeof DIALECT_IDS)[number];

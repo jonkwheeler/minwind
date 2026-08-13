@@ -13,9 +13,15 @@ export {
   vocabularyFromQuotes,
   isThemedNaming,
   isDialectNaming,
+  isMapsNaming,
 } from "./naming.js";
 export type { DialectId } from "./dialect.js";
-export { DIALECT_IDS, dialectClassName, isDialectId } from "./dialect.js";
+export {
+  DIALECT_IDS,
+  createMapsHasher,
+  dialectClassName,
+  isDialectId,
+} from "./dialect.js";
 export type { ThemeId } from "./themes/index.js";
 export {
   THEME_IDS,

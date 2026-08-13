@@ -13,12 +13,12 @@ import {
 import {
   hashLengthOf,
   isDialectNaming,
+  isMapsNaming,
   isThemedNaming,
   resolveHasher,
   resolveNaming,
   type NamingConfig,
 } from "../naming.js";
-import { dialectClassName } from "../dialect.js";
 import { compareCodeUnits } from "../util.js";
 
 // CSS Modules identity: file-qualified locals, hashed on the fly for the
@@ -173,8 +173,8 @@ function lookupScopedName(
     return name;
   }
   const key = moduleLocalKey(root, filename, local);
-  if (isDialectNaming(options.naming)) {
-    return dialectClassName(key, options.naming.strategy);
+  if (isDialectNaming(options.naming) || isMapsNaming(options.naming)) {
+    return resolveHasher(options.naming)(key);
   }
   return hashModuleLocal(root, filename, local, hashLengthOf(options.naming));
 }

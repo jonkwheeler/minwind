@@ -3488,6 +3488,9 @@ export function specialFor(word: string, dialect: DialectId): string | null {
   if (dialect === "degenerate" && DEGENERATE[word]) {
     return DEGENERATE[word];
   }
+  if (dialect === "yorkshire") {
+    return null;
+  }
   const row = ROWS[word];
   if (!row) {
     return null;

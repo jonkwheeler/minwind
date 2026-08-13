@@ -1,6 +1,11 @@
 import assert from "node:assert";
 import { describe, it } from "node:test";
-import { DIALECT_IDS, dialectClassName, isDialectId } from "../src/dialect.js";
+import {
+  DIALECT_IDS,
+  createMapsHasher,
+  dialectClassName,
+  isDialectId,
+} from "../src/dialect.js";
 import { createNameRegistry } from "../src/names.js";
 
 describe("isDialectId", function () {
@@ -16,7 +21,7 @@ describe("isDialectId", function () {
     assert.strictEqual(isDialectId("quotes"), false);
     assert.strictEqual(isDialectId("australian"), false);
     assert.strictEqual(isDialectId("cockney"), false);
-    assert.strictEqual(isDialectId("yorkshire"), false);
+    assert.strictEqual(isDialectId("maps"), false);
   });
 });
 
@@ -99,6 +104,56 @@ describe("dialectClassName emojis", function () {
   });
 });
 
+describe("dialectClassName yorkshire", function () {
+  it("respells right-4 as reet-4", function () {
+    assert.strictEqual(dialectClassName("right-4", "yorkshire"), "reet-4");
+    assert.strictEqual(dialectClassName("right-0", "yorkshire"), "reet-0");
+  });
+
+  it("keeps hover: on hover:flex", function () {
+    assert.strictEqual(
+      dialectClassName("hover:flex", "yorkshire"),
+      "hover:flex",
+    );
+  });
+
+  it("turns ight into eet", function () {
+    assert.strictEqual(
+      dialectClassName("font-light", "yorkshire"),
+      "font-leet",
+    );
+    assert.strictEqual(
+      dialectClassName("brightness-100", "yorkshire"),
+      "breetness-100",
+    );
+  });
+});
+
+describe("maps hasher", function () {
+  it("respells mapped runs and keeps hyphens", function () {
+    const hash = createMapsHasher({ flex: "muscles" });
+    assert.strictEqual(hash("flex-col"), "muscles-col");
+    assert.strictEqual(hash("p-4"), "p-4");
+  });
+
+  it("applies maps to bg in bg-red-500", function () {
+    const hash = createMapsHasher({ bg: "paint" });
+    assert.strictEqual(hash("bg-red-500"), "paint-red-500");
+  });
+
+  it("rejects an empty maps object", function () {
+    assert.throws(function () {
+      createMapsHasher({});
+    }, /non-empty maps/);
+  });
+
+  it("rejects conflicting spellings for the same run", function () {
+    assert.throws(function () {
+      createMapsHasher({ Flex: "muscles", flex: "biceps" });
+    }, /conflicting spellings/);
+  });
+});
+
 describe("dialectClassName collisions", function () {
   it("registers hyphenated dialect names", function () {
     const registry = createNameRegistry({
@@ -124,6 +179,17 @@ describe("dialectClassName collisions", function () {
         hash: function (token: string): string {
           return dialectClassName(token, "boston");
         },
+      });
+    }, /name collision/);
+  });
+
+  it("fails the registry when two maps tokens land on one ident", function () {
+    const hash = createMapsHasher({ a: "same", b: "same" });
+    assert.throws(function () {
+      createNameRegistry({
+        universe: new Set(["a-1", "b-1"]),
+        sourceTokens: new Set(["a-1", "b-1"]),
+        hash,
       });
     }, /name collision/);
   });

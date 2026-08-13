@@ -1,4 +1,9 @@
-import { createDialectHasher, isDialectId, type DialectId } from "./dialect.js";
+import {
+  createDialectHasher,
+  createMapsHasher,
+  isDialectId,
+  type DialectId,
+} from "./dialect.js";
 import { createHasher, hashClassName, NAME_PATTERN } from "./names.js";
 import { vocabularyForTheme, type ThemeId } from "./themes/index.js";
 import { compareCodeUnits } from "./util.js";
@@ -14,6 +19,11 @@ import { compareCodeUnits } from "./util.js";
 export type NamingConfig =
   | { strategy: "hash"; length?: number }
   | { strategy: DialectId }
+  | {
+      strategy: "maps";
+      // Word → spelling for alphanumeric runs (`flex` in `flex-col`).
+      maps: Readonly<Record<string, string>>;
+    }
   | {
       strategy: "words";
       // Built-in pack id (`star-wars`, `klingon`, …). Exactly one of
@@ -62,14 +72,48 @@ export function isDialectNaming(
   return config !== undefined && isDialectId(config.strategy);
 }
 
+export function isMapsNaming(
+  config: NamingConfig | undefined,
+): config is { strategy: "maps"; maps: Readonly<Record<string, string>> } {
+  return config !== undefined && config.strategy === "maps";
+}
+
+export function assertMapsConfig(config: NamingConfig): void {
+  if (!isMapsNaming(config)) return;
+  assertBannedNamingFields(config, "maps", [
+    "theme",
+    "vocabulary",
+    "quotes",
+    "prominence",
+    "length",
+  ]);
+  if (config.maps === undefined) {
+    throw new Error('minwind: naming.strategy "maps" requires maps');
+  }
+}
+
 export function assertDialectConfig(config: NamingConfig): void {
   if (!isDialectNaming(config)) return;
+  assertBannedNamingFields(config, config.strategy, [
+    "theme",
+    "vocabulary",
+    "quotes",
+    "prominence",
+    "length",
+    "maps",
+  ]);
+}
+
+function assertBannedNamingFields(
+  config: NamingConfig,
+  strategy: string,
+  banned: ReadonlyArray<string>,
+): void {
   const record = config as unknown as Record<string, unknown>;
-  const banned = ["theme", "vocabulary", "quotes", "prominence", "length"];
   for (const key of banned) {
     if (record[key] !== undefined) {
       throw new Error(
-        `minwind: naming.strategy "${config.strategy}" cannot set ${key}`,
+        `minwind: naming.strategy "${strategy}" cannot set ${key}`,
       );
     }
   }
@@ -78,7 +122,9 @@ export function assertDialectConfig(config: NamingConfig): void {
 export function hashLengthOf(
   config: NamingConfig | undefined,
 ): number | undefined {
-  if (config === undefined || isDialectNaming(config)) return undefined;
+  if (config === undefined || isDialectNaming(config) || isMapsNaming(config)) {
+    return undefined;
+  }
   return config.length;
 }
 
@@ -88,6 +134,10 @@ export function resolveHasher(
   if (config !== undefined && isDialectNaming(config)) {
     assertDialectConfig(config);
     return createDialectHasher(config.strategy);
+  }
+  if (config !== undefined && isMapsNaming(config)) {
+    assertMapsConfig(config);
+    return createMapsHasher(config.maps);
   }
   return createHasher(hashLengthOf(config));
 }

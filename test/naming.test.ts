@@ -4,6 +4,7 @@ import { hashClassName } from "../src/names.js";
 import { dialectClassName } from "../src/dialect.js";
 import {
   assertDialectConfig,
+  assertMapsConfig,
   resolveHasher,
   resolveNaming,
   type NamingList,
@@ -54,6 +55,34 @@ describe("dialect naming hasher", function () {
       resolveHasher({ strategy: "texas" })("right-4"),
       dialectClassName("right-4", "texas"),
     );
+  });
+
+  it("resolveHasher yorkshire respells right-4", function () {
+    assert.strictEqual(
+      resolveHasher({ strategy: "yorkshire" })("right-4"),
+      "reet-4",
+    );
+  });
+});
+
+describe("maps naming hasher", function () {
+  it("resolveHasher applies the site map", function () {
+    const hash = resolveHasher({
+      strategy: "maps",
+      maps: { flex: "muscles" },
+    });
+    assert.strictEqual(hash("flex-col"), "muscles-col");
+    assert.strictEqual(hash("p-4"), "p-4");
+  });
+
+  it("rejects prominence on maps", function () {
+    assert.throws(function () {
+      assertMapsConfig({
+        strategy: "maps",
+        maps: { flex: "muscles" },
+        prominence: { flex: 0 },
+      } as never);
+    }, /cannot set prominence/);
   });
 });
 

@@ -11,11 +11,11 @@ Tailwind-only Vite, webpack, and `minwind apply` defaults stay
 
 - CSS/SCSS Modules themed morph (`hash` or `words`) on Vite, webpack/rspack,
   and `minwind apply` (Turbopack and other apply-class bundlers).
-- `minwind apply --engines css-modules` with `--naming hash|words|quotes`
+- `minwind apply --engines css-modules` with `--naming hash|words|quotes|maps`
   or a dialect id (`boston`, `australia`, `texas`, `england`, `scotland`,
   `ireland`, `wales`, `newyork`, `canada`, `savannah`, `ghetto`,
-  `degenerate`, `emojis`), plus
-  `--theme <id>`, `--vocabulary <file>`, and `--quotes <file>`.
+  `degenerate`, `emojis`, `yorkshire`), plus
+  `--theme <id>`, `--vocabulary <file>`, `--quotes <file>`, and `--maps <file>`.
 - Dual-stack collision space so a Module local named `flex` and Tailwind
   `flex` cannot share a generated name.
 - `MinwindWebpackPlugin.collision` for `createGetLocalIdent(..., { collision })`.
@@ -32,10 +32,14 @@ Tailwind-only Vite, webpack, and `minwind apply` defaults stay
   CSS idents (prominence shell first). Personality, not extra compression.
 - `naming.strategy` dialect ids `boston`, `australia`, `texas`, `england`,
   `scotland`, `ireland`, `wales`, `newyork`, `canada`, `savannah`,
-  `ghetto`, `degenerate`, `emojis`: keep Tailwind hyphens and colons
-  (`hover:items-center` → `hovah:items-centah`). Abbreviations expand
-  (`p-4` → `pee-4`). Emoji drops hyphens (`bg-red-500` →
-  `🎨🔴5️⃣0️⃣0️⃣`). Collision fails the build. Not a `words` pack.
+  `ghetto`, `degenerate`, `emojis`, `yorkshire`: keep Tailwind hyphens and
+  colons (`hover:items-center` → `hovah:items-centah`). Yorkshire
+  `right-4` → `reet-4`. Abbreviations expand (`p-4` → `pee-4`). Emoji
+  drops hyphens (`bg-red-500` → `🎨🔴5️⃣0️⃣0️⃣`). Collision fails the
+  build. Not a `words` pack.
+- `naming.strategy: "maps"` / `--maps <file>`: site-supplied word→spelling
+  table on the dialect hasher (`flex-col` → `muscles-col` when
+  `flex` → `muscles`). Unmapped runs stay themselves.
 
 ### Breaking
 
