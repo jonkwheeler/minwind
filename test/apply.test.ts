@@ -154,6 +154,11 @@ describe("parseArgs mode flags", function () {
     assert.deepStrictEqual(options.naming, { strategy: "yorkshire" });
   });
 
+  it("accepts --naming geordie", function () {
+    const options = parseArgs(["/tmp/out", "--naming", "geordie"]);
+    assert.deepStrictEqual(options.naming, { strategy: "geordie" });
+  });
+
   it("loads maps from --maps", function () {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minwind-maps-"));
     const mapsFile = path.join(dir, "maps.json");

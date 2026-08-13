@@ -130,6 +130,66 @@ describe("dialectClassName yorkshire", function () {
   });
 });
 
+describe("dialectClassName newzealand", function () {
+  it("turns sticky and clip into stucky and clup", function () {
+    assert.strictEqual(dialectClassName("sticky", "newzealand"), "stucky");
+    assert.strictEqual(dialectClassName("clip", "newzealand"), "clup");
+  });
+
+  it("keeps hover: on hover:flex", function () {
+    assert.strictEqual(
+      dialectClassName("hover:flex", "newzealand"),
+      "hover:flex",
+    );
+  });
+});
+
+describe("dialectClassName jamaica", function () {
+  it("turns flex-row and both into flex-roh and bod", function () {
+    assert.strictEqual(dialectClassName("flex-row", "jamaica"), "flex-roh");
+    assert.strictEqual(dialectClassName("both", "jamaica"), "bod");
+  });
+
+  it("respells hover:flex as hova:flex", function () {
+    assert.strictEqual(dialectClassName("hover:flex", "jamaica"), "hova:flex");
+  });
+});
+
+describe("dialectClassName appalachia", function () {
+  it("respells right-4 as raht-4", function () {
+    assert.strictEqual(dialectClassName("right-4", "appalachia"), "raht-4");
+  });
+
+  it("turns container into contayner", function () {
+    assert.strictEqual(
+      dialectClassName("container", "appalachia"),
+      "contayner",
+    );
+  });
+
+  it("keeps hover: on hover:flex", function () {
+    assert.strictEqual(
+      dialectClassName("hover:flex", "appalachia"),
+      "hover:flex",
+    );
+  });
+});
+
+describe("dialectClassName geordie", function () {
+  it("turns flex-row and small into flex-roo and smaa", function () {
+    assert.strictEqual(dialectClassName("flex-row", "geordie"), "flex-roo");
+    assert.strictEqual(dialectClassName("small", "geordie"), "smaa");
+  });
+
+  it("respells right-4 as reet-4", function () {
+    assert.strictEqual(dialectClassName("right-4", "geordie"), "reet-4");
+  });
+
+  it("keeps hover: on hover:flex", function () {
+    assert.strictEqual(dialectClassName("hover:flex", "geordie"), "hover:flex");
+  });
+});
+
 describe("maps hasher", function () {
   it("respells mapped runs and keeps hyphens", function () {
     const hash = createMapsHasher({ flex: "muscles" });

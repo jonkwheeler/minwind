@@ -218,7 +218,8 @@ minwind apply <build-directory> [options]
                        Name strategy (default: hash). Dialect ids:
                        boston, australia, texas, england, scotland,
                        ireland, wales, newyork, canada, savannah,
-                       ghetto, degenerate, emojis, yorkshire
+                       ghetto, degenerate, emojis, yorkshire,
+                       newzealand, jamaica, appalachia, geordie
 --hash-length <n>      Hash name length (default 4, minimum 4)
 --theme <id>           Built-in words pack (star-wars, klingon, …)
 --vocabulary <file>    JSON array of strings; custom words list
@@ -313,9 +314,12 @@ Available strategies:
   [Subliminal messages](#subliminal-messages).
 - `boston`, `australia`, `texas`, `england`, `scotland`, `ireland`,
   `wales`, `newyork`, `canada`, `savannah`, `ghetto`, `degenerate`,
-  `emojis`, `yorkshire` — keep the Tailwind hyphen string (emoji drops
+  `emojis`, `yorkshire`, `newzealand`, `jamaica`, `appalachia`,
+  `geordie` — keep the Tailwind hyphen string (emoji drops
   hyphens) and respell each word in that mouth. `hover:items-center`
   becomes `hovah:items-centah`. Yorkshire `right-4` is `reet-4`.
+  New Zealand `sticky` is `stucky`. Jamaica `flex-row` is `flex-roh`.
+  Appalachia `right-4` is `raht-4`. Geordie `flex-row` is `flex-roo`.
   Abbreviations expand (`px-6` → `pee-ecks-6`). Emoji concatenates
   (`bg-red-500` → `🎨🔴5️⃣0️⃣0️⃣`). Not a `words` pack. Two tokens that
   land on the same ident fail the build.

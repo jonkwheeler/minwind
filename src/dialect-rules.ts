@@ -223,6 +223,38 @@ function yorkshireize(word: string): string {
   return applyPairs(word, [["ight", "eet"]]);
 }
 
+function newzealandize(word: string): string {
+  return applyPairs(word, [
+    ["ish", "ush"],
+    ["ick", "uck"],
+    ["ip", "up"],
+  ]);
+}
+
+function jamaicaize(word: string): string {
+  return applyPairs(word, [
+    ["th", "d"],
+    ["ow", "oh"],
+    ["er", "a"],
+  ]);
+}
+
+function appalachiaize(word: string): string {
+  return applyPairs(word, [
+    ["ight", "aht"],
+    ["ain", "ayn"],
+  ]);
+}
+
+function geordieize(word: string): string {
+  return applyPairs(word, [
+    ["ight", "eet"],
+    ["ou", "oo"],
+    ["ow", "oo"],
+    ["all", "aa"],
+  ]);
+}
+
 export function applyRules(word: string, dialect: DialectId): string {
   if (dialect === "boston") {
     return bostonize(word);
@@ -262,6 +294,18 @@ export function applyRules(word: string, dialect: DialectId): string {
   }
   if (dialect === "yorkshire") {
     return yorkshireize(word);
+  }
+  if (dialect === "newzealand") {
+    return newzealandize(word);
+  }
+  if (dialect === "jamaica") {
+    return jamaicaize(word);
+  }
+  if (dialect === "appalachia") {
+    return appalachiaize(word);
+  }
+  if (dialect === "geordie") {
+    return geordieize(word);
   }
   return word;
 }

@@ -13,6 +13,10 @@ export const DIALECT_IDS = [
   "degenerate",
   "emojis",
   "yorkshire",
+  "newzealand",
+  "jamaica",
+  "appalachia",
+  "geordie",
 ] as const;
 
 export type DialectId = (typeof DIALECT_IDS)[number];

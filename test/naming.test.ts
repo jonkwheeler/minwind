@@ -64,6 +64,25 @@ describe("dialect naming hasher", function () {
     );
   });
 
+  it("resolveHasher pins the four new mouths", function () {
+    assert.strictEqual(
+      resolveHasher({ strategy: "newzealand" })("sticky"),
+      "stucky",
+    );
+    assert.strictEqual(
+      resolveHasher({ strategy: "jamaica" })("flex-row"),
+      "flex-roh",
+    );
+    assert.strictEqual(
+      resolveHasher({ strategy: "appalachia" })("right-4"),
+      "raht-4",
+    );
+    assert.strictEqual(
+      resolveHasher({ strategy: "geordie" })("flex-row"),
+      "flex-roo",
+    );
+  });
+
   it("overlays maps onto a dialect mouth", function () {
     const hash = resolveHasher({
       strategy: "boston",
