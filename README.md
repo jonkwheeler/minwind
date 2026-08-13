@@ -219,7 +219,8 @@ minwind apply <build-directory> [options]
                        boston, australia, texas, england, scotland,
                        ireland, wales, newyork, canada, savannah,
                        ghetto, degenerate, emojis, yorkshire,
-                       newzealand, jamaica, appalachia, geordie
+                       newzealand, jamaica, appalachia, geordie,
+                       piglatin
 --hash-length <n>      Hash name length (default 4, minimum 4)
 --hash-prefix <s>      Prepended to hash names (hash strategy only)
 --hash-alphabet <s>    Hash body characters (lowercase letters and digits)
@@ -341,12 +342,15 @@ Available strategies:
 - `boston`, `australia`, `texas`, `england`, `scotland`, `ireland`,
   `wales`, `newyork`, `canada`, `savannah`, `ghetto`, `degenerate`,
   `emojis`, `yorkshire`, `newzealand`, `jamaica`, `appalachia`,
-  `geordie` — keep the Tailwind hyphen string (emoji drops
+  `geordie`, `piglatin` — keep the Tailwind hyphen string (emoji drops
   hyphens) and respell each word in that mouth. `hover:items-center`
   becomes `hovah:items-centah`. Yorkshire `right-4` is `reet-4`.
   New Zealand `sticky` is `stucky`. Jamaica `flex-row` is `flex-roh`.
   Appalachia `right-4` is `raht-4`. Geordie `flex-row` is `flex-roo`.
-  Abbreviations expand (`px-6` → `pee-ecks-6`). Emoji concatenates
+  Pig Latin `flex-row` is `exflay-owray`. `hover:items-center` is
+  `overhay:itemsway-entercay`. Abbreviations expand (`px-6` → `pee-ecks-6`)
+  except pig Latin, which respells the letters (`px-6` → `pxay-6`). Emoji
+  concatenates
   (`bg-red-500` → `🎨🔴5️⃣0️⃣0️⃣`). Not a `words` pack. Two tokens that
   land on the same ident fail the build.
 - `maps` — the same hyphen-preserving hasher with a site-supplied
@@ -378,6 +382,11 @@ minwind({
 <!-- boston -->
 <div class="em-ecks-auto flex pee-ecks-6 items-centah hovah:bawdah"></div>
 
+<!-- piglatin -->
+<div
+  class="mxay-autoway exflay pxay-6 itemsway-entercay overhay:orderbay"
+></div>
+
 <!-- emojis -->
 <div class="↔️🚗 💪 ↔️6️⃣ 🧺🎯 🛸:🖼️"></div>
 ```
@@ -388,7 +397,8 @@ Built-in theme ids: `star-wars`, `huttese`, `mandoa`, `aurebesh`, `star-trek`,
 `battlestar-galactica`, `lost`, `severance`, `dark`, `the-expanse`,
 `rick-and-morty`, `super-mario`, `zelda`, `witcher`, `zoolander`, `lebowski`,
 `portal`, `dune`, `princess-bride`, `office-space`, `firefly`, `disney`,
-`pirates`, `classic-cartoon`, `pokemon`, `lotr`, `harry-potter`, `futurama`.
+`pirates`, `classic-cartoon`, `pokemon`, `lotr`, `harry-potter`, `futurama`,
+`lorem-ipsum`.
 See [examples/themes](./examples/themes) for what the shell might read.
 
 Names are sanitized as CSS identifiers and never collide with excluded classes.

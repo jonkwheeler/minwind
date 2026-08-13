@@ -190,6 +190,29 @@ describe("dialectClassName geordie", function () {
   });
 });
 
+describe("dialectClassName piglatin", function () {
+  it("moves a consonant cluster and keeps hyphens and colons", function () {
+    assert.strictEqual(dialectClassName("flex", "piglatin"), "exflay");
+    assert.strictEqual(
+      dialectClassName("flex-row", "piglatin"),
+      "exflay-owray",
+    );
+    assert.strictEqual(
+      dialectClassName("hover:items-center", "piglatin"),
+      "overhay:itemsway-entercay",
+    );
+  });
+
+  it("appends way when a run starts with a vowel", function () {
+    assert.strictEqual(dialectClassName("mx-auto", "piglatin"), "mxay-autoway");
+  });
+
+  it("appends ay when a run is all consonants", function () {
+    assert.strictEqual(dialectClassName("p-4", "piglatin"), "pay-4");
+    assert.strictEqual(dialectClassName("px-6", "piglatin"), "pxay-6");
+  });
+});
+
 describe("maps hasher", function () {
   it("respells mapped runs and keeps hyphens", function () {
     const hash = createMapsHasher({ flex: "muscles" });

@@ -64,6 +64,11 @@ describe("built-in theme vocabularies", function () {
     assert.strictEqual(vocabularyForTheme("star-wars")[0], "vader");
   });
 
+  it("vocabularyForTheme returns the lorem-ipsum pack", function () {
+    assert.strictEqual(vocabularyForTheme("lorem-ipsum")[0], "lorem");
+    assert.strictEqual(vocabularyForTheme("lorem-ipsum")[1], "ipsum");
+  });
+
   it("vocabularyForTheme rejects unknown ids", function () {
     assert.throws(function () {
       vocabularyForTheme("spaceballs");

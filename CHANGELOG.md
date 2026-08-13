@@ -15,7 +15,7 @@ Tailwind-only Vite, webpack, and `minwind apply` defaults stay
   or a dialect id (`boston`, `australia`, `texas`, `england`, `scotland`,
   `ireland`, `wales`, `newyork`, `canada`, `savannah`, `ghetto`,
   `degenerate`, `emojis`, `yorkshire`, `newzealand`, `jamaica`,
-  `appalachia`, `geordie`), plus
+  `appalachia`, `geordie`, `piglatin`), plus
   `--theme <id>`, `--vocabulary <file>`, `--quotes <file>`, and `--maps <file>`.
 - Dual-stack collision space so a Module local named `flex` and Tailwind
   `flex` cannot share a generated name.
@@ -35,18 +35,20 @@ Tailwind-only Vite, webpack, and `minwind apply` defaults stay
   `stranger-things`, `twin-peaks`, `buffy`, `x-files`, `cowboy-bebop`,
   `mr-robot`, `battlestar-galactica`, `lost`, `severance`, `dark`,
   `the-expanse`, `rick-and-morty`, `disney`, `pirates`,
-  `classic-cartoon`, `pokemon`, `lotr`, `harry-potter`, and `futurama`.
+  `classic-cartoon`, `pokemon`, `lotr`, `harry-potter`, `futurama`, and
+  `lorem-ipsum`.
   Custom lists stay `naming.vocabulary` or `--vocabulary <file>`.
 - `naming.strategy: "quotes"` / `--quotes <file>`: sentences become ordered
   CSS idents (prominence shell first). Personality, not extra compression.
 - `naming.strategy` dialect ids `boston`, `australia`, `texas`, `england`,
   `scotland`, `ireland`, `wales`, `newyork`, `canada`, `savannah`,
   `ghetto`, `degenerate`, `emojis`, `yorkshire`, `newzealand`,
-  `jamaica`, `appalachia`, `geordie`: keep Tailwind hyphens and
+  `jamaica`, `appalachia`, `geordie`, `piglatin`: keep Tailwind hyphens and
   colons (`hover:items-center` → `hovah:items-centah`). Yorkshire
   `right-4` → `reet-4`. New Zealand `sticky` → `stucky`. Jamaica
   `flex-row` → `flex-roh`. Appalachia `right-4` → `raht-4`. Geordie
-  `flex-row` → `flex-roo`. Abbreviations expand (`p-4` → `pee-4`). Emoji
+  `flex-row` → `flex-roo`. Pig Latin `flex-row` → `exflay-owray`.
+  Abbreviations expand (`p-4` → `pee-4`). Emoji
   drops hyphens (`bg-red-500` → `🎨🔴5️⃣0️⃣0️⃣`). Collision fails the
   build. Not a `words` pack.
 - `naming.strategy: "maps"` / `--maps <file>`: site-supplied word→spelling

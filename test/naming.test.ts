@@ -167,6 +167,10 @@ describe("dialect naming hasher", function () {
       resolveHasher({ strategy: "geordie" })("flex-row"),
       "flex-roo",
     );
+    assert.strictEqual(
+      resolveHasher({ strategy: "piglatin" })("flex-row"),
+      "exflay-owray",
+    );
   });
 
   it("overlays maps onto a dialect mouth", function () {

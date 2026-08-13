@@ -17,6 +17,7 @@ export const DIALECT_IDS = [
   "jamaica",
   "appalachia",
   "geordie",
+  "piglatin",
 ] as const;
 
 export type DialectId = (typeof DIALECT_IDS)[number];

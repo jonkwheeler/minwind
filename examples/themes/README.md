@@ -99,6 +99,7 @@ Unofficial fan vocabularies. Not affiliated with the rights holders.
 | `lotr`                 | `frodo gandalf mordor`            |
 | `harry-potter`         | `hogwarts expelliarmus lumos`     |
 | `futurama`             | `bender zoidberg hypnotoad`       |
+| `lorem-ipsum`          | `lorem ipsum dolor`               |
 
 `disney` is the feature films (Lion King, Frozen, Little Mermaid, Aladdin,
 Toy Story, Moana, Lilo & Stitch, Peter Pan, Alice). `pirates` is slang plus

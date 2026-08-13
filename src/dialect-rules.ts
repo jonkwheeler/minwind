@@ -255,6 +255,24 @@ function geordieize(word: string): string {
   ]);
 }
 
+function piglatinize(word: string): string {
+  if (word.length === 0) return word;
+  if ("aeiou".indexOf(word.charAt(0)) !== -1) {
+    return word + "way";
+  }
+  let i = 0;
+  while (i < word.length) {
+    const ch = word.charAt(i);
+    const isVowel = "aeiou".indexOf(ch) !== -1 || (ch === "y" && i > 0);
+    if (isVowel) break;
+    i += 1;
+  }
+  if (i >= word.length) {
+    return word + "ay";
+  }
+  return word.slice(i) + word.slice(0, i) + "ay";
+}
+
 export function applyRules(word: string, dialect: DialectId): string {
   if (dialect === "boston") {
     return bostonize(word);
@@ -306,6 +324,9 @@ export function applyRules(word: string, dialect: DialectId): string {
   }
   if (dialect === "geordie") {
     return geordieize(word);
+  }
+  if (dialect === "piglatin") {
+    return piglatinize(word);
   }
   return word;
 }

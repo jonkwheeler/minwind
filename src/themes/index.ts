@@ -15,6 +15,7 @@ import { HIGH_VALYRIAN_VOCABULARY } from "./high-valyrian.js";
 import { HUTTESE_VOCABULARY } from "./huttese.js";
 import { KLINGON_VOCABULARY } from "./klingon.js";
 import { LEBOWSKI_VOCABULARY } from "./lebowski.js";
+import { LOREM_IPSUM_VOCABULARY } from "./lorem-ipsum.js";
 import { LOST_VOCABULARY } from "./lost.js";
 import { LOTR_VOCABULARY } from "./lotr.js";
 import { MANDOA_VOCABULARY } from "./mandoa.js";
@@ -55,6 +56,7 @@ export const THEME_IDS = [
   "huttese",
   "klingon",
   "lebowski",
+  "lorem-ipsum",
   "lost",
   "lotr",
   "mandoa",
@@ -98,6 +100,7 @@ export const THEMES: { readonly [K in ThemeId]: ReadonlyArray<string> } = {
   huttese: HUTTESE_VOCABULARY,
   klingon: KLINGON_VOCABULARY,
   lebowski: LEBOWSKI_VOCABULARY,
+  "lorem-ipsum": LOREM_IPSUM_VOCABULARY,
   lost: LOST_VOCABULARY,
   lotr: LOTR_VOCABULARY,
   mandoa: MANDOA_VOCABULARY,
@@ -156,6 +159,7 @@ export {
   HUTTESE_VOCABULARY,
   KLINGON_VOCABULARY,
   LEBOWSKI_VOCABULARY,
+  LOREM_IPSUM_VOCABULARY,
   LOST_VOCABULARY,
   LOTR_VOCABULARY,
   MANDOA_VOCABULARY,

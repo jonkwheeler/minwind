@@ -220,6 +220,11 @@ describe("parseArgs mode flags", function () {
     assert.deepStrictEqual(options.naming, { strategy: "geordie" });
   });
 
+  it("accepts --naming piglatin", function () {
+    const options = parseArgs(["/tmp/out", "--naming", "piglatin"]);
+    assert.deepStrictEqual(options.naming, { strategy: "piglatin" });
+  });
+
   it("loads maps from --maps", function () {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minwind-maps-"));
     const mapsFile = path.join(dir, "maps.json");
