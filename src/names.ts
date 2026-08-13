@@ -4,9 +4,10 @@ import { compareCodeUnits } from "./util.js";
 // Content-hash naming (KTD5, R2): every generated name is a deterministic
 // function of the whole class token, variant included, so an unchanged class
 // keeps its name across builds and independent registry instances agree.
-// Names match NAME_PATTERN, so they need no CSS escaping or JS quoting.
-// Hash names stay letter-first. Vocabulary may prefix a digit-leading word
-// with `_` (`2b` -> `_2b`).
+// Unprefixed hash names match NAME_PATTERN. An optional prefix is prepended
+// after the hash body is built; the result must still be a generated ident
+// (hyphens allowed). Hash names stay letter-first. Vocabulary may prefix a
+// digit-leading word with `_` (`2b` -> `_2b`).
 export const MIN_NAME_LENGTH = 4;
 export const DEFAULT_NAME_LENGTH = 4;
 export const MAX_NAME_LENGTH = 32;
@@ -45,10 +46,35 @@ export function resolveNameLength(length: number | undefined): number {
   return length;
 }
 
-export function createHasher(length?: number): (token: string) => string {
+export function resolveHashPrefix(prefix: string | undefined): string {
+  if (prefix === undefined) return "";
+  if (prefix === "") {
+    throw new Error("minwind: naming.prefix must be a non-empty string");
+  }
+  if (/\s/.test(prefix)) {
+    throw new Error("minwind: naming.prefix cannot contain whitespace");
+  }
+  if (!isGeneratedIdent(prefix + "a")) {
+    throw new Error(
+      `minwind: naming.prefix ${JSON.stringify(prefix)} is not a valid` +
+        " CSS ident prefix",
+    );
+  }
+  return prefix;
+}
+
+export function createHasher(
+  length?: number,
+  prefix?: string,
+): (token: string) => string {
   const resolved = resolveNameLength(length);
+  const resolvedPrefix = resolveHashPrefix(prefix);
   return function (token: string): string {
-    return hashClassName(token, resolved);
+    return hashClassName(
+      token,
+      resolved,
+      resolvedPrefix === "" ? undefined : resolvedPrefix,
+    );
   };
 }
 
@@ -99,17 +125,19 @@ function lengthAdvice(
 export function hashClassName(
   token: string,
   length: number = DEFAULT_NAME_LENGTH,
+  prefix?: string,
 ): string {
   if (token === "") {
     throw new Error("minwind: cannot hash an empty class token");
   }
   const resolved = resolveNameLength(length);
+  const resolvedPrefix = resolveHashPrefix(prefix);
   const digest = createHash("sha256").update(token, "utf8").digest();
   let name = FIRST_CHARACTER[digest[0] % FIRST_CHARACTER.length];
   for (let index = 1; index < resolved; index += 1) {
     name += CONTINUATION[digest[index] % CONTINUATION.length];
   }
-  return name;
+  return resolvedPrefix + name;
 }
 
 // Exclusion classification (R5): why a token keeps its original bytes.

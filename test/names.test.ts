@@ -99,6 +99,25 @@ describe("hashClassName", () => {
     assert.match(name, NAME_PATTERN);
     assert.notStrictEqual(name, hashClassName("flex"));
   });
+
+  it("prepends prefix without changing the hash body", function () {
+    const body = hashClassName("flex");
+    assert.strictEqual(hashClassName("flex", 4, "tw"), "tw" + body);
+    assert.strictEqual(hashClassName("flex", 4, "tw-"), "tw-" + body);
+    assert.strictEqual(isGeneratedIdent(hashClassName("flex", 4, "tw-")), true);
+  });
+
+  it("rejects an empty, spaced, or digit-leading prefix", function () {
+    assert.throws(function () {
+      hashClassName("flex", 4, "");
+    }, /naming.prefix/);
+    assert.throws(function () {
+      hashClassName("flex", 4, "tw ");
+    }, /whitespace/);
+    assert.throws(function () {
+      hashClassName("flex", 4, "1");
+    }, /ident prefix/);
+  });
 });
 
 describe("safeNameLength", function () {
@@ -145,6 +164,19 @@ describe("createNameRegistry happy path", function () {
       pair.nameFor("border-accent"),
       pair.nameFor("hover:border-accent"),
     );
+  });
+
+  it("applies a hash prefix through the registry hasher", function () {
+    const registry = createNameRegistry(
+      inputFor({
+        universe: ["flex"],
+        sourceTokens: ["flex"],
+        hash: function (token: string): string {
+          return hashClassName(token, 4, "tw");
+        },
+      }),
+    );
+    assert.strictEqual(registry.nameFor("flex"), "tw" + hashClassName("flex"));
   });
 
   it("produces an identical map regardless of insertion order", function () {

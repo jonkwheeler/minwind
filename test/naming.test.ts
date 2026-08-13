@@ -4,7 +4,9 @@ import { hashClassName } from "../src/names.js";
 import { dialectClassName } from "../src/dialect.js";
 import {
   assertDialectConfig,
+  assertHashConfig,
   assertMapsConfig,
+  assertThemedConfig,
   resolveHasher,
   resolveNaming,
   type NamingList,
@@ -20,6 +22,46 @@ describe("resolveNaming hash strategy", function () {
       resolveNaming({ strategy: "hash" }, ["flex"], [], new Set()),
       undefined,
     );
+  });
+
+  it("resolveHasher prepends naming.prefix to the hash body", function () {
+    const hash = resolveHasher({ strategy: "hash", prefix: "tw" });
+    assert.strictEqual(hash("flex"), "tw" + hashClassName("flex"));
+  });
+
+  it("resolveHasher combines prefix with naming.length", function () {
+    const hash = resolveHasher({
+      strategy: "hash",
+      prefix: "tw-",
+      length: 6,
+    });
+    assert.strictEqual(hash("flex"), "tw-" + hashClassName("flex", 6));
+  });
+
+  it("rejects an invalid prefix on the hash strategy", function () {
+    assert.throws(function () {
+      assertHashConfig({ strategy: "hash", prefix: "1" });
+    }, /ident prefix/);
+  });
+
+  it("rejects prefix on words, quotes, dialect, and maps", function () {
+    assert.throws(function () {
+      assertThemedConfig({
+        strategy: "words",
+        vocabulary: ["plaid"],
+        prefix: "tw",
+      } as never);
+    }, /cannot set prefix/);
+    assert.throws(function () {
+      resolveHasher({ strategy: "boston", prefix: "tw" } as never);
+    }, /cannot set prefix/);
+    assert.throws(function () {
+      assertMapsConfig({
+        strategy: "maps",
+        maps: { flex: "muscles" },
+        prefix: "tw",
+      } as never);
+    }, /cannot set prefix/);
   });
 });
 

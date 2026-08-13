@@ -4,7 +4,12 @@ import {
   isDialectId,
   type DialectId,
 } from "./dialect.js";
-import { createHasher, hashClassName, NAME_PATTERN } from "./names.js";
+import {
+  createHasher,
+  hashClassName,
+  NAME_PATTERN,
+  resolveHashPrefix,
+} from "./names.js";
 import { vocabularyForTheme, type ThemeId } from "./themes/index.js";
 import { compareCodeUnits } from "./util.js";
 
@@ -17,7 +22,14 @@ import { compareCodeUnits } from "./util.js";
 // Uncovered words/quotes tokens fall back to content-hash names.
 
 export type NamingConfig =
-  | { strategy: "hash"; length?: number }
+  | {
+      strategy: "hash";
+      length?: number;
+      // Prepended to each hash body. Does not change the digest. Hyphens
+      // are allowed (`tw-` + `s2k9` → `tw-s2k9`). Empty is rejected.
+      // Hash strategy only: not words leftover hashes, not dialects.
+      prefix?: string;
+    }
   | {
       strategy: DialectId;
       // Optional overlay: word → spelling for alphanumeric runs. A hit
@@ -92,6 +104,7 @@ export function assertMapsConfig(config: NamingConfig): void {
     "quotes",
     "prominence",
     "length",
+    "prefix",
   ]);
   if (config.maps === undefined) {
     throw new Error('minwind: naming.strategy "maps" requires maps');
@@ -106,7 +119,25 @@ export function assertDialectConfig(config: NamingConfig): void {
     "quotes",
     "prominence",
     "length",
+    "prefix",
   ]);
+}
+
+export function assertHashConfig(config: NamingConfig): void {
+  if (config.strategy !== "hash") return;
+  assertBannedNamingFields(config, "hash", [
+    "theme",
+    "vocabulary",
+    "quotes",
+    "prominence",
+    "maps",
+  ]);
+  resolveHashPrefix(config.prefix);
+}
+
+export function assertThemedConfig(config: NamingConfig): void {
+  if (!isThemedNaming(config)) return;
+  assertBannedNamingFields(config, config.strategy, ["prefix"]);
 }
 
 function assertBannedNamingFields(
@@ -133,6 +164,13 @@ export function hashLengthOf(
   return config.length;
 }
 
+export function hashPrefixOf(
+  config: NamingConfig | undefined,
+): string | undefined {
+  if (config === undefined || config.strategy !== "hash") return undefined;
+  return config.prefix;
+}
+
 export function resolveHasher(
   config: NamingConfig | undefined,
 ): (token: string) => string {
@@ -144,7 +182,13 @@ export function resolveHasher(
     assertMapsConfig(config);
     return createMapsHasher(config.maps);
   }
-  return createHasher(hashLengthOf(config));
+  if (config !== undefined && isThemedNaming(config)) {
+    assertThemedConfig(config);
+  }
+  if (config !== undefined && config.strategy === "hash") {
+    assertHashConfig(config);
+  }
+  return createHasher(hashLengthOf(config), hashPrefixOf(config));
 }
 
 export interface NamingList {
@@ -243,6 +287,7 @@ export function resolveNaming(
   reserved: ReadonlySet<string>,
 ): NamingResult | undefined {
   if (!isThemedNaming(config)) return undefined;
+  assertThemedConfig(config);
 
   const vocabulary = sanitizeVocabulary(resolveVocabulary(config), reserved);
   if (config.strategy === "quotes" && vocabulary.length === 0) {

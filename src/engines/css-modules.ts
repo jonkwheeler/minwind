@@ -11,9 +11,6 @@ import {
   type NameRegistry,
 } from "../names.js";
 import {
-  hashLengthOf,
-  isDialectNaming,
-  isMapsNaming,
   isThemedNaming,
   resolveHasher,
   resolveNaming,
@@ -173,10 +170,7 @@ function lookupScopedName(
     return name;
   }
   const key = moduleLocalKey(root, filename, local);
-  if (isDialectNaming(options.naming) || isMapsNaming(options.naming)) {
-    return resolveHasher(options.naming)(key);
-  }
-  return hashModuleLocal(root, filename, local, hashLengthOf(options.naming));
+  return resolveHasher(options.naming)(key);
 }
 
 export function createGenerateScopedName(

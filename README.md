@@ -221,6 +221,7 @@ minwind apply <build-directory> [options]
                        ghetto, degenerate, emojis, yorkshire,
                        newzealand, jamaica, appalachia, geordie
 --hash-length <n>      Hash name length (default 4, minimum 4)
+--hash-prefix <s>      Prepended to hash names (hash strategy only)
 --theme <id>           Built-in words pack (star-wars, klingon, …)
 --vocabulary <file>    JSON array of strings; custom words list
 --quotes <file>        JSON array of sentences; implies quotes naming
@@ -272,10 +273,17 @@ apply fixture (`test/fixtures/turbopack-modules-site`), not by `pnpm compare`.
 The default strategy uses stable four-character content hashes. An unchanged
 Tailwind token keeps the same name across builds, which preserves long-term
 caching. Raise `length` when you want more collision headroom; the minimum is 4.
+Set `prefix` to prepend a string to each hash body (the digest stays the same).
+Hyphens are allowed (`tw-s2k9`). Prefix is hash-strategy only: it does not
+apply to dialect mouths, maps, or leftover `words` / `quotes` hashes.
 
 ```ts
 minwind({
   naming: { strategy: "hash", length: 6 },
+});
+
+minwind({
+  naming: { strategy: "hash", prefix: "tw" },
 });
 ```
 
@@ -306,6 +314,7 @@ minwind({
 Available strategies:
 
 - `hash` — stable content hashes; the default and smallest predictable option.
+  Optional `prefix` prepends a string to each hash body.
 - `words` — generated names drawn from a built-in `theme` or a custom
   `vocabulary`, then hash fallback.
 - `quotes` — sentences split into CSS idents and dealt in quote order. With

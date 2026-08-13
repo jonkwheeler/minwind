@@ -74,7 +74,8 @@ export interface MinwindOptions {
   // 'quotes' deals sentence words in order. Dialect ids (`boston`, …) keep
   // Tailwind hyphens and respell English runs. Default (absent or 'hash') is
   // content-hash naming, the only strategy with cross-build name stability
-  // (KTD5).
+  // (KTD5). `naming.prefix` prepends a string to hash bodies (hash strategy
+  // only).
   naming?: NamingConfig;
   // Classes the transform must not touch: exact names and prefixes for
   // runtime-injected or third-party markup classes (e.g. a syntax

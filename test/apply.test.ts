@@ -122,6 +122,29 @@ describe("parseArgs mode flags", function () {
     assert.deepStrictEqual(options.naming, { strategy: "hash", length: 6 });
   });
 
+  it("accepts --hash-prefix on the hash strategy", function () {
+    const options = parseArgs(["/tmp/out", "--hash-prefix", "tw"]);
+    assert.deepStrictEqual(options.naming, {
+      strategy: "hash",
+      prefix: "tw",
+    });
+  });
+
+  it("accepts --hash-prefix together with --hash-length", function () {
+    const options = parseArgs([
+      "/tmp/out",
+      "--hash-prefix",
+      "tw-",
+      "--hash-length",
+      "6",
+    ]);
+    assert.deepStrictEqual(options.naming, {
+      strategy: "hash",
+      length: 6,
+      prefix: "tw-",
+    });
+  });
+
   it("rejects --hash-length below 4", function () {
     const exit = process.exit;
     const writes: Array<string> = [];
@@ -138,6 +161,28 @@ describe("parseArgs mode flags", function () {
         parseArgs(["/tmp/out", "--hash-length", "3"]);
       }, /exit 1/);
       assert.ok(writes.join("").includes("naming.length"));
+    } finally {
+      process.exit = exit;
+      process.stderr.write = write;
+    }
+  });
+
+  it("rejects --hash-prefix with --naming boston", function () {
+    const exit = process.exit;
+    const writes: Array<string> = [];
+    const write = process.stderr.write;
+    process.stderr.write = function (chunk: string | Uint8Array) {
+      writes.push(String(chunk));
+      return true;
+    } as typeof process.stderr.write;
+    process.exit = function (code?: number): never {
+      throw new Error(`exit ${code}`);
+    } as typeof process.exit;
+    try {
+      assert.throws(function () {
+        parseArgs(["/tmp/out", "--naming", "boston", "--hash-prefix", "tw"]);
+      }, /exit 1/);
+      assert.ok(writes.join("").includes("hash-prefix"));
     } finally {
       process.exit = exit;
       process.stderr.write = write;

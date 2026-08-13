@@ -22,6 +22,8 @@ Tailwind-only Vite, webpack, and `minwind apply` defaults stay
 - `MinwindWebpackPlugin.collision` for `createGetLocalIdent(..., { collision })`.
 - `naming.length` / `--hash-length` (default 4, minimum 4) for hash names and
   for `words` fallback hashes.
+- `naming.prefix` / `--hash-prefix` prepends a string to hash-strategy names
+  (`tw` + `s2k9` → `tws2k9`). Does not change the digest. Hash strategy only.
 - Built-in `words` themes (`naming.theme: "star-wars"` / `--theme star-wars`),
   including `game-of-thrones`, `high-valyrian`, `dothraki`,
   `stranger-things`, `twin-peaks`, `buffy`, `x-files`, `cowboy-bebop`,

@@ -63,6 +63,16 @@ describe("CSS Modules identity", function () {
     assert.strictEqual(fromVite, fromWebpack);
     assert.strictEqual(fromVite, hashModuleLocal(ROOT, BUTTON, "root"));
   });
+
+  it("generateScopedName prepends naming.prefix", function () {
+    const scoped = createGenerateScopedName(ROOT, {
+      naming: { strategy: "hash", prefix: "tw" },
+    });
+    assert.strictEqual(
+      scoped("root", BUTTON, ".root{color:red}"),
+      "tw" + hashModuleLocal(ROOT, BUTTON, "root"),
+    );
+  });
 });
 
 describe("CSS Modules inventory", function () {
