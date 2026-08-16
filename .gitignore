@@ -1,11 +1,7 @@
 node_modules/
 dist/
 .output/
-docs/plans/
-docs/backlog.md
-docs/engines-followups.md
-docs/design-plan.md
-docs/ideation/
+docs/
 **/plans/
 test/fixtures/turbopack-modules-site/.next/
 test/fixtures/turbopack-modules-site/out/

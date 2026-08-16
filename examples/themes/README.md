@@ -2,8 +2,7 @@
 
 These packs ship in the package. Pass a theme id; leftover tokens fall back
 to hash names. Generate a prominence manifest from a minwind-off build so
-the first words land on the document shell; see the
-[Spaceballs case study](../../docs/spaceballs-case-study.md).
+the first words land on the document shell.
 
 To generate a custom list (a sport, a brand, a speech, something you would
 screenshot), copy [SKILL.md](./SKILL.md) into your project's `.cursor/skills/`

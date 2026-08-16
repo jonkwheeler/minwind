@@ -71,8 +71,6 @@ All three routes share the same contract:
    everywhere.
 4. Internal inconsistency fails the build instead of shipping partial output.
 
-See [Architecture and safety](./docs/architecture.md) for the complete model.
-
 ## Install
 
 ```bash
@@ -520,9 +518,6 @@ minwind({
 });
 ```
 
-See the [Spaceballs naming case study](./docs/spaceballs-case-study.md) for a
-real deployment, including how the prominence window affected compression.
-
 ## Consolidation
 
 When an exact static class list occurs repeatedly, minwind can replace it with
@@ -654,9 +649,7 @@ The Next/Turbopack CSS Modules fixture is skipped only when
 `MINWIND_SKIP_BUILD=1`. `pnpm compare` remains Tailwind-only; there is no
 Modules harness site.
 
-Repository architecture, module ownership, and change invariants are documented
-in [Architecture and safety](./docs/architecture.md). Coding agents should also
-read [AGENTS.md](./AGENTS.md).
+Coding agents should read [AGENTS.md](./AGENTS.md).
 
 ## License
 
