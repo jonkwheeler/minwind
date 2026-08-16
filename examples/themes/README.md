@@ -1,45 +1,109 @@
-# Themed class-name vocabularies
+# Built-in words themes
 
-Copy one of these arrays into a source-level minwind plugin. Themed naming is
-the `words` strategy: each original Tailwind token gets one standalone name.
+These packs ship in the package. Pass a theme id; leftover tokens fall back
+to hash names. Generate a prominence manifest from a minwind-off build so
+the first words land on the document shell.
+
+To generate a custom list (a sport, a brand, a speech, something you would
+screenshot), copy [SKILL.md](./SKILL.md) into your project's `.cursor/skills/`
+or paste it as a prompt.
 
 ```ts
 minwind({
   naming: {
     strategy: "words",
-    vocabulary: STAR_WARS_VOCABULARY,
+    theme: "star-wars",
     prominence: loadProminence(),
   },
 });
 ```
 
-These files are examples in the repo, not a package export. Copy a file into
-your project or paste the array into your config. Generate a prominence manifest from a minwind-off build so
-the first words land on the document shell; see the
-[Spaceballs case study](../../docs/spaceballs-case-study.md).
+Bring your own list instead of a theme:
 
-Every entry is already a CSS identifier (`[a-z][a-z0-9]*`). Order is
-prominence: most iconic first. Words that collide with a class your stylesheet
-keeps are skipped at build time.
+```ts
+minwind({
+  naming: {
+    strategy: "words",
+    vocabulary: ["quill", "willow", "ember"],
+  },
+});
+```
+
+Or extend a built-in pack:
+
+```ts
+import { THEMES } from "minwind";
+
+minwind({
+  naming: {
+    strategy: "words",
+    vocabulary: [...THEMES["star-wars"], "porg2"],
+  },
+});
+```
+
+`minwind apply --naming words --theme star-wars` is the same contract.
+`--vocabulary words.json` is the custom-list CLI. Do not pass both.
+
+Every entry is already a CSS identifier (`[a-z][a-z0-9]*`, or `_` plus
+alphanumerics for a digit-leading word). Order is prominence: most iconic
+first. Words that collide with a class your stylesheet keeps are skipped at
+build time. Language packs (`huttese`, `mandoa`, `klingon`, `aurebesh`,
+`high-valyrian`, `dothraki`) have apostrophes and case already stripped.
+Digit-leading custom words get a leading underscore (`2b` becomes `_2b`).
+The Star Wars pack still uses a letter prefix on droids (`r2d2`, `fourlom`,
+`triplezero`).
 
 Unofficial fan vocabularies. Not affiliated with the rights holders.
 
 ## Packs
 
-| File                | Shell might read                  |
-| ------------------- | --------------------------------- |
-| `star-wars.ts`      | `vader yoda skywalker`            |
-| `star-trek.ts`      | `spock kirk picard`               |
-| `super-mario.ts`    | `mario luigi peach`               |
-| `zelda.ts`          | `zelda ganondorf triforce`        |
-| `witcher.ts`        | `geralt yennefer ciri`            |
-| `zoolander.ts`      | `zoolander mugatu hansel`         |
-| `lebowski.ts`       | `dude abides walter`              |
-| `portal.ts`         | `glados cake companion`           |
-| `dune.ts`           | `spice arrakis fremen`            |
-| `princess-bride.ts` | `inconceivable westley buttercup` |
-| `office-space.ts`   | `lumbergh milton stapler`         |
-| `firefly.ts`        | `shiny gorram browncoat`          |
+| Theme id               | Shell might read                  |
+| ---------------------- | --------------------------------- |
+| `star-wars`            | `vader yoda skywalker`            |
+| `huttese`              | `ooma chuba boska`                |
+| `mandoa`               | `aliit vod cyare`                 |
+| `aurebesh`             | `aurek besh cresh`                |
+| `star-trek`            | `spock kirk picard`               |
+| `klingon`              | `qapla nuqneh tlhingan`           |
+| `game-of-thrones`      | `winterfell stark jon`            |
+| `high-valyrian`        | `valar morghulis dracarys`        |
+| `dothraki`             | `khal khaleesi arakh`             |
+| `stranger-things`      | `eleven hopper vecna`             |
+| `super-mario`          | `mario luigi peach`               |
+| `zelda`                | `zelda ganondorf triforce`        |
+| `witcher`              | `geralt yennefer ciri`            |
+| `zoolander`            | `zoolander mugatu hansel`         |
+| `lebowski`             | `dude abides walter`              |
+| `portal`               | `glados cake companion`           |
+| `dune`                 | `spice arrakis fremen`            |
+| `princess-bride`       | `inconceivable westley buttercup` |
+| `office-space`         | `lumbergh milton stapler`         |
+| `firefly`              | `shiny gorram browncoat`          |
+| `twin-peaks`           | `coop laura blacklodge`           |
+| `buffy`                | `buffy slayer spike`              |
+| `x-files`              | `mulder scully trustno1`          |
+| `cowboy-bebop`         | `spike swordfish bebop`           |
+| `mr-robot`             | `elliot fsociety hellofriend`     |
+| `battlestar-galactica` | `frak cylon starbuck`             |
+| `lost`                 | `dharma hatch locke`              |
+| `severance`            | `lumon innie waffleparty`         |
+| `dark`                 | `sicmundus winden jonas`          |
+| `the-expanse`          | `rocinante holden beltalowda`     |
+| `rick-and-morty`       | `rick morty meeseeks`             |
+| `disney`               | `simba elsa ariel`                |
+| `pirates`              | `ahoy matey avast`                |
+| `classic-cartoon`      | `mickey minnie donald`            |
+| `pokemon`              | `pikachu charizard snorlax`       |
+| `lotr`                 | `frodo gandalf mordor`            |
+| `harry-potter`         | `hogwarts expelliarmus lumos`     |
+| `futurama`             | `bender zoidberg hypnotoad`       |
+| `lorem-ipsum`          | `lorem ipsum dolor`               |
+
+`disney` is the feature films (Lion King, Frozen, Little Mermaid, Aladdin,
+Toy Story, Moana, Lilo & Stitch, Peter Pan, Alice). `pirates` is slang plus
+Pirates of the Caribbean and Treasure Planet. `classic-cartoon` is Mickey,
+DuckTales, Gargoyles, and Gravity Falls.
 
 ## Packs that would catch on next
 
@@ -49,8 +113,6 @@ to fill a real token universe:
 - **Hackers (1995)** — `crashoverride`, `acidburn`, `gibson`. Looking at the
   source is the joke.
 - **He-Man** — `greyskull` on `<html>`.
-- **Twin Peaks** — `blacklodge`, `loglady`, `damnfine`.
-- **Cowboy Bebop** — `spike`, `swordfish`, `bebop`.
 - **Studio Ghibli** — `totoro`, `noface`, `calcifer`, `catbus`.
 - **The Matrix** — `neo`, `morpheus`, `construct`.
 - **Ghostbusters** — `staypuft`, `zuul`, `proton`.
@@ -59,7 +121,12 @@ to fill a real token universe:
 - **Calvin and Hobbes** — `transmogrifier`, `calvinball`, `spiff`.
 - **Mean Girls** — `fetch`, `plastics`, `grool`.
 - **Hitchhiker's Guide** — `vogon`, `babel`, `towel`, `magrathea`.
+- **Monty Python** — `ni`, `shrubbery`, `blackknight`.
+- **The Simpsons** — `duffman`, `milhouse`, `krusty`.
+- **Doctor Who** — `tardis`, `dalek`, `gallifrey`.
 - **Serial Experiments Lain** — `lain`, `wired`. Web-native cult.
 - **Dwarf Fortress** — `boatmurdered`, `catsplosion`.
 - **Labyrinth** — `jareth`, `goblinking`.
 - **Earthbound** — `giygas`, `ness`, `happyhappy`.
+- **Encanto / Mulan / Hercules** — fold into `disney`.
+- **Kim Possible** — fold into `classic-cartoon`.

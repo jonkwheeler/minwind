@@ -1,31 +1,19 @@
 import assert from "node:assert";
 import { describe, it } from "node:test";
 import { hashClassName } from "../src/names.js";
+import { dialectClassName } from "../src/dialect.js";
 import {
+  assertDialectConfig,
+  assertHashConfig,
+  assertMapsConfig,
+  assertThemedConfig,
+  resolveHasher,
   resolveNaming,
   type NamingList,
-  type NamingResult,
 } from "../src/naming.js";
 
 function list(count: number, ...tokens: Array<string>): NamingList {
   return { tokens: Array.from(tokens).sort(), count };
-}
-
-function quotes(
-  corpus: ReadonlyArray<string>,
-  tokens: ReadonlyArray<string>,
-  lists: ReadonlyArray<NamingList>,
-  vocabulary: ReadonlyArray<string> = [],
-  reserved: ReadonlySet<string> = new Set(),
-): NamingResult {
-  const result = resolveNaming(
-    { strategy: "quotes", corpus, vocabulary },
-    tokens,
-    lists,
-    reserved,
-  );
-  assert.ok(result !== undefined, "quotes strategy must produce a result");
-  return result;
 }
 
 describe("resolveNaming hash strategy", function () {
@@ -35,9 +23,221 @@ describe("resolveNaming hash strategy", function () {
       undefined,
     );
   });
+
+  it("resolveHasher prepends naming.prefix to the hash body", function () {
+    const hash = resolveHasher({ strategy: "hash", prefix: "tw" });
+    assert.strictEqual(hash("flex"), "tw" + hashClassName("flex"));
+  });
+
+  it("resolveHasher combines prefix with naming.length", function () {
+    const hash = resolveHasher({
+      strategy: "hash",
+      prefix: "tw-",
+      length: 6,
+    });
+    assert.strictEqual(hash("flex"), "tw-" + hashClassName("flex", 6));
+  });
+
+  it("rejects an invalid prefix on the hash strategy", function () {
+    assert.throws(function () {
+      assertHashConfig({ strategy: "hash", prefix: "1" });
+    }, /ident prefix/);
+  });
+
+  it("rejects prefix on words, quotes, dialect, and maps", function () {
+    assert.throws(function () {
+      assertThemedConfig({
+        strategy: "words",
+        vocabulary: ["plaid"],
+        prefix: "tw",
+      } as never);
+    }, /cannot set prefix/);
+    assert.throws(function () {
+      resolveHasher({ strategy: "boston", prefix: "tw" } as never);
+    }, /cannot set prefix/);
+    assert.throws(function () {
+      assertMapsConfig({
+        strategy: "maps",
+        maps: { flex: "muscles" },
+        prefix: "tw",
+      } as never);
+    }, /cannot set prefix/);
+  });
+
+  it("resolveHasher uses naming.alphabet for the hash body", function () {
+    const hash = resolveHasher({ strategy: "hash", alphabet: "abcd" });
+    assert.strictEqual(
+      hash("flex"),
+      hashClassName("flex", 4, undefined, "abcd"),
+    );
+    assert.match(hash("flex"), /^[abcd]+$/);
+  });
+
+  it("rejects alphabet on dialect and words", function () {
+    assert.throws(function () {
+      resolveHasher({ strategy: "boston", alphabet: "abcd" } as never);
+    }, /cannot set alphabet/);
+    assert.throws(function () {
+      assertThemedConfig({
+        strategy: "words",
+        vocabulary: ["plaid"],
+        alphabet: "abcd",
+      } as never);
+    }, /cannot set alphabet/);
+  });
+
+  it("resolveHasher mixes naming.salt into the digest", function () {
+    const hash = resolveHasher({ strategy: "hash", salt: "v2" });
+    assert.strictEqual(
+      hash("flex"),
+      hashClassName("flex", 4, undefined, undefined, "v2"),
+    );
+    assert.notStrictEqual(hash("flex"), hashClassName("flex"));
+  });
+
+  it("rejects salt on dialect and words", function () {
+    assert.throws(function () {
+      resolveHasher({ strategy: "boston", salt: "v2" } as never);
+    }, /cannot set salt/);
+    assert.throws(function () {
+      assertThemedConfig({
+        strategy: "words",
+        vocabulary: ["plaid"],
+        salt: "v2",
+      } as never);
+    }, /cannot set salt/);
+  });
+});
+
+describe("dialect naming hasher", function () {
+  it("resolveNaming returns undefined so the dialect hasher applies", function () {
+    assert.strictEqual(
+      resolveNaming({ strategy: "boston" }, ["flex"], [], new Set()),
+      undefined,
+    );
+  });
+
+  it("resolveHasher keeps hyphens and respells in the chosen mouth", function () {
+    const hash = resolveHasher({ strategy: "boston" });
+    assert.strictEqual(hash("hover:items-center"), "hovah:items-centah");
+    assert.strictEqual(hash("p-4"), "pee-4");
+    assert.strictEqual(hash("flex"), "flex");
+  });
+
+  it("rejects prominence, length, and words fields on a dialect strategy", function () {
+    assert.throws(function () {
+      assertDialectConfig({
+        strategy: "boston",
+        prominence: { flex: 0 },
+      } as never);
+    }, /cannot set prominence/);
+    assert.throws(function () {
+      resolveHasher({ strategy: "boston", length: 6 } as never);
+    }, /cannot set length/);
+  });
+
+  it("matches dialectClassName", function () {
+    assert.strictEqual(
+      resolveHasher({ strategy: "texas" })("right-4"),
+      dialectClassName("right-4", "texas"),
+    );
+  });
+
+  it("resolveHasher yorkshire respells right-4", function () {
+    assert.strictEqual(
+      resolveHasher({ strategy: "yorkshire" })("right-4"),
+      "reet-4",
+    );
+  });
+
+  it("resolveHasher pins the four new mouths", function () {
+    assert.strictEqual(
+      resolveHasher({ strategy: "newzealand" })("sticky"),
+      "stucky",
+    );
+    assert.strictEqual(
+      resolveHasher({ strategy: "jamaica" })("flex-row"),
+      "flex-roh",
+    );
+    assert.strictEqual(
+      resolveHasher({ strategy: "appalachia" })("right-4"),
+      "raht-4",
+    );
+    assert.strictEqual(
+      resolveHasher({ strategy: "geordie" })("flex-row"),
+      "flex-roo",
+    );
+    assert.strictEqual(
+      resolveHasher({ strategy: "piglatin" })("flex-row"),
+      "exflay-owray",
+    );
+  });
+
+  it("overlays maps onto a dialect mouth", function () {
+    const hash = resolveHasher({
+      strategy: "boston",
+      maps: { flex: "muscles" },
+    });
+    assert.strictEqual(hash("flex-col"), "muscles-cawl");
+    assert.strictEqual(hash("p-4"), "pee-4");
+  });
+});
+
+describe("maps naming hasher", function () {
+  it("resolveHasher applies the site map", function () {
+    const hash = resolveHasher({
+      strategy: "maps",
+      maps: { flex: "muscles" },
+    });
+    assert.strictEqual(hash("flex-col"), "muscles-col");
+    assert.strictEqual(hash("p-4"), "p-4");
+  });
+
+  it("rejects prominence on maps", function () {
+    assert.throws(function () {
+      assertMapsConfig({
+        strategy: "maps",
+        maps: { flex: "muscles" },
+        prominence: { flex: 0 },
+      } as never);
+    }, /cannot set prominence/);
+  });
 });
 
 describe("resolveNaming words strategy", function () {
+  it("deals a built-in theme pack by id", function () {
+    const result = resolveNaming(
+      {
+        strategy: "words",
+        theme: "star-wars",
+        prominence: { flex: 0, "p-4": 1 },
+      },
+      ["flex", "p-4"],
+      [],
+      new Set(),
+    );
+    assert.ok(result !== undefined);
+    assert.strictEqual(result.names.get("flex"), "vader");
+    assert.strictEqual(result.names.get("p-4"), "yoda");
+  });
+
+  it("rejects words naming with neither theme nor vocabulary", function () {
+    assert.throws(function () {
+      resolveNaming({ strategy: "words" }, ["flex"], [], new Set());
+    }, /theme or vocabulary/);
+  });
+
+  it("rejects words naming with both theme and vocabulary", function () {
+    assert.throws(function () {
+      resolveNaming(
+        { strategy: "words", theme: "star-wars", vocabulary: ["plaid"] },
+        ["flex"],
+        [],
+        new Set(),
+      );
+    }, /cannot both be set/);
+  });
+
   it("deals vocabulary words in sorted token order", function () {
     const result = resolveNaming(
       { strategy: "words", vocabulary: ["plaid", "schwartz", "ludicrous"] },
@@ -48,7 +248,6 @@ describe("resolveNaming words strategy", function () {
     assert.ok(result !== undefined);
     assert.strictEqual(result.names.get("flex"), "plaid");
     assert.strictEqual(result.names.get("p-4"), "schwartz");
-    assert.strictEqual(result.order.size, 0);
   });
 
   it("skips reserved and duplicate vocabulary words", function () {
@@ -76,6 +275,20 @@ describe("resolveNaming words strategy", function () {
     assert.strictEqual(result.names.get("p-4"), "megamaid");
   });
 
+  it("prefixes a leading underscore onto digit-leading vocabulary words", function () {
+    const result = resolveNaming(
+      { strategy: "words", vocabulary: ["2b", "_2b", "ornot"] },
+      ["flex", "p-4"],
+      [],
+      new Set(),
+    );
+    assert.ok(result !== undefined);
+    // "2b" and "_2b" both sanitize to "_2b"; the duplicate is skipped.
+    // Dealt shortest-first: "_2b" (3) precedes "ornot" (5).
+    assert.strictEqual(result.names.get("flex"), "_2b");
+    assert.strictEqual(result.names.get("p-4"), "ornot");
+  });
+
   it("falls back to content-hash names when the vocabulary runs out", function () {
     const result = resolveNaming(
       { strategy: "words", vocabulary: ["plaid"] },
@@ -86,6 +299,19 @@ describe("resolveNaming words strategy", function () {
     assert.ok(result !== undefined);
     assert.strictEqual(result.names.get("flex"), "plaid");
     assert.strictEqual(result.names.get("p-4"), hashClassName("p-4"));
+  });
+
+  it("uses naming.length for hash fallback names", function () {
+    const result = resolveNaming(
+      { strategy: "words", vocabulary: ["plaid"], length: 6 },
+      ["flex", "p-4"],
+      [],
+      new Set(),
+    );
+    assert.ok(result !== undefined);
+    assert.strictEqual(result.names.get("flex"), "plaid");
+    assert.strictEqual(result.names.get("p-4"), hashClassName("p-4", 6));
+    assert.strictEqual(result.names.get("p-4")?.length, 6);
   });
 
   it("deals the shortest words to the hottest tokens", function () {
@@ -161,242 +387,71 @@ describe("resolveNaming words strategy", function () {
 });
 
 describe("resolveNaming quotes strategy", function () {
-  it("assigns a quote's words to a list's tokens and records quote order", function () {
-    const result = quotes(
-      ["may the schwartz"],
-      ["flex", "items-center", "p-4"],
-      [list(3, "flex", "items-center", "p-4")],
+  it("splits sentences and deals words in quote order", function () {
+    const result = resolveNaming(
+      {
+        strategy: "quotes",
+        quotes: ["Ask not what your country can do for you"],
+        prominence: { flex: 0, "p-4": 1, "mb-16": 2 },
+      },
+      ["flex", "p-4", "mb-16"],
+      [],
+      new Set(),
     );
-    assert.strictEqual(result.names.get("flex"), "may");
-    assert.strictEqual(result.names.get("items-center"), "the");
-    assert.strictEqual(result.names.get("p-4"), "schwartz");
-    assert.deepStrictEqual(result.order.get("flex items-center p-4"), [
-      "flex",
-      "items-center",
-      "p-4",
-    ]);
-    assert.strictEqual(result.quotedLists, 1);
-    assert.strictEqual(result.totalLists, 1);
+    assert.ok(result !== undefined);
+    assert.strictEqual(result.names.get("flex"), "ask");
+    assert.strictEqual(result.names.get("p-4"), "not");
+    assert.strictEqual(result.names.get("mb-16"), "what");
+    assert.strictEqual(result.prominent, 3);
   });
 
-  it("reuses an assigned word when a later list shares its token", function () {
-    // [flex p-4] claims the shortest available fragment ("speed of", not the
-    // earlier "ludicrous speed"), so p-4 is pinned to "of"; [items-center
-    // p-4] must pick a fragment containing "of", and its quote order places
-    // p-4 first.
-    const result = quotes(
-      ["ludicrous speed", "speed of light"],
-      ["flex", "items-center", "p-4"],
-      [list(5, "flex", "p-4"), list(3, "items-center", "p-4")],
+  it("keeps leftover quote words in quote order, not shortest-first", function () {
+    const result = resolveNaming(
+      {
+        strategy: "quotes",
+        quotes: ["Ask not what"],
+      },
+      ["flex", "p-4", "mb-16"],
+      [list(100, "mb-16"), list(1, "flex"), list(1, "p-4")],
+      new Set(),
     );
-    assert.strictEqual(result.names.get("flex"), "speed");
-    assert.strictEqual(result.names.get("p-4"), "of");
-    assert.strictEqual(result.names.get("items-center"), "light");
-    assert.deepStrictEqual(result.order.get("items-center p-4"), [
-      "p-4",
-      "items-center",
-    ]);
-    assert.strictEqual(result.quotedLists, 2);
+    assert.ok(result !== undefined);
+    assert.strictEqual(result.names.get("mb-16"), "ask");
+    assert.strictEqual(result.names.get("flex"), "not");
+    assert.strictEqual(result.names.get("p-4"), "what");
   });
 
-  it("never assigns one word to two tokens", function () {
-    const result = quotes(
-      [
-        "may the schwartz be with you",
-        "the schwartz is in you",
-        "use the schwartz",
-      ],
-      ["flex", "items-center", "mb-16", "p-4", "site-card", "text-lg"],
-      [
-        list(4, "flex", "items-center", "p-4"),
-        list(2, "flex", "mb-16"),
-        list(2, "mb-16", "site-card", "text-lg"),
-      ],
+  it("prefixes a leading underscore onto digit-leading quote words", function () {
+    const result = resolveNaming(
+      {
+        strategy: "quotes",
+        quotes: ["2b or not"],
+        prominence: { flex: 0, "p-4": 1, "mb-16": 2 },
+      },
+      ["flex", "p-4", "mb-16"],
+      [],
+      new Set(),
     );
-    const names = Array.from(result.names.values());
-    assert.strictEqual(new Set(names).size, names.length);
+    assert.ok(result !== undefined);
+    assert.strictEqual(result.names.get("flex"), "_2b");
+    assert.strictEqual(result.names.get("p-4"), "or");
+    assert.strictEqual(result.names.get("mb-16"), "not");
   });
 
-  it("treats reserved words as segment breaks", function () {
-    const result = quotes(
-      ["the ring is yours"],
-      ["flex", "items-center", "mb-16", "p-4"],
-      [list(1, "flex", "items-center", "mb-16", "p-4")],
-      ["plaid", "schwartz", "ludicrous", "megamaid"],
-      new Set(["ring"]),
+  it("skips duplicate quote words", function () {
+    const result = resolveNaming(
+      {
+        strategy: "quotes",
+        quotes: ["you can do for you"],
+        prominence: { flex: 0, "p-4": 1, "mb-16": 2 },
+      },
+      ["flex", "p-4", "mb-16"],
+      [],
+      new Set(),
     );
-    assert.strictEqual(result.quotedLists, 0);
-    assert.strictEqual(result.names.get("flex"), "plaid");
-    // Dealt shortest-first: plaid, schwartz, megamaid, then ludicrous.
-    assert.strictEqual(result.names.get("p-4"), "ludicrous");
-  });
-
-  it("ignores quote runs with repeated words", function () {
-    const result = quotes(
-      ["now now"],
-      ["flex", "p-4"],
-      [list(1, "flex", "p-4")],
-      ["plaid", "schwartz"],
-    );
-    assert.strictEqual(result.quotedLists, 0);
-    assert.strictEqual(result.names.get("flex"), "plaid");
-    assert.strictEqual(result.names.get("p-4"), "schwartz");
-  });
-
-  it("deals singletons from the vocabulary, never quote words", function () {
-    // A lone word is mid-quote residue and reads as noise in the DOM, so
-    // 1-token lists skip the corpus entirely and spend vocabulary words
-    // (chosen to stand alone), falling back to hashes when it runs out.
-    const result = quotes(
-      ["may the schwartz be with you", "plaid"],
-      [
-        "flex",
-        "items-center",
-        "mb-16",
-        "p-4",
-        "site-card",
-        "text-lg",
-        "block-ish",
-        "gap-2",
-      ],
-      [
-        list(100, "block-ish"),
-        list(50, "gap-2"),
-        list(1, "flex", "items-center", "mb-16", "p-4", "site-card", "text-lg"),
-      ],
-      ["darkhelmet"],
-    );
-    assert.strictEqual(result.names.get("flex"), "may");
-    assert.strictEqual(result.names.get("block-ish"), "darkhelmet");
-    assert.strictEqual(result.names.get("gap-2"), hashClassName("gap-2"));
-    assert.strictEqual(result.quotedLists, 1);
-  });
-
-  it("breaks size ties by frequency", function () {
-    // Higher-count list is solved first and takes the shortest fragment
-    // ("gone to"), leaving the longer earlier quote for the rarer list.
-    const result = quotes(
-      ["ludicrous speed", "gone to plaid"],
-      ["flex", "items-center", "p-4", "mb-16"],
-      [list(1, "flex", "p-4"), list(9, "items-center", "mb-16")],
-    );
-    assert.strictEqual(result.names.get("items-center"), "gone");
-    assert.strictEqual(result.names.get("mb-16"), "to");
-    assert.strictEqual(result.names.get("flex"), "ludicrous");
-    assert.strictEqual(result.names.get("p-4"), "speed");
-    assert.strictEqual(result.quotedLists, 2);
-  });
-
-  it("covers sub-fragments, not just whole quotes", function () {
-    const result = quotes(
-      ["may the schwartz be with you"],
-      ["flex", "p-4"],
-      [list(2, "flex", "p-4")],
-    );
-    assert.strictEqual(result.quotedLists, 1);
-    assert.strictEqual(result.names.get("flex"), "may");
-    assert.strictEqual(result.names.get("p-4"), "the");
-  });
-
-  it("prefers shorter equal-length fragments by rendered byte cost", function () {
-    // First-fit would take "ludicrous speed" (earlier in the corpus). Byte
-    // scoring picks "be to" because sum(word.length) * list.count is lower.
-    const result = quotes(
-      ["ludicrous speed", "be to"],
-      ["flex", "p-4"],
-      [list(3, "flex", "p-4")],
-    );
-    assert.strictEqual(result.names.get("flex"), "be");
-    assert.strictEqual(result.names.get("p-4"), "to");
-    assert.strictEqual(result.quotedLists, 1);
-  });
-
-  it("breaks equal byte-cost fragment ties by corpus order", function () {
-    // "may the" and "be with" both sum to 6 characters; earlier corpus
-    // order is the only tie-break.
-    const result = quotes(
-      ["may the schwartz be with you"],
-      ["flex", "p-4"],
-      [list(1, "flex", "p-4")],
-    );
-    assert.strictEqual(result.names.get("flex"), "may");
-    assert.strictEqual(result.names.get("p-4"), "the");
-    assert.strictEqual(result.quotedLists, 1);
-  });
-
-  it("sanitizes punctuation and apostrophes out of quote words", function () {
-    const result = quotes(
-      ["that's the schwartz!"],
-      ["flex", "items-center", "p-4"],
-      [list(1, "flex", "items-center", "p-4")],
-    );
-    assert.strictEqual(result.quotedLists, 1);
-    assert.strictEqual(result.names.get("flex"), "thats");
-    assert.strictEqual(result.names.get("items-center"), "the");
-    assert.strictEqual(result.names.get("p-4"), "schwartz");
-  });
-
-  it("skips lists carrying tokens outside the renamed set", function () {
-    const result = quotes(
-      ["ludicrous speed"],
-      ["flex"],
-      [list(1, "flex", "ghost-token")],
-      ["plaid"],
-    );
-    assert.strictEqual(result.totalLists, 0);
-    assert.strictEqual(result.quotedLists, 0);
-    assert.strictEqual(result.names.get("flex"), "plaid");
-  });
-
-  it("falls back to vocabulary then hash for uncovered tokens", function () {
-    const result = quotes(
-      ["ludicrous speed"],
-      ["flex", "items-center", "p-4"],
-      [list(1, "flex", "p-4")],
-      ["plaid"],
-    );
-    assert.strictEqual(result.names.get("flex"), "ludicrous");
-    assert.strictEqual(result.names.get("p-4"), "speed");
-    assert.strictEqual(result.names.get("items-center"), "plaid");
-    const result2 = quotes(
-      ["ludicrous speed"],
-      ["flex", "items-center", "p-4"],
-      [list(1, "flex", "p-4")],
-    );
-    assert.strictEqual(
-      result2.names.get("items-center"),
-      hashClassName("items-center"),
-    );
-  });
-
-  it("is deterministic across runs", function () {
-    const corpus = [
-      "may the schwartz be with you",
-      "ludicrous speed",
-      "the schwartz is in you",
-    ];
-    const tokens = [
-      "flex",
-      "items-center",
-      "mb-16",
-      "p-4",
-      "site-card",
-      "text-lg",
-    ];
-    const lists = [
-      list(9, "flex", "items-center", "p-4"),
-      list(7, "flex", "mb-16"),
-      list(5, "site-card", "text-lg"),
-    ];
-    const first = quotes(corpus, tokens, lists, ["plaid"]);
-    const second = quotes(corpus, tokens, lists, ["plaid"]);
-    assert.deepStrictEqual(
-      Array.from(first.names.entries()),
-      Array.from(second.names.entries()),
-    );
-    assert.deepStrictEqual(
-      Array.from(first.order.entries()),
-      Array.from(second.order.entries()),
-    );
+    assert.ok(result !== undefined);
+    assert.strictEqual(result.names.get("flex"), "you");
+    assert.strictEqual(result.names.get("p-4"), "can");
+    assert.strictEqual(result.names.get("mb-16"), "do");
   });
 });

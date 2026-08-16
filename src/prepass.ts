@@ -1,7 +1,5 @@
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
-import { compile } from "@tailwindcss/node";
-import { Scanner } from "@tailwindcss/oxide";
 import * as ts from "typescript";
 import {
   DECLARATION_PATTERN,
@@ -11,12 +9,15 @@ import {
 } from "./class-contexts.js";
 import { SFC_PATTERN, walkModuleContexts } from "./sfc.js";
 import {
+  createHasher,
   createNameRegistry,
-  hashClassName,
   type ExclusionConfig,
   type NameRegistry,
 } from "./names.js";
 import {
+  hashLengthOf,
+  isThemedNaming,
+  resolveHasher,
   resolveNaming,
   type NamingConfig,
   type NamingResult,
@@ -30,6 +31,7 @@ import {
   type StylesheetModel,
 } from "./consolidate.js";
 import { compareCodeUnits } from "./util.js";
+import { compileTailwindStylesheet } from "./engines/tailwind.js";
 import {
   collectCustomPropertyNamesInCss,
   createCustomPropertyRegistry,
@@ -46,7 +48,7 @@ import {
 export interface PrepassOptions {
   root: string;
   cssEntry: string;
-  // Themed naming (words/quotes) replaces content-hash naming; the default
+  // Themed naming (words) replaces content-hash naming; the default
   // (absent or 'hash') keeps KTD5 stability.
   naming?: NamingConfig;
   // Site-specific classes the transform must not touch (runtime-injected
@@ -229,74 +231,29 @@ async function scanSources(root: string): Promise<SourceInventory> {
   return { scan, paths, texts };
 }
 
-// Mirror @tailwindcss/vite 4.1.18's own source computation so the pre-pass
-// universe matches the real build by construction.
-function scannerSources(
-  compilerRoot: "none" | { base: string; pattern: string } | null,
-  explicitSources: Array<{ base: string; pattern: string; negated: boolean }>,
-  projectRoot: string,
-): Array<{ base: string; pattern: string; negated: boolean }> {
-  let automatic: Array<{ base: string; pattern: string; negated: boolean }>;
-  if (compilerRoot === "none") {
-    automatic = [];
-  } else if (compilerRoot === null) {
-    automatic = [{ base: projectRoot, pattern: "**/*", negated: false }];
-  } else {
-    automatic = [
-      {
-        base: compilerRoot.base,
-        pattern: compilerRoot.pattern,
-        negated: false,
-      },
-    ];
-  }
-  return automatic.concat(explicitSources);
-}
-
 export async function runPrepass(
   options: PrepassOptions,
 ): Promise<PrepassResult> {
-  const css = await readFile(options.cssEntry, "utf8");
-
-  let compiler;
-  try {
-    compiler = await compile(css, {
-      base: path.dirname(options.cssEntry),
-      shouldRewriteUrls: true,
-      onDependency: function () {},
-    });
-  } catch (cause) {
-    // R10: a pre-pass compile failure is a loud build error, never a skip.
-    throw new Error(
-      `minwind: pre-pass failed to compile ${options.cssEntry}: ${String(cause)}`,
-      { cause },
-    );
-  }
-
-  const scanner = new Scanner({
-    sources: scannerSources(compiler.root, compiler.sources, options.root),
+  const compiled = await compileTailwindStylesheet({
+    cssEntry: options.cssEntry,
+    root: options.root,
   });
-  const candidates = scanner.scan();
-
-  // build() is stateful and single-shot: call once with the full candidate
-  // list, then discard the compiler.
-  let stylesheet: string;
-  try {
-    stylesheet = compiler.build(candidates);
-  } catch (cause) {
-    throw new Error(
-      `minwind: pre-pass failed to build ${options.cssEntry}: ${String(cause)}`,
-      { cause },
-    );
-  }
+  const stylesheet = compiled.stylesheet;
 
   const stylesheetModel = modelStylesheet(stylesheet);
   const sourceInventory = await scanSources(options.root);
   const scan = sourceInventory.scan;
 
+  const hasher = createHasher(hashLengthOf(options.naming));
+  const classHasher = resolveHasher(options.naming);
   let customProperties: CustomPropertyRegistry | undefined;
   if (options.customProperties !== undefined) {
-    const provisional = createCustomPropertyRegistry(options.customProperties);
+    const provisional = createCustomPropertyRegistry(
+      options.customProperties,
+      new Set(),
+      new Set(),
+      hasher,
+    );
     const unsafe = new Set<string>();
     for (let index = 0; index < sourceInventory.paths.length; index += 1) {
       const sourceScan = scanCustomPropertySource(
@@ -310,6 +267,7 @@ export async function runPrepass(
       options.customProperties,
       unsafe,
       collectCustomPropertyNamesInCss(stylesheet),
+      hasher,
     );
     customProperties.assertBijection();
   }
@@ -330,6 +288,7 @@ export async function runPrepass(
     sourceTokens,
     runtimeTokens: scan.runtimeTokens,
     exclusions: options.exclusions,
+    hash: classHasher,
   });
 
   // Themed naming: the provisional hash registry determines which tokens
@@ -338,7 +297,7 @@ export async function runPrepass(
   // against the universe and the source tokens so a generated name can
   // never collide with a class the stylesheet or the sources keep.
   let naming: NamingResult | undefined;
-  if (options.naming !== undefined && options.naming.strategy !== "hash") {
+  if (options.naming !== undefined && isThemedNaming(options.naming)) {
     const renamedTokens = registry.entries().map(function (entry) {
       return entry.token;
     });
@@ -379,9 +338,7 @@ export async function runPrepass(
         hash: function (token: string): string {
           const name = names.get(token);
           if (name !== undefined) return name;
-          // Defensive: the solver names every renamed token, so this is
-          // unreachable; hash rather than throw if that ever drifts.
-          return hashClassName(token);
+          return hasher(token);
         },
       });
     }
@@ -394,7 +351,7 @@ export async function runPrepass(
     function (token) {
       return registry.nameFor(token) !== undefined;
     },
-    { dynamicTokens: scan.dynamicTokens },
+    { dynamicTokens: scan.dynamicTokens, hash: hasher },
   );
 
   return {
@@ -409,5 +366,23 @@ export async function runPrepass(
     stylesheetModel,
     naming,
     customProperties,
+  };
+}
+
+export function emptyPrepassResult(): PrepassResult {
+  const empty = new Set<string>();
+  return {
+    registry: createNameRegistry({
+      universe: empty,
+      sourceTokens: empty,
+    }),
+    universe: empty,
+    sourceTokens: empty,
+    renameTokens: empty,
+    runtimeTokens: empty,
+    listFrequencies: [],
+    consolidationVerdicts: [],
+    stylesheet: "",
+    stylesheetModel: { universe: new Set<string>(), rules: [] },
   };
 }

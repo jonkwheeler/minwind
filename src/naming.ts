@@ -1,25 +1,62 @@
-import { canonicalListKey } from "./consolidate.js";
-import { hashClassName, NAME_PATTERN } from "./names.js";
+import {
+  createDialectHasher,
+  createMapsHasher,
+  isDialectId,
+  type DialectId,
+} from "./dialect.js";
+import {
+  createHasher,
+  hashClassName,
+  NAME_PATTERN,
+  resolveHashAlphabet,
+  resolveHashPrefix,
+  resolveHashSalt,
+} from "./names.js";
+import { vocabularyForTheme, type ThemeId } from "./themes/index.js";
 import { compareCodeUnits } from "./util.js";
 
-// Themed naming strategies: an opt-in alternative to content-hash naming
-// (KTD5) for sites that want personality in the DOM. 'words' deals a curated
-// vocabulary to class tokens; 'quotes' goes further — it assigns words so a
-// whole class list reads as a quote fragment. Only lists of two or more
-// tokens participate in quotes: a single-word class can never read as a
-// phrase, so singletons draw from the vocabulary instead. Class order
-// inside an attribute is semantically free (only stylesheet order matters),
-// so the source transform may reorder a fully-renamed static list to match
-// its quote's word order; the global token->name bijection (R2) is
-// untouched, and uncovered tokens fall back to vocabulary words, then to
-// content-hash names. Everything is a deterministic function of the token
-// set, the list frequencies, and the corpus.
+// Themed naming: an opt-in alternative to content-hash naming (KTD5) for
+// sites that want personality in the DOM. 'words' deals a curated
+// vocabulary. 'quotes' splits sentences into the same ident pool and deals
+// them in quote order (compression is not the goal). Dialect strategies
+// (`boston`, …) are hashers: they keep Tailwind hyphens and colons and
+// respell English runs from the shipped word maps.
+// Uncovered words/quotes tokens fall back to content-hash names.
 
 export type NamingConfig =
-  | { strategy: "hash" }
+  | {
+      strategy: "hash";
+      length?: number;
+      // Prepended to each hash body. Does not change the digest. Hyphens
+      // are allowed (`tw-` + `s2k9` → `tw-s2k9`). Empty is rejected.
+      // Hash strategy only: not words leftover hashes, not dialects.
+      prefix?: string;
+      // Character set for the hash body (`a-z0-9` by default). Position 0
+      // still uses only the letters in the set. Hash strategy only.
+      alphabet?: string;
+      // Mixed into the digest before the token. Same token + same salt
+      // keeps the name; a new salt rotates every name. Hash strategy only.
+      salt?: string;
+    }
+  | {
+      strategy: DialectId;
+      // Optional overlay: word → spelling for alphanumeric runs. A hit
+      // replaces the mouth spelling; a miss still uses the mouth.
+      maps?: Readonly<Record<string, string>>;
+    }
+  | {
+      strategy: "maps";
+      // Word → spelling for alphanumeric runs (`flex` in `flex-col`).
+      maps: Readonly<Record<string, string>>;
+    }
   | {
       strategy: "words";
-      vocabulary: ReadonlyArray<string>;
+      // Built-in pack id (`star-wars`, `klingon`, …). Exactly one of
+      // `theme` or `vocabulary` is required.
+      theme?: ThemeId;
+      // Custom word list. Use this instead of `theme` when you bring your
+      // own names.
+      vocabulary?: ReadonlyArray<string>;
       // Prominence manifest (minwind prominence): original token -> the
       // document-order index of the first class-bearing element carrying
       // it. Tokens in the map draw the vocabulary in curation order — the
@@ -27,12 +64,169 @@ export type NamingConfig =
       // the DOM shell reads on-theme; unmapped tokens keep the
       // byte-optimal shortest-word deal.
       prominence?: Readonly<Record<string, number>>;
+      // Hash length for tokens the vocabulary cannot cover. Same floor as
+      // strategy "hash": default 4, minimum 4.
+      length?: number;
     }
   | {
       strategy: "quotes";
-      corpus: ReadonlyArray<string>;
-      vocabulary?: ReadonlyArray<string>;
+      // Sentences. Split on non-alphanumerics, sanitized to CSS idents,
+      // dealt in quote order. Duplicate words keep the first occurrence.
+      quotes: ReadonlyArray<string>;
+      prominence?: Readonly<Record<string, number>>;
+      length?: number;
     };
+
+export type ThemedNamingConfig = Extract<
+  NamingConfig,
+  { strategy: "words" | "quotes" }
+>;
+
+export function isThemedNaming(
+  config: NamingConfig | undefined,
+): config is ThemedNamingConfig {
+  return (
+    config !== undefined &&
+    (config.strategy === "words" || config.strategy === "quotes")
+  );
+}
+
+export function isDialectNaming(config: NamingConfig | undefined): config is {
+  strategy: DialectId;
+  maps?: Readonly<Record<string, string>>;
+} {
+  return config !== undefined && isDialectId(config.strategy);
+}
+
+export function isMapsNaming(
+  config: NamingConfig | undefined,
+): config is { strategy: "maps"; maps: Readonly<Record<string, string>> } {
+  return config !== undefined && config.strategy === "maps";
+}
+
+export function assertMapsConfig(config: NamingConfig): void {
+  if (!isMapsNaming(config)) return;
+  assertBannedNamingFields(config, "maps", [
+    "theme",
+    "vocabulary",
+    "quotes",
+    "prominence",
+    "length",
+    "prefix",
+    "alphabet",
+    "salt",
+  ]);
+  if (config.maps === undefined) {
+    throw new Error('minwind: naming.strategy "maps" requires maps');
+  }
+}
+
+export function assertDialectConfig(config: NamingConfig): void {
+  if (!isDialectNaming(config)) return;
+  assertBannedNamingFields(config, config.strategy, [
+    "theme",
+    "vocabulary",
+    "quotes",
+    "prominence",
+    "length",
+    "prefix",
+    "alphabet",
+    "salt",
+  ]);
+}
+
+export function assertHashConfig(config: NamingConfig): void {
+  if (config.strategy !== "hash") return;
+  assertBannedNamingFields(config, "hash", [
+    "theme",
+    "vocabulary",
+    "quotes",
+    "prominence",
+    "maps",
+  ]);
+  resolveHashPrefix(config.prefix);
+  resolveHashAlphabet(config.alphabet);
+  resolveHashSalt(config.salt);
+}
+
+export function assertThemedConfig(config: NamingConfig): void {
+  if (!isThemedNaming(config)) return;
+  assertBannedNamingFields(config, config.strategy, [
+    "prefix",
+    "alphabet",
+    "salt",
+  ]);
+}
+
+function assertBannedNamingFields(
+  config: NamingConfig,
+  strategy: string,
+  banned: ReadonlyArray<string>,
+): void {
+  const record = config as unknown as Record<string, unknown>;
+  for (const key of banned) {
+    if (record[key] !== undefined) {
+      throw new Error(
+        `minwind: naming.strategy "${strategy}" cannot set ${key}`,
+      );
+    }
+  }
+}
+
+export function hashLengthOf(
+  config: NamingConfig | undefined,
+): number | undefined {
+  if (config === undefined || isDialectNaming(config) || isMapsNaming(config)) {
+    return undefined;
+  }
+  return config.length;
+}
+
+export function hashPrefixOf(
+  config: NamingConfig | undefined,
+): string | undefined {
+  if (config === undefined || config.strategy !== "hash") return undefined;
+  return config.prefix;
+}
+
+export function hashAlphabetOf(
+  config: NamingConfig | undefined,
+): string | undefined {
+  if (config === undefined || config.strategy !== "hash") return undefined;
+  return config.alphabet;
+}
+
+export function hashSaltOf(
+  config: NamingConfig | undefined,
+): string | undefined {
+  if (config === undefined || config.strategy !== "hash") return undefined;
+  return config.salt;
+}
+
+export function resolveHasher(
+  config: NamingConfig | undefined,
+): (token: string) => string {
+  if (config !== undefined && isDialectNaming(config)) {
+    assertDialectConfig(config);
+    return createDialectHasher(config.strategy, config.maps);
+  }
+  if (config !== undefined && isMapsNaming(config)) {
+    assertMapsConfig(config);
+    return createMapsHasher(config.maps);
+  }
+  if (config !== undefined && isThemedNaming(config)) {
+    assertThemedConfig(config);
+  }
+  if (config !== undefined && config.strategy === "hash") {
+    assertHashConfig(config);
+  }
+  return createHasher(
+    hashLengthOf(config),
+    hashPrefixOf(config),
+    hashAlphabetOf(config),
+    hashSaltOf(config),
+  );
+}
 
 export interface NamingList {
   // Sorted, deduplicated (canonical list-key shape), and every token
@@ -42,14 +236,9 @@ export interface NamingList {
 }
 
 export interface NamingResult {
-  // Every input token's assigned name (quote word, vocabulary word, or
-  // content-hash fallback).
+  // Every input token's assigned name (vocabulary word or content-hash
+  // fallback).
   names: Map<string, string>;
-  // Canonical list key -> that list's tokens in quote word order. Only
-  // quote-covered lists appear; the source transform reorders to match.
-  order: Map<string, Array<string>>;
-  quotedLists: number;
-  totalLists: number;
   // Tokens dealt a vocabulary word via the prominence manifest (words
   // strategy only). Zero with a manifest provided means the manifest
   // matched nothing — usually a sign it was generated from a renamed
@@ -59,13 +248,16 @@ export interface NamingResult {
 
 // Words become CSS class names, so they must satisfy the registry's ident
 // pattern: punctuation and apostrophes strip away ("you're" -> "youre",
-// "t-shirt" -> "tshirt"), and a word that cannot survive as
-// [a-z][a-z0-9]* (a bare number, a symbol) breaks the quote into segments
-// there. Reserved words (real stylesheet classes, source tokens) break
-// segments too: assigning one would collide with a name the stylesheet
-// keeps, and the registry's bijection check fails the build on that.
+// "t-shirt" -> "tshirt"). A digit-leading remainder gets a leading
+// underscore ("2b" -> "_2b") so it stays a CSS ident without escaping.
+// A symbol-only remainder is dropped. Reserved words (real stylesheet
+// classes, source tokens) are dropped too: assigning one would collide
+// with a name the stylesheet keeps, and the registry's bijection check
+// fails the build on that.
 function sanitizeWord(raw: string): string | null {
-  const word = raw.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const stripped = raw.toLowerCase().replace(/[^a-z0-9]/g, "");
+  if (stripped === "") return null;
+  const word = /^[0-9]/.test(stripped) ? `_${stripped}` : stripped;
   return NAME_PATTERN.test(word) ? word : null;
 }
 
@@ -84,183 +276,64 @@ function sanitizeVocabulary(
   return words;
 }
 
-// The fragment inventory: every contiguous run of distinct usable words in
-// every quote, grouped by run length. Names are a bijection, so a run with a
-// repeated word ("now now") can never map a token list — runs stop at the
-// repeat. Corpus order is the inventory order and the score tie-break
-// (earlier quotes win when byte cost ties), so the corpus still lists the
-// most iconic lines first.
-function buildFragments(
-  corpus: ReadonlyArray<string>,
-  reserved: ReadonlySet<string>,
-  maxLength: number,
-): Map<number, Array<Array<string>>> {
-  const byLength = new Map<number, Array<Array<string>>>();
-  const seen = new Set<string>();
-
-  function flush(segment: Array<string>): void {
-    for (let start = 0; start < segment.length; start += 1) {
-      const run: Array<string> = [];
-      for (let end = start; end < segment.length; end += 1) {
-        const word = segment[end];
-        if (run.includes(word)) break;
-        run.push(word);
-        if (run.length > maxLength) break;
-        const key = run.join(" ");
-        if (seen.has(key)) continue;
-        seen.add(key);
-        let bucket = byLength.get(run.length);
-        if (bucket === undefined) {
-          bucket = [];
-          byLength.set(run.length, bucket);
-        }
-        bucket.push([...run]);
-      }
+// Split sentences into candidate idents. Punctuation is a boundary
+// ("you're" -> "youre" after sanitize; "t-shirt" stays one word because
+// sanitize strips the hyphen). Callers still run sanitizeVocabulary.
+export function vocabularyFromQuotes(
+  quotes: ReadonlyArray<string>,
+): Array<string> {
+  const words: Array<string> = [];
+  for (const quote of quotes) {
+    const parts = quote.split(/[^A-Za-z0-9]+/);
+    for (const part of parts) {
+      if (part === "") continue;
+      words.push(part);
     }
   }
+  return words;
+}
 
-  for (const quote of corpus) {
-    let segment: Array<string> = [];
-    for (const raw of quote.split(/\s+/)) {
-      const word = sanitizeWord(raw);
-      if (word === null || reserved.has(word)) {
-        flush(segment);
-        segment = [];
-      } else {
-        segment.push(word);
-      }
+export function resolveVocabulary(
+  config: ThemedNamingConfig,
+): ReadonlyArray<string> {
+  if (config.strategy === "quotes") {
+    if (config.quotes.length === 0) {
+      throw new Error('minwind: naming.strategy "quotes" requires quotes');
     }
-    flush(segment);
+    return vocabularyFromQuotes(config.quotes);
   }
-  return byLength;
+  if (config.theme !== undefined && config.vocabulary !== undefined) {
+    throw new Error(
+      "minwind: naming.theme and naming.vocabulary cannot both be set",
+    );
+  }
+  if (config.theme !== undefined) return vocabularyForTheme(config.theme);
+  if (config.vocabulary !== undefined) return config.vocabulary;
+  throw new Error(
+    'minwind: naming.strategy "words" requires theme or vocabulary',
+  );
 }
 
 // Returns undefined for the hash strategy (the registry's default naming
-// applies). Otherwise assigns every token a name: quote words where the
-// greedy solver can cover lists, vocabulary words after that, content-hash
-// names when the words run out.
+// applies). Otherwise assigns every token a name: vocabulary words first,
+// content-hash names when the words run out.
 export function resolveNaming(
   config: NamingConfig,
   tokens: ReadonlyArray<string>,
   lists: ReadonlyArray<NamingList>,
   reserved: ReadonlySet<string>,
 ): NamingResult | undefined {
-  if (config.strategy === "hash") return undefined;
-  const corpus = config.strategy === "quotes" ? config.corpus : [];
-  const tokenSet = new Set<string>(tokens);
+  if (!isThemedNaming(config)) return undefined;
+  assertThemedConfig(config);
 
-  // Only lists whose tokens all rename can participate: a list carrying an
-  // excluded token keeps that token's original bytes, so its words can
-  // never form a clean quote in the DOM.
-  const eligible = lists.filter(function (list) {
-    return list.tokens.every(function (token) {
-      return tokenSet.has(token);
-    });
-  });
-  const maxLength = eligible.reduce(function (max, list) {
-    return Math.max(max, list.tokens.length);
-  }, 1);
-  const fragments = buildFragments(corpus, reserved, maxLength);
-
-  const assigned = new Map<string, string>();
-  const tokenForWord = new Map<string, string>();
-  const order = new Map<string, Array<string>>();
-
-  // Longest first: long lists are the hardest to satisfy (few long quotes
-  // exist) and are typically the components that render most (cards, chips),
-  // while a source count is nearly flat — a card's list appears once no
-  // matter how often the component renders. Singletons pick last and spend
-  // the leftover words.
-  const sortedLists = Array.from(eligible).sort(function (a, b) {
-    return (
-      b.tokens.length - a.tokens.length ||
-      b.count - a.count ||
-      compareCodeUnits(a.tokens.join(" "), b.tokens.join(" "))
+  const vocabulary = sanitizeVocabulary(resolveVocabulary(config), reserved);
+  if (config.strategy === "quotes" && vocabulary.length === 0) {
+    throw new Error(
+      "minwind: naming.quotes produced no CSS idents; every word was empty," +
+        " reserved, or invalid",
     );
-  });
-
-  let quotedLists = 0;
-  for (const list of sortedLists) {
-    // Singletons never take quote words: a lone word is mid-quote residue
-    // ("feet" from "my brains are going into my feet") and reads as noise
-    // in the DOM. They draw from the vocabulary below, where every word is
-    // chosen to stand alone, and the corpus stays whole for lists that can
-    // actually carry a phrase.
-    if (list.tokens.length < 2) continue;
-    const candidates = fragments.get(list.tokens.length);
-    if (candidates === undefined) continue;
-    // Among equal-length fragments, minimize rendered class bytes:
-    // sum(word.length) * list.count. Corpus order is the tie-break only
-    // (candidates are already in first-seen corpus order).
-    let bestFragment: Array<string> | undefined;
-    let bestFresh: Array<string> | undefined;
-    let bestScore = 0;
-    for (const fragment of candidates) {
-      const pinned: Array<string> = [];
-      let blocked = false;
-      for (const token of list.tokens) {
-        const word = assigned.get(token);
-        if (word === undefined) continue;
-        if (!fragment.includes(word)) {
-          blocked = true;
-          break;
-        }
-        pinned.push(word);
-      }
-      if (blocked) continue;
-      const fresh = fragment.filter(function (word) {
-        return !pinned.includes(word);
-      });
-      if (
-        fresh.some(function (word) {
-          return tokenForWord.has(word);
-        })
-      ) {
-        continue;
-      }
-      let wordLengthSum = 0;
-      for (const word of fragment) {
-        wordLengthSum += word.length;
-      }
-      const score = wordLengthSum * list.count;
-      if (bestFragment === undefined || score < bestScore) {
-        bestFragment = fragment;
-        bestFresh = fresh;
-        bestScore = score;
-      }
-    }
-    if (bestFragment === undefined || bestFresh === undefined) continue;
-    // list.tokens is canonical (sorted), so pairing open tokens with the
-    // fragment's leftover words in fragment order is deterministic.
-    const open = list.tokens.filter(function (token) {
-      return !assigned.has(token);
-    });
-    for (let index = 0; index < open.length; index += 1) {
-      assigned.set(open[index], bestFresh[index]);
-      tokenForWord.set(bestFresh[index], open[index]);
-    }
-    const orderedTokens: Array<string> = [];
-    for (const word of bestFragment) {
-      const token = tokenForWord.get(word);
-      if (token === undefined) {
-        throw new Error(
-          `minwind: internal error: quote word "${word}" lost its token`,
-        );
-      }
-      orderedTokens.push(token);
-    }
-    order.set(canonicalListKey(list.tokens), orderedTokens);
-    quotedLists += 1;
   }
-
-  const vocabulary = sanitizeVocabulary(
-    config.vocabulary ?? [],
-    reserved,
-  ).filter(function (word) {
-    return !tokenForWord.has(word);
-  });
-
-  const names = new Map<string, string>(assigned);
+  const names = new Map<string, string>();
 
   // Prominence dealing: tokens first-seen near the top of the prerendered
   // DOM — the shell a devtools inspector meets first — draw the vocabulary
@@ -268,8 +341,7 @@ export function resolveNaming(
   // The shell renders once per page, so spending longer names there costs
   // almost nothing; everything else keeps the length-weighted deal below.
   let prominent = 0;
-  const prominence =
-    config.strategy === "words" ? config.prominence : undefined;
+  const prominence = config.prominence;
   if (prominence !== undefined) {
     const shell = tokens
       .filter(function (token) {
@@ -285,11 +357,10 @@ export function resolveNaming(
     }
   }
 
-  // Deal the shortest words to the hottest tokens: a token's render weight
-  // is the summed count of every list carrying it, and short names cost the
-  // fewest bytes where they render most. Weight ties keep token code-unit
-  // order; word length ties keep the vocabulary's curation order. Words
-  // already spent (quote fragments, prominence deals) leave the pool.
+  // Deal leftover words. Words spends shortest names on the hottest
+  // tokens. Quotes keeps quote order so a speech still reads in sequence
+  // even off the shell; leftover tokens hash. Weight ties keep token
+  // code-unit order.
   const weight = new Map<string, number>();
   for (const list of lists) {
     for (const token of list.tokens) {
@@ -302,30 +373,28 @@ export function resolveNaming(
     );
   });
   const spent = new Set<string>(names.values());
-  const shortestFirst = vocabulary
-    .filter(function (word) {
-      return !spent.has(word);
-    })
-    .sort(function (a, b) {
+  const pool = vocabulary.filter(function (word) {
+    return !spent.has(word);
+  });
+  if (config.strategy === "words") {
+    pool.sort(function (a, b) {
       return a.length - b.length;
     });
+  }
 
   let dealt = 0;
   for (const token of dealOrder) {
     if (names.has(token)) continue;
-    if (dealt < shortestFirst.length) {
-      names.set(token, shortestFirst[dealt]);
+    if (dealt < pool.length) {
+      names.set(token, pool[dealt]);
       dealt += 1;
     } else {
-      names.set(token, hashClassName(token));
+      names.set(token, hashClassName(token, config.length));
     }
   }
 
   return {
     names,
-    order,
-    quotedLists,
-    totalLists: sortedLists.length,
     prominent,
   };
 }

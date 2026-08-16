@@ -1,6 +1,10 @@
 node_modules/
 dist/
 .output/
+docs/
+**/plans/
+test/fixtures/turbopack-modules-site/.next/
+test/fixtures/turbopack-modules-site/out/
 .vinxi/
 *.log
 .DS_Store

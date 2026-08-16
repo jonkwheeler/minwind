@@ -6,6 +6,8 @@ import {
   NAME_PATTERN,
   createNameRegistry,
   hashClassName,
+  isGeneratedIdent,
+  safeNameLength,
   type ExclusionConfig,
   type RegistryInput,
 } from "../src/names.js";
@@ -40,6 +42,21 @@ const SITE_EXCLUSIONS: ExclusionConfig = {
   prefixes: ["dissolve-"],
 };
 
+describe("isGeneratedIdent", function () {
+  it("accepts hash names and hyphenated dialect names", function () {
+    assert.strictEqual(isGeneratedIdent("xkzu"), true);
+    assert.strictEqual(isGeneratedIdent("_2b"), true);
+    assert.strictEqual(isGeneratedIdent("p-4"), true);
+    assert.strictEqual(isGeneratedIdent("hovah:bawdah"), true);
+  });
+
+  it("rejects empty, spaced, and digit-leading names", function () {
+    assert.strictEqual(isGeneratedIdent(""), false);
+    assert.strictEqual(isGeneratedIdent("p 4"), false);
+    assert.strictEqual(isGeneratedIdent("4px"), false);
+  });
+});
+
 describe("hashClassName", () => {
   it("produces ident-safe fixed-length names for known tokens", function () {
     for (const token of KNOWN_TOKENS) {
@@ -66,6 +83,113 @@ describe("hashClassName", () => {
     assert.throws(function () {
       hashClassName("");
     }, /empty/);
+  });
+
+  it("uses length 4 by default and rejects shorter lengths", function () {
+    assert.strictEqual(hashClassName("flex").length, 4);
+    assert.strictEqual(hashClassName("flex", 4), hashClassName("flex"));
+    assert.throws(function () {
+      hashClassName("flex", 3);
+    }, /naming.length/);
+  });
+
+  it("produces a longer ident when length is raised", function () {
+    const name = hashClassName("flex", 6);
+    assert.strictEqual(name.length, 6);
+    assert.match(name, NAME_PATTERN);
+    assert.notStrictEqual(name, hashClassName("flex"));
+  });
+
+  it("prepends prefix without changing the hash body", function () {
+    const body = hashClassName("flex");
+    assert.strictEqual(hashClassName("flex", 4, "tw"), "tw" + body);
+    assert.strictEqual(hashClassName("flex", 4, "tw-"), "tw-" + body);
+    assert.strictEqual(isGeneratedIdent(hashClassName("flex", 4, "tw-")), true);
+  });
+
+  it("rejects an empty, spaced, or digit-leading prefix", function () {
+    assert.throws(function () {
+      hashClassName("flex", 4, "");
+    }, /naming.prefix/);
+    assert.throws(function () {
+      hashClassName("flex", 4, "tw ");
+    }, /whitespace/);
+    assert.throws(function () {
+      hashClassName("flex", 4, "1");
+    }, /ident prefix/);
+  });
+
+  it("keeps default names when the alphabet is the built-in set", function () {
+    assert.strictEqual(
+      hashClassName(
+        "flex",
+        4,
+        undefined,
+        "abcdefghijklmnopqrstuvwxyz0123456789",
+      ),
+      hashClassName("flex"),
+    );
+  });
+
+  it("uses a custom alphabet for the hash body", function () {
+    const name = hashClassName("flex", 4, undefined, "abcd");
+    assert.match(name, /^[abcd]+$/);
+    assert.strictEqual(name.length, 4);
+    assert.notStrictEqual(name, hashClassName("flex"));
+  });
+
+  it("rejects an empty, duplicate, or letter-free alphabet", function () {
+    assert.throws(function () {
+      hashClassName("flex", 4, undefined, "");
+    }, /naming.alphabet/);
+    assert.throws(function () {
+      hashClassName("flex", 4, undefined, "abca");
+    }, /duplicate/);
+    assert.throws(function () {
+      hashClassName("flex", 4, undefined, "0123");
+    }, /letter/);
+    assert.throws(function () {
+      hashClassName("flex", 4, undefined, "AB");
+    }, /lowercase/);
+  });
+
+  it("mixes salt into the digest without changing default names", function () {
+    assert.strictEqual(
+      hashClassName("flex", 4, undefined, undefined, undefined),
+      hashClassName("flex"),
+    );
+    const salted = hashClassName("flex", 4, undefined, undefined, "v2");
+    assert.notStrictEqual(salted, hashClassName("flex"));
+    assert.strictEqual(
+      salted,
+      hashClassName("flex", 4, undefined, undefined, "v2"),
+    );
+    assert.notStrictEqual(
+      salted,
+      hashClassName("flex", 4, undefined, undefined, "v3"),
+    );
+    assert.match(salted, NAME_PATTERN);
+    assert.notStrictEqual(
+      hashClassName("c", 4, undefined, undefined, "ab"),
+      hashClassName("bc", 4, undefined, undefined, "a"),
+    );
+  });
+
+  it("rejects an empty salt", function () {
+    assert.throws(function () {
+      hashClassName("flex", 4, undefined, undefined, "");
+    }, /naming.salt/);
+  });
+});
+
+describe("safeNameLength", function () {
+  it("returns 4 when the token set is injective at the default length", function () {
+    assert.strictEqual(safeNameLength(["flex", "grid", "p-4"]), 4);
+  });
+
+  it("returns 5 when a reserved name occupies the length-4 hash", function () {
+    const taken = hashClassName("flex");
+    assert.strictEqual(safeNameLength(["flex"], new Set([taken])), 5);
   });
 });
 
@@ -102,6 +226,19 @@ describe("createNameRegistry happy path", function () {
       pair.nameFor("border-accent"),
       pair.nameFor("hover:border-accent"),
     );
+  });
+
+  it("applies a hash prefix through the registry hasher", function () {
+    const registry = createNameRegistry(
+      inputFor({
+        universe: ["flex"],
+        sourceTokens: ["flex"],
+        hash: function (token: string): string {
+          return hashClassName(token, 4, "tw");
+        },
+      }),
+    );
+    assert.strictEqual(registry.nameFor("flex"), "tw" + hashClassName("flex"));
   });
 
   it("produces an identical map regardless of insertion order", function () {
@@ -318,6 +455,19 @@ describe("createNameRegistry collision policy (R10)", function () {
     }, /collision.*ab12/);
   });
 
+  it("names the next length that would miss a reserved hash", function () {
+    const taken = hashClassName("flex");
+    assert.notStrictEqual(taken, "flex");
+    assert.throws(function () {
+      createNameRegistry(
+        inputFor({
+          universe: ["flex", taken],
+          sourceTokens: ["flex"],
+        }),
+      );
+    }, /increase naming.length to 5/);
+  });
+
   it("fails loudly when a hash produces a non-ident-safe name", function () {
     assert.throws(function () {
       createNameRegistry(
@@ -330,5 +480,18 @@ describe("createNameRegistry collision policy (R10)", function () {
         }),
       );
     }, /identifier/);
+  });
+});
+
+describe("createNameRegistry file-qualified module keys", function () {
+  it("renames definition-site locals without a class-context source token", function () {
+    const a = "src/a.module.css\0button";
+    const b = "src/b.module.css\0button";
+    const registry = createNameRegistry(
+      inputFor({ universe: [a, b], sourceTokens: [a, b] }),
+    );
+    assert.notStrictEqual(registry.nameFor(a), registry.nameFor(b));
+    assert.ok(registry.nameFor(a) !== undefined);
+    assert.ok(registry.nameFor(b) !== undefined);
   });
 });

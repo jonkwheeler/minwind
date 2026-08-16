@@ -1,7 +1,7 @@
 import { defineConfig } from "@solidjs/start/config";
 import tailwindcss from "@tailwindcss/vite";
 import { minwind } from "minwind";
-import { DEMO_CORPUS, DEMO_VOCABULARY } from "./naming";
+import { DEMO_VOCABULARY } from "./naming";
 
 export default defineConfig({
   vite: {
@@ -9,8 +9,7 @@ export default defineConfig({
       tailwindcss(),
       ...minwind({
         naming: {
-          strategy: "quotes",
-          corpus: DEMO_CORPUS,
+          strategy: "words",
           vocabulary: DEMO_VOCABULARY,
         },
         // @solidjs/router injects 'active'/'inactive' on <A> at runtime;

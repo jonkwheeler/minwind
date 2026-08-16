@@ -31,6 +31,7 @@ export function createCustomPropertyRegistry(
   config: CustomPropertiesConfig,
   unsafe: ReadonlySet<string> = new Set<string>(),
   reserved: ReadonlySet<string> = new Set<string>(),
+  hash: (token: string) => string = hashClassName,
 ): CustomPropertyRegistry {
   const owned = new Set<string>();
   for (const property of config.owned) {
@@ -101,7 +102,7 @@ export function createCustomPropertyRegistry(
         attempt === 0
           ? `custom-property:${property}`
           : `custom-property:${property}:${attempt}`;
-      name = `--${hashClassName(hashInput)}`;
+      name = `--${hash(hashInput)}`;
       attempt += 1;
     } while (unavailable.has(name));
     names.set(property, name);

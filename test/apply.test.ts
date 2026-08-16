@@ -4,7 +4,18 @@ import os from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
 import { applyBuildOutput } from "../src/apply.js";
-import { createNameRegistry, type NameRegistry } from "../src/names.js";
+import { parseArgs, runApplyCli } from "../src/apply-cli.js";
+import {
+  collectModuleInventory,
+  createModuleNameRegistry,
+  hashModuleLocal,
+  SCSS_SASS_ERROR,
+} from "../src/engines/css-modules.js";
+import {
+  createNameRegistry,
+  hashClassName,
+  type NameRegistry,
+} from "../src/names.js";
 import { transformBundle } from "../src/transform-bundle.js";
 import { transformModule } from "../src/transform-source.js";
 import type { ConsolidationVerdict } from "../src/consolidate.js";
@@ -37,6 +48,419 @@ const LAYERED_CSS =
   ".p-4{padding:1rem}" +
   ".mb-16{margin-bottom:4rem}" +
   "}";
+
+describe("parseArgs mode flags", function () {
+  it("defaults to compress", function () {
+    const options = parseArgs(["/tmp/out"]);
+    assert.strictEqual(options.mode, "compress");
+    assert.strictEqual(options.consolidate, true);
+  });
+
+  it("maps --mode morph and --no-consolidate to morph", function () {
+    assert.strictEqual(
+      parseArgs(["/tmp/out", "--mode", "morph"]).mode,
+      "morph",
+    );
+    assert.strictEqual(
+      parseArgs(["/tmp/out", "--no-consolidate"]).mode,
+      "morph",
+    );
+    assert.strictEqual(
+      parseArgs(["/tmp/out", "--no-consolidate"]).consolidate,
+      false,
+    );
+  });
+
+  it("accepts the CSS Modules engine with hash naming", function () {
+    const options = parseArgs(["/tmp/out", "--engines", "css-modules"]);
+    assert.deepStrictEqual(options.engines, ["css-modules"]);
+    assert.strictEqual(options.naming, undefined);
+  });
+
+  it("requires --quotes for --naming quotes", function () {
+    const exit = process.exit;
+    const writes: Array<string> = [];
+    const write = process.stderr.write;
+    process.stderr.write = function (chunk: string | Uint8Array) {
+      writes.push(String(chunk));
+      return true;
+    } as typeof process.stderr.write;
+    process.exit = function (code?: number): never {
+      throw new Error(`exit ${code}`);
+    } as typeof process.exit;
+    try {
+      assert.throws(function () {
+        parseArgs(["/tmp/out", "--naming", "quotes"]);
+      }, /exit 1/);
+      assert.ok(writes.join("").includes("--quotes"));
+    } finally {
+      process.exit = exit;
+      process.stderr.write = write;
+    }
+  });
+
+  it("loads sentences from --quotes", function () {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minwind-quotes-"));
+    const file = path.join(dir, "quotes.json");
+    fs.writeFileSync(
+      file,
+      JSON.stringify(["Ask not what your country can do for you"]),
+    );
+    try {
+      const options = parseArgs(["/tmp/out", "--quotes", file]);
+      assert.deepStrictEqual(options.naming, {
+        strategy: "quotes",
+        quotes: ["Ask not what your country can do for you"],
+      });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts --hash-length on the hash strategy", function () {
+    const options = parseArgs(["/tmp/out", "--hash-length", "6"]);
+    assert.deepStrictEqual(options.naming, { strategy: "hash", length: 6 });
+  });
+
+  it("accepts --hash-prefix on the hash strategy", function () {
+    const options = parseArgs(["/tmp/out", "--hash-prefix", "tw"]);
+    assert.deepStrictEqual(options.naming, {
+      strategy: "hash",
+      prefix: "tw",
+    });
+  });
+
+  it("accepts --hash-prefix together with --hash-length", function () {
+    const options = parseArgs([
+      "/tmp/out",
+      "--hash-prefix",
+      "tw-",
+      "--hash-length",
+      "6",
+    ]);
+    assert.deepStrictEqual(options.naming, {
+      strategy: "hash",
+      length: 6,
+      prefix: "tw-",
+    });
+  });
+
+  it("accepts --hash-alphabet on the hash strategy", function () {
+    const options = parseArgs(["/tmp/out", "--hash-alphabet", "abcd"]);
+    assert.deepStrictEqual(options.naming, {
+      strategy: "hash",
+      alphabet: "abcd",
+    });
+  });
+
+  it("accepts --hash-salt on the hash strategy", function () {
+    const options = parseArgs(["/tmp/out", "--hash-salt", "v2"]);
+    assert.deepStrictEqual(options.naming, {
+      strategy: "hash",
+      salt: "v2",
+    });
+  });
+
+  it("rejects --hash-length below 4", function () {
+    const exit = process.exit;
+    const writes: Array<string> = [];
+    const write = process.stderr.write;
+    process.stderr.write = function (chunk: string | Uint8Array) {
+      writes.push(String(chunk));
+      return true;
+    } as typeof process.stderr.write;
+    process.exit = function (code?: number): never {
+      throw new Error(`exit ${code}`);
+    } as typeof process.exit;
+    try {
+      assert.throws(function () {
+        parseArgs(["/tmp/out", "--hash-length", "3"]);
+      }, /exit 1/);
+      assert.ok(writes.join("").includes("naming.length"));
+    } finally {
+      process.exit = exit;
+      process.stderr.write = write;
+    }
+  });
+
+  it("rejects --hash-prefix with --naming boston", function () {
+    const exit = process.exit;
+    const writes: Array<string> = [];
+    const write = process.stderr.write;
+    process.stderr.write = function (chunk: string | Uint8Array) {
+      writes.push(String(chunk));
+      return true;
+    } as typeof process.stderr.write;
+    process.exit = function (code?: number): never {
+      throw new Error(`exit ${code}`);
+    } as typeof process.exit;
+    try {
+      assert.throws(function () {
+        parseArgs(["/tmp/out", "--naming", "boston", "--hash-prefix", "tw"]);
+      }, /exit 1/);
+      assert.ok(writes.join("").includes("hash-prefix"));
+    } finally {
+      process.exit = exit;
+      process.stderr.write = write;
+    }
+  });
+
+  it("accepts --naming boston", function () {
+    const options = parseArgs(["/tmp/out", "--naming", "boston"]);
+    assert.deepStrictEqual(options.naming, { strategy: "boston" });
+  });
+
+  it("accepts --naming yorkshire", function () {
+    const options = parseArgs(["/tmp/out", "--naming", "yorkshire"]);
+    assert.deepStrictEqual(options.naming, { strategy: "yorkshire" });
+  });
+
+  it("accepts --naming geordie", function () {
+    const options = parseArgs(["/tmp/out", "--naming", "geordie"]);
+    assert.deepStrictEqual(options.naming, { strategy: "geordie" });
+  });
+
+  it("accepts --naming piglatin", function () {
+    const options = parseArgs(["/tmp/out", "--naming", "piglatin"]);
+    assert.deepStrictEqual(options.naming, { strategy: "piglatin" });
+  });
+
+  it("loads maps from --maps", function () {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minwind-maps-"));
+    const mapsFile = path.join(dir, "maps.json");
+    fs.writeFileSync(mapsFile, JSON.stringify({ flex: "muscles" }));
+    try {
+      const options = parseArgs([
+        "/tmp/out",
+        "--naming",
+        "maps",
+        "--maps",
+        mapsFile,
+      ]);
+      assert.deepStrictEqual(options.naming, {
+        strategy: "maps",
+        maps: { flex: "muscles" },
+      });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("overlays --maps onto --naming boston", function () {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minwind-overlay-"));
+    const mapsFile = path.join(dir, "maps.json");
+    fs.writeFileSync(mapsFile, JSON.stringify({ flex: "muscles" }));
+    try {
+      const options = parseArgs([
+        "/tmp/out",
+        "--naming",
+        "boston",
+        "--maps",
+        mapsFile,
+      ]);
+      assert.deepStrictEqual(options.naming, {
+        strategy: "boston",
+        maps: { flex: "muscles" },
+      });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects --naming maps without --maps", function () {
+    const exit = process.exit;
+    const writes: Array<string> = [];
+    const write = process.stderr.write;
+    process.stderr.write = function (chunk: string | Uint8Array) {
+      writes.push(String(chunk));
+      return true;
+    } as typeof process.stderr.write;
+    process.exit = function (code?: number): never {
+      throw new Error(`exit ${code}`);
+    } as typeof process.exit;
+    try {
+      assert.throws(function () {
+        parseArgs(["/tmp/out", "--naming", "maps"]);
+      }, /exit 1/);
+      assert.ok(writes.join("").includes("maps"));
+    } finally {
+      process.exit = exit;
+      process.stderr.write = write;
+    }
+  });
+
+  it("rejects --naming yorkshire together with --theme", function () {
+    const exit = process.exit;
+    const writes: Array<string> = [];
+    const write = process.stderr.write;
+    process.stderr.write = function (chunk: string | Uint8Array) {
+      writes.push(String(chunk));
+      return true;
+    } as typeof process.stderr.write;
+    process.exit = function (code?: number): never {
+      throw new Error(`exit ${code}`);
+    } as typeof process.exit;
+    try {
+      assert.throws(function () {
+        parseArgs([
+          "/tmp/out",
+          "--naming",
+          "yorkshire",
+          "--theme",
+          "star-wars",
+        ]);
+      }, /exit 1/);
+      assert.ok(writes.join("").includes("yorkshire"));
+    } finally {
+      process.exit = exit;
+      process.stderr.write = write;
+    }
+  });
+
+  it("accepts --theme star-wars for words naming", function () {
+    const options = parseArgs(["/tmp/out", "--theme", "star-wars"]);
+    assert.deepStrictEqual(options.naming, {
+      strategy: "words",
+      theme: "star-wars",
+    });
+  });
+
+  it("rejects an unknown --theme", function () {
+    const exit = process.exit;
+    const writes: Array<string> = [];
+    const write = process.stderr.write;
+    process.stderr.write = function (chunk: string | Uint8Array) {
+      writes.push(String(chunk));
+      return true;
+    } as typeof process.stderr.write;
+    process.exit = function (code?: number): never {
+      throw new Error(`exit ${code}`);
+    } as typeof process.exit;
+    try {
+      assert.throws(function () {
+        parseArgs(["/tmp/out", "--theme", "spaceballs"]);
+      }, /exit 1/);
+      assert.ok(writes.join("").includes("star-wars"));
+    } finally {
+      process.exit = exit;
+      process.stderr.write = write;
+    }
+  });
+
+  it("rejects --theme together with --vocabulary", function () {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minwind-vocab-"));
+    const vocab = path.join(dir, "words.json");
+    fs.writeFileSync(vocab, JSON.stringify(["alpha"]));
+    const exit = process.exit;
+    const write = process.stderr.write;
+    process.stderr.write = function () {
+      return true;
+    } as typeof process.stderr.write;
+    process.exit = function (code?: number): never {
+      throw new Error(`exit ${code}`);
+    } as typeof process.exit;
+    try {
+      assert.throws(function () {
+        parseArgs(["/tmp/out", "--theme", "star-wars", "--vocabulary", vocab]);
+      }, /exit 1/);
+    } finally {
+      process.exit = exit;
+      process.stderr.write = write;
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("loads words vocabulary from --vocabulary", function () {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minwind-vocab-"));
+    const vocab = path.join(dir, "words.json");
+    fs.writeFileSync(vocab, JSON.stringify(["alpha", "bravo"]));
+    try {
+      const options = parseArgs([
+        "/tmp/out",
+        "--engines",
+        "css-modules",
+        "--naming",
+        "words",
+        "--vocabulary",
+        vocab,
+      ]);
+      assert.deepStrictEqual(options.naming, {
+        strategy: "words",
+        vocabulary: ["alpha", "bravo"],
+      });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("requires --theme or --vocabulary for --naming words", function () {
+    const exit = process.exit;
+    const writes: Array<string> = [];
+    const write = process.stderr.write;
+    process.stderr.write = function (chunk: string | Uint8Array) {
+      writes.push(String(chunk));
+      return true;
+    } as typeof process.stderr.write;
+    process.exit = function (code?: number): never {
+      throw new Error(`exit ${code}`);
+    } as typeof process.exit;
+    try {
+      assert.throws(function () {
+        parseArgs([
+          "/tmp/out",
+          "--engines",
+          "css-modules",
+          "--naming",
+          "words",
+        ]);
+      }, /exit 1/);
+      assert.ok(writes.join("").includes("--vocabulary"));
+    } finally {
+      process.exit = exit;
+      process.stderr.write = write;
+    }
+  });
+
+  it("fails words apply when SCSS modules exist without sass (R8)", async function () {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "minwind-scss-root-"));
+    const out = fs.mkdtempSync(path.join(os.tmpdir(), "minwind-scss-out-"));
+    const vocab = path.join(root, "words.json");
+    fs.mkdirSync(path.join(root, "src"));
+    fs.writeFileSync(
+      path.join(root, "src", "button.module.scss"),
+      ".root { color: red }",
+    );
+    fs.writeFileSync(vocab, JSON.stringify(["alpha"]));
+    const previous = process.env.MINWIND_FORCE_NO_SASS;
+    process.env.MINWIND_FORCE_NO_SASS = "1";
+    try {
+      await assert.rejects(
+        function () {
+          return runApplyCli([
+            out,
+            "--root",
+            root,
+            "--engines",
+            "css-modules",
+            "--naming",
+            "words",
+            "--vocabulary",
+            vocab,
+          ]);
+        },
+        new RegExp(SCSS_SASS_ERROR.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
+      );
+    } finally {
+      if (previous === undefined) {
+        delete process.env.MINWIND_FORCE_NO_SASS;
+      } else {
+        process.env.MINWIND_FORCE_NO_SASS = previous;
+      }
+      fs.rmSync(root, { recursive: true, force: true });
+      fs.rmSync(out, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("transformModule on emitted HTML", function () {
   it("renames class attributes in a built page", function () {
@@ -250,6 +674,199 @@ describe("applyBuildOutput", function () {
       assert.ok(css.includes(".mb-16{margin-bottom:4rem}"));
       assert.ok(css.includes(`.${nameOf("flex")}{display:flex}`));
     } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("applyBuildOutput Modules remap", function () {
+  it("rewrites proven Module names in JS, CSS, and HTML together", function () {
+    const site = fs.mkdtempSync(path.join(os.tmpdir(), "minwind-mod-root-"));
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minwind-mod-out-"));
+    try {
+      fs.mkdirSync(path.join(site, "src"));
+      const moduleFile = path.join(site, "src", "Button.module.css");
+      fs.writeFileSync(moduleFile, ".root { color: red }");
+      const inventory = collectModuleInventory(site);
+      const registry = createModuleNameRegistry(inventory);
+      const expected = hashModuleLocal(site, moduleFile, "root");
+      const bundler = "Button-module__abc__root";
+      fs.writeFileSync(
+        path.join(dir, "index.html"),
+        `<div class="${bundler}">x</div>`,
+      );
+      fs.mkdirSync(path.join(dir, "assets"));
+      fs.writeFileSync(
+        path.join(dir, "assets", "app.css"),
+        `.${bundler}{color:red}`,
+      );
+      fs.writeFileSync(
+        path.join(dir, "assets", "app.js"),
+        `const styles = { root: "${bundler}" };\n`,
+      );
+      applyBuildOutput({
+        dir,
+        registry: createNameRegistry({
+          universe: new Set(),
+          sourceTokens: new Set(),
+        }),
+        consolidationVerdicts: [],
+        consolidate: false,
+        modules: { root: site, inventory, registry },
+      });
+      assert.ok(
+        fs
+          .readFileSync(path.join(dir, "index.html"), "utf8")
+          .includes(`class="${expected}"`),
+      );
+      assert.ok(
+        fs
+          .readFileSync(path.join(dir, "assets", "app.css"), "utf8")
+          .includes(`.${expected}{color:red}`),
+      );
+      const js = fs.readFileSync(path.join(dir, "assets", "app.js"), "utf8");
+      assert.ok(js.includes(`root: "${expected}"`));
+      assert.ok(!js.includes(bundler));
+    } finally {
+      fs.rmSync(site, { recursive: true, force: true });
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not fail when HTML is missing after a proven JS and CSS remap", function () {
+    const site = fs.mkdtempSync(path.join(os.tmpdir(), "minwind-mod-root-"));
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minwind-mod-out-"));
+    try {
+      fs.mkdirSync(path.join(site, "src"));
+      const moduleFile = path.join(site, "src", "Button.module.css");
+      fs.writeFileSync(moduleFile, ".root { color: red }");
+      const inventory = collectModuleInventory(site);
+      const registry = createModuleNameRegistry(inventory);
+      const expected = hashModuleLocal(site, moduleFile, "root");
+      const bundler = "Button-module__abc__root";
+      fs.writeFileSync(path.join(dir, "app.css"), `.${bundler}{color:red}`);
+      fs.writeFileSync(
+        path.join(dir, "app.js"),
+        `const styles = { root: "${bundler}" };\n`,
+      );
+      applyBuildOutput({
+        dir,
+        registry: createNameRegistry({
+          universe: new Set(),
+          sourceTokens: new Set(),
+        }),
+        consolidationVerdicts: [],
+        consolidate: false,
+        modules: { root: site, inventory, registry },
+      });
+      assert.ok(
+        fs
+          .readFileSync(path.join(dir, "app.css"), "utf8")
+          .includes(`.${expected}`),
+      );
+      assert.ok(
+        fs
+          .readFileSync(path.join(dir, "app.js"), "utf8")
+          .includes(`"${expected}"`),
+      );
+    } finally {
+      fs.rmSync(site, { recursive: true, force: true });
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("gives Module local flex and Tailwind flex distinct names (AE5)", function () {
+    const site = fs.mkdtempSync(path.join(os.tmpdir(), "minwind-dual-root-"));
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minwind-dual-out-"));
+    try {
+      fs.mkdirSync(path.join(site, "src"));
+      const moduleFile = path.join(site, "src", "Card.module.css");
+      fs.writeFileSync(moduleFile, ".flex { gap: 4px }");
+      const inventory = collectModuleInventory(site);
+      const modulesRegistry = createModuleNameRegistry(inventory);
+      const twFlex = hashClassName("flex");
+      const modFlex = hashModuleLocal(site, moduleFile, "flex");
+      assert.notStrictEqual(twFlex, modFlex);
+      const bundler = "Card-module__abc__flex";
+      fs.writeFileSync(
+        path.join(dir, "index.html"),
+        `<div class="flex ${bundler}">x</div>`,
+      );
+      fs.writeFileSync(path.join(dir, "app.css"), LAYERED_CSS);
+      fs.writeFileSync(path.join(dir, "card.css"), `.${bundler}{gap:4px}`);
+      fs.writeFileSync(
+        path.join(dir, "app.js"),
+        `const styles = { flex: "${bundler}" };\n`,
+      );
+      applyBuildOutput({
+        dir,
+        registry: REGISTRY,
+        consolidationVerdicts: [],
+        consolidate: false,
+        modules: {
+          root: site,
+          inventory,
+          registry: modulesRegistry,
+        },
+      });
+      const html = fs.readFileSync(path.join(dir, "index.html"), "utf8");
+      assert.ok(html.includes(`class="${twFlex} ${modFlex}"`));
+      const card = fs.readFileSync(path.join(dir, "card.css"), "utf8");
+      assert.ok(card.includes(`.${modFlex}{gap:4px}`));
+      assert.ok(!card.includes("@layer"));
+      const app = fs.readFileSync(path.join(dir, "app.css"), "utf8");
+      assert.ok(app.includes(`.${twFlex}{display:flex}`));
+    } finally {
+      fs.rmSync(site, { recursive: true, force: true });
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not consolidate Module stylesheets under dual-stack compress", function () {
+    const site = fs.mkdtempSync(path.join(os.tmpdir(), "minwind-dual-root-"));
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minwind-dual-out-"));
+    try {
+      fs.mkdirSync(path.join(site, "src"));
+      const moduleFile = path.join(site, "src", "Card.module.css");
+      fs.writeFileSync(
+        moduleFile,
+        ".root { color: red }\n.title { color: blue }",
+      );
+      const inventory = collectModuleInventory(site);
+      const modulesRegistry = createModuleNameRegistry(inventory);
+      const bundlerRoot = "Card-module__abc__root";
+      const bundlerTitle = "Card-module__abc__title";
+      fs.writeFileSync(path.join(dir, "app.css"), LAYERED_CSS);
+      fs.writeFileSync(
+        path.join(dir, "card.css"),
+        `.${bundlerRoot}{color:red}.${bundlerTitle}{color:blue}`,
+      );
+      fs.writeFileSync(
+        path.join(dir, "app.js"),
+        `const styles = { root: "${bundlerRoot}", title: "${bundlerTitle}" };\n`,
+      );
+      const verdicts: Array<ConsolidationVerdict> = [
+        { tokens: ["flex", "p-4"], frequency: 4, safe: true, name: "combo" },
+      ];
+      applyBuildOutput({
+        dir,
+        registry: REGISTRY,
+        consolidationVerdicts: verdicts,
+        consolidate: true,
+        modules: {
+          root: site,
+          inventory,
+          registry: modulesRegistry,
+        },
+      });
+      const card = fs.readFileSync(path.join(dir, "card.css"), "utf8");
+      const expectedRoot = hashModuleLocal(site, moduleFile, "root");
+      const expectedTitle = hashModuleLocal(site, moduleFile, "title");
+      assert.ok(card.includes(`.${expectedRoot}{color:red}`));
+      assert.ok(card.includes(`.${expectedTitle}{color:blue}`));
+      assert.ok(!card.includes("combo"));
+    } finally {
+      fs.rmSync(site, { recursive: true, force: true });
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });

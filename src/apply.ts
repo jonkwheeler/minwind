@@ -1,6 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { ConsolidationVerdict } from "./consolidate.js";
+import {
+  applyModulesRemap,
+  type ModuleRemapContext,
+} from "./engines/modules-remap.js";
 import type { ExclusionEntry, NameRegistry } from "./names.js";
 import { transformBundle } from "./transform-bundle.js";
 import { transformModule, type TransformWarning } from "./transform-source.js";
@@ -21,9 +25,9 @@ export interface ApplyOptions {
   dir: string;
   registry: NameRegistry;
   consolidationVerdicts: ReadonlyArray<ConsolidationVerdict>;
-  quoteOrder?: ReadonlyMap<string, ReadonlyArray<string>>;
   consolidate: boolean;
   dryRun?: boolean;
+  modules?: ModuleRemapContext;
 }
 
 export interface ApplyResult {
@@ -174,7 +178,6 @@ export function applyBuildOutput(options: ApplyOptions): ApplyResult {
           consolidationVerdicts: consolidate
             ? consolidationVerdicts
             : undefined,
-          quoteOrder: options.quoteOrder,
         })
       : transformBundle({
           code,
@@ -183,7 +186,6 @@ export function applyBuildOutput(options: ApplyOptions): ApplyResult {
           consolidationVerdicts: consolidate
             ? consolidationVerdicts
             : undefined,
-          quoteOrder: options.quoteOrder,
         });
     if (isHtml) result.htmlFiles += 1;
     else result.jsFiles += 1;
@@ -192,6 +194,12 @@ export function applyBuildOutput(options: ApplyOptions): ApplyResult {
     if (transformed.code === code) continue;
     result.rewrittenFiles += 1;
     if (options.dryRun !== true) fs.writeFileSync(file, transformed.code);
+  }
+  if (options.modules !== undefined) {
+    const remapped = applyModulesRemap(dir, options.modules, {
+      dryRun: options.dryRun === true,
+    });
+    result.rewrittenFiles += remapped.rewrittenFiles;
   }
   return result;
 }

@@ -16,8 +16,12 @@ import {
   type ConsolidatedRuleInfo,
 } from "./consolidate.js";
 import type { ExclusionConfig, NameRegistry } from "./names.js";
-import type { NamingConfig } from "./naming.js";
-import { runPrepass, type PrepassResult } from "./prepass.js";
+import { isThemedNaming, type NamingConfig } from "./naming.js";
+import {
+  emptyPrepassResult,
+  runPrepass,
+  type PrepassResult,
+} from "./prepass.js";
 import {
   buildRenameMap,
   buildReport,
@@ -27,6 +31,25 @@ import {
 import { assertPresence, transformStylesheet } from "./transform-css.js";
 import { shouldTransformModule, transformSource } from "./transform-source.js";
 import type { CustomPropertiesConfig } from "./custom-properties.js";
+import {
+  enginesInclude,
+  isModulesOnly,
+  resolveFlags,
+  MODULES_CONSOLIDATE_SKIP_WARNING,
+  type MinwindEngineId,
+  type MinwindFlags,
+  type MinwindMode,
+} from "./flags.js";
+import {
+  createGenerateScopedName,
+  LIGHTNING_MODULES_ERROR,
+  MODULES_HOOK_MISSING_ERROR,
+  NameCollisionSpace,
+  prepareModulesNaming,
+} from "./engines/css-modules.js";
+
+export type { MinwindEngineId, MinwindFlags, MinwindMode };
+export { resolveFlags };
 
 // U6 plugin wiring (R4, R8, R9, R11). One factory returns two build-only
 // plugins sharing per-build state: the source plugin (enforce 'pre', so it
@@ -47,9 +70,13 @@ export interface MinwindOptions {
   // <root>/src/app.css. This is the pre-pass universe only — the shipped CSS
   // still comes from the site's own build (KTD3).
   cssEntry?: string;
-  // Themed naming: 'words' deals a vocabulary, 'quotes' makes class lists
-  // read as quote fragments. Default (absent or 'hash') is content-hash
-  // naming, the only strategy with cross-build name stability (KTD5).
+  // Themed naming: 'words' deals a built-in theme or a custom vocabulary;
+  // 'quotes' deals sentence words in order. Dialect ids (`boston`, …) keep
+  // Tailwind hyphens and respell English runs. Default (absent or 'hash') is
+  // content-hash naming, the only strategy with cross-build name stability
+  // (KTD5). `naming.prefix` prepends a string to hash bodies (hash strategy
+  // only). `naming.alphabet` sets the hash-body character set. `naming.salt`
+  // rotates the map while keeping content-hash stability for a given salt.
   naming?: NamingConfig;
   // Classes the transform must not touch: exact names and prefixes for
   // runtime-injected or third-party markup classes (e.g. a syntax
@@ -59,50 +86,11 @@ export interface MinwindOptions {
   // Explicitly application-owned CSS custom properties. minwind never
   // infers ownership; unprovable source usage keeps a property unchanged.
   customProperties?: CustomPropertiesConfig;
-}
-
-export interface MinwindFlags {
-  // Master && rename: when false, every hook is a no-op and the build output
-  // is byte-identical to a plugin-free build (AE5).
-  enabled: boolean;
-  // Consolidation operates on renamed rules (KTD6), so it implies rename.
-  consolidate: boolean;
-}
-
-const FLAG_NAMES = {
-  master: "MINWIND",
-  rename: "MINWIND_RENAME",
-  consolidate: "MINWIND_CONSOLIDATE",
-} as const;
-
-function readFlag(env: NodeJS.ProcessEnv, name: string): boolean | undefined {
-  const value = env[name];
-  if (value === undefined) return undefined;
-  if (value === "on") return true;
-  if (value === "off") return false;
-  throw new Error(
-    `minwind: ${name} must be "on" or "off", got "${value}"` +
-      " (unset means on)",
-  );
-}
-
-// R9 flag resolution. Defaults are fully on. Rename-off plus an explicit
-// consolidate-on is contradictory (KTD6: consolidation operates on renamed
-// rules), so it fails fast instead of silently ignoring a flag.
-export function resolveFlags(
-  env: NodeJS.ProcessEnv = process.env,
-): MinwindFlags {
-  const master = readFlag(env, FLAG_NAMES.master) ?? true;
-  const rename = readFlag(env, FLAG_NAMES.rename) ?? true;
-  const consolidate = readFlag(env, FLAG_NAMES.consolidate) ?? true;
-  if (!rename && env[FLAG_NAMES.consolidate] === "on") {
-    throw new Error(
-      `minwind: MINWIND_CONSOLIDATE=on requires MINWIND_RENAME=on:` +
-        " consolidation operates on renamed rules (KTD6)",
-    );
-  }
-  const enabled = master && rename;
-  return { enabled, consolidate: enabled && consolidate };
+  // User-facing morph (rename only) vs compress (rename + consolidation).
+  // Defaults to compress. Env MINWIND_* flags override when set.
+  mode?: MinwindMode;
+  // Engines participating in this build. Defaults to Tailwind-only.
+  engines?: ReadonlyArray<MinwindEngineId>;
 }
 
 // Per-build state. SolidStart passes the same plugin objects to vinxi's ssr,
@@ -227,6 +215,7 @@ export function minwind(options: MinwindOptions = {}): Array<Plugin> {
 
   let viteRoot: string | undefined;
   let state: BuildState | undefined;
+  const collision = new NameCollisionSpace();
 
   function currentRoot(): string {
     return options.root ?? viteRoot ?? process.cwd();
@@ -241,25 +230,99 @@ export function minwind(options: MinwindOptions = {}): Array<Plugin> {
     apply: "build",
     enforce: "pre",
 
+    config: function (userConfig, env) {
+      if (env.command !== "build") return;
+      const flags = resolveFlags(process.env, {
+        mode: options.mode,
+        engines: options.engines,
+      });
+      if (!flags.enabled) return;
+      if (!enginesInclude(flags.engines, "css-modules")) return;
+      const root = options.root ?? userConfig.root ?? process.cwd();
+      const themed = isThemedNaming(options.naming)
+        ? prepareModulesNaming(
+            root,
+            options.naming,
+            undefined,
+            options.exclusions,
+          )
+        : undefined;
+      return {
+        css: {
+          modules: {
+            generateScopedName: createGenerateScopedName(root, {
+              registry: themed?.registry,
+              collision,
+              naming: options.naming,
+            }),
+          },
+        },
+      };
+    },
+
     configResolved: function (config) {
       viteRoot = config.root;
+      const flags = resolveFlags(process.env, {
+        mode: options.mode,
+        engines: options.engines,
+      });
+      if (!flags.enabled) return;
+      if (!enginesInclude(flags.engines, "css-modules")) return;
+      const css = config.css as {
+        transformer?: string;
+        modules?: boolean | { generateScopedName?: unknown };
+      };
+      if (css.transformer === "lightningcss") {
+        throw new Error(LIGHTNING_MODULES_ERROR);
+      }
+      if (css.modules === false) {
+        throw new Error(MODULES_HOOK_MISSING_ERROR);
+      }
+      const generateScopedName =
+        typeof css.modules === "object" && css.modules !== null
+          ? css.modules.generateScopedName
+          : undefined;
+      if (typeof generateScopedName !== "function") {
+        throw new Error(MODULES_HOOK_MISSING_ERROR);
+      }
     },
 
     buildStart: async function () {
       const root = currentRoot();
-      const active = resolveFlags();
+      const active = resolveFlags(process.env, {
+        mode: options.mode,
+        engines: options.engines,
+      });
+      if (active.modeWarning !== undefined) {
+        this.warn(active.modeWarning);
+      }
+      if (
+        active.consolidate &&
+        enginesInclude(active.engines, "css-modules") &&
+        enginesInclude(active.engines, "tailwind")
+      ) {
+        this.warn(MODULES_CONSOLIDATE_SKIP_WARNING);
+      }
       if (!active.enabled) {
         state = undefined;
         return;
       }
       try {
-        const prepass = await runPrepass({
-          root,
-          cssEntry: currentCssEntry(root),
-          naming: options.naming,
-          exclusions: options.exclusions,
-          customProperties: options.customProperties,
-        });
+        const prepass = isModulesOnly(active.engines)
+          ? emptyPrepassResult()
+          : await runPrepass({
+              root,
+              cssEntry: currentCssEntry(root),
+              naming: options.naming,
+              exclusions: options.exclusions,
+              customProperties: options.customProperties,
+            });
+        if (
+          enginesInclude(active.engines, "css-modules") &&
+          !isModulesOnly(active.engines)
+        ) {
+          collision.seed(prepass.registry);
+        }
         if (active.consolidate) {
           assertConsolidatedNames(
             prepass.registry,
@@ -267,8 +330,7 @@ export function minwind(options: MinwindOptions = {}): Array<Plugin> {
           );
         }
         if (
-          options.naming !== undefined &&
-          options.naming.strategy === "words" &&
+          isThemedNaming(options.naming) &&
           options.naming.prominence !== undefined &&
           prepass.naming !== undefined &&
           prepass.naming.prominent === 0
@@ -314,7 +376,6 @@ export function minwind(options: MinwindOptions = {}): Array<Plugin> {
           consolidationVerdicts: current.flags.consolidate
             ? current.prepass.consolidationVerdicts
             : undefined,
-          quoteOrder: current.prepass.naming?.order,
           customProperties: current.prepass.customProperties,
         });
         if (result === null) return null;
@@ -464,6 +525,8 @@ export function minwind(options: MinwindOptions = {}): Array<Plugin> {
           verdicts: current.prepass.consolidationVerdicts,
           warnings: sharedWarnings,
           consolidate: current.flags.consolidate,
+          mode: current.flags.mode,
+          modeWarning: current.flags.modeWarning,
           customProperties: current.prepass.customProperties,
         });
         const map = buildRenameMap(

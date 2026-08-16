@@ -16,6 +16,13 @@ import { fileURLToPath } from "node:url";
 import { build, type Plugin } from "vite";
 import { hashClassName } from "../src/names.js";
 import { resolveFlags, minwind } from "../src/plugin.js";
+import { MODULES_COMPRESS_WARNING } from "../src/flags.js";
+import {
+  hashModuleLocal,
+  LIGHTNING_MODULES_ERROR,
+  prepareModulesNaming,
+  moduleLocalKey,
+} from "../src/engines/css-modules.js";
 import {
   writeArtifacts,
   type RenameMap,
@@ -268,6 +275,9 @@ describe("resolveFlags (R9)", function () {
       assert.deepStrictEqual(resolveFlags(), {
         enabled: true,
         consolidate: true,
+        mode: "compress",
+        engines: ["tailwind"],
+        modeWarning: undefined,
       });
     });
   });
@@ -277,6 +287,9 @@ describe("resolveFlags (R9)", function () {
       assert.deepStrictEqual(resolveFlags(), {
         enabled: false,
         consolidate: false,
+        mode: "compress",
+        engines: ["tailwind"],
+        modeWarning: undefined,
       });
     });
   });
@@ -286,6 +299,9 @@ describe("resolveFlags (R9)", function () {
       assert.deepStrictEqual(resolveFlags(), {
         enabled: false,
         consolidate: false,
+        mode: "compress",
+        engines: ["tailwind"],
+        modeWarning: undefined,
       });
     });
   });
@@ -295,6 +311,9 @@ describe("resolveFlags (R9)", function () {
       assert.deepStrictEqual(resolveFlags(), {
         enabled: true,
         consolidate: false,
+        mode: "morph",
+        engines: ["tailwind"],
+        modeWarning: undefined,
       });
     });
   });
@@ -326,6 +345,42 @@ describe("resolveFlags (R9)", function () {
         }, /MINWIND_CONSOLIDATE=on.*MINWIND_RENAME/);
       },
     );
+  });
+
+  it("mode morph disables consolidation", async function () {
+    await withFlags({}, function () {
+      assert.deepStrictEqual(resolveFlags(process.env, { mode: "morph" }), {
+        enabled: true,
+        consolidate: false,
+        mode: "morph",
+        engines: ["tailwind"],
+        modeWarning: undefined,
+      });
+    });
+  });
+
+  it("MINWIND_CONSOLIDATE=off overrides mode compress", async function () {
+    await withFlags({ MINWIND_CONSOLIDATE: "off" }, function () {
+      assert.deepStrictEqual(resolveFlags(process.env, { mode: "compress" }), {
+        enabled: true,
+        consolidate: false,
+        mode: "morph",
+        engines: ["tailwind"],
+        modeWarning: undefined,
+      });
+    });
+  });
+
+  it("Modules-only compress coerces to morph with a warning", async function () {
+    await withFlags({}, function () {
+      const flags = resolveFlags(process.env, {
+        mode: "compress",
+        engines: ["css-modules"],
+      });
+      assert.strictEqual(flags.mode, "morph");
+      assert.strictEqual(flags.consolidate, false);
+      assert.strictEqual(flags.modeWarning, MODULES_COMPRESS_WARNING);
+    });
   });
 });
 
@@ -431,6 +486,7 @@ describe("minwind production build (R1, R3, R8, R11)", function () {
       assert.deepStrictEqual(report.flags, {
         enabled: true,
         consolidate: true,
+        mode: "compress",
       });
       assert.deepStrictEqual(
         report.renames.map(function (entry: { token: string }) {
@@ -539,9 +595,38 @@ describe("minwind production build (R1, R3, R8, R11)", function () {
       assert.deepStrictEqual(report.flags, {
         enabled: true,
         consolidate: false,
+        mode: "morph",
       });
       assert.deepStrictEqual(report.consolidation.verdicts, []);
       assert.strictEqual(report.summary.consolidatedRules, 0);
+
+      await cleanOutputs();
+    });
+  });
+
+  it("renames without consolidating when mode is morph", async function () {
+    await withFlags({}, async function () {
+      await cleanOutputs();
+      const files = await buildFixture("dist-morph", [
+        ...minwind({ root: FIXTURE, cssEntry: CSS_ENTRY, mode: "morph" }),
+      ]);
+
+      const js = findFile(files, /assets\/.*\.js$/);
+      assert.ok(
+        js.text.includes(`${FLEX} ${ITEMS_CENTER} ${P_4}`),
+        "the repeated list keeps per-token renames",
+      );
+      assert.ok(!js.text.includes(CONSOLIDATED_NAME));
+
+      const report = JSON.parse(
+        await readFile(path.join(ARTIFACT_DIR, "report.json"), "utf8"),
+      );
+      assert.deepStrictEqual(report.flags, {
+        enabled: true,
+        consolidate: false,
+        mode: "morph",
+      });
+      assert.deepStrictEqual(report.consolidation.verdicts, []);
 
       await cleanOutputs();
     });
@@ -1039,7 +1124,7 @@ describe("writeArtifacts (R11, KTD9)", function () {
   function makeReport(warningCount: number): TransformReport {
     return {
       version: 1,
-      flags: { enabled: true, consolidate: true },
+      flags: { enabled: true, consolidate: true, mode: "compress" },
       summary: {
         renamed: 1,
         excluded: 0,
@@ -1139,5 +1224,180 @@ describe("writeArtifacts (R11, KTD9)", function () {
     } finally {
       await rm(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("minwind CSS Modules naming hooks", function () {
+  const MODULES_FIXTURE = path.join(HERE, "fixtures", "modules-site");
+  const BUTTON_CSS = path.join(MODULES_FIXTURE, "src", "Button.module.css");
+  const OTHER_CSS = path.join(MODULES_FIXTURE, "src", "other.module.css");
+  const COMPOSED_CSS = path.join(MODULES_FIXTURE, "src", "composed.module.css");
+
+  async function buildModules(
+    outDirName: string,
+  ): Promise<Map<string, Buffer>> {
+    const outDir = path.join(MODULES_FIXTURE, outDirName);
+    await build({
+      root: MODULES_FIXTURE,
+      logLevel: "silent",
+      plugins: minwind({
+        root: MODULES_FIXTURE,
+        engines: ["css-modules"],
+        mode: "morph",
+      }),
+      build: {
+        outDir,
+        emptyOutDir: true,
+        rollupOptions: { input: path.join(MODULES_FIXTURE, "index.html") },
+      },
+    });
+    return readOutputTree(outDir);
+  }
+
+  it("keeps export keys and syncs JS values with CSS selectors (AE1)", async function () {
+    await rm(path.join(MODULES_FIXTURE, ".output"), {
+      recursive: true,
+      force: true,
+    });
+    const files = await buildModules("dist-modules");
+    const rootName = hashModuleLocal(MODULES_FIXTURE, BUTTON_CSS, "root");
+    const buttonName = hashModuleLocal(MODULES_FIXTURE, COMPOSED_CSS, "button");
+    const baseName = hashModuleLocal(MODULES_FIXTURE, OTHER_CSS, "base");
+    const js = findFile(files, /assets\/.*\.js$/);
+    const css = findFile(files, /assets\/.*\.css$/);
+    assert.ok(js.text.includes(rootName));
+    assert.ok(css.text.includes(`.${rootName}`));
+    assert.ok(js.text.includes(buttonName));
+    assert.ok(js.text.includes(baseName));
+    assert.ok(css.text.includes(`.${buttonName}`));
+    assert.ok(css.text.includes(`.${baseName}`));
+    assert.ok(!js.text.includes('root:"Button_root'));
+    await rm(path.join(MODULES_FIXTURE, "dist-modules"), {
+      recursive: true,
+      force: true,
+    });
+    await rm(path.join(MODULES_FIXTURE, ".output"), {
+      recursive: true,
+      force: true,
+    });
+  });
+
+  it("is build-only so dev does not install the morphing generator", function () {
+    const plugins = minwind({
+      engines: ["css-modules"],
+      mode: "morph",
+    });
+    assert.strictEqual(plugins[0].apply, "build");
+  });
+
+  it("fails when Vite Lightning CSS Modules is active (AE6)", function () {
+    const plugins = minwind({
+      root: MODULES_FIXTURE,
+      engines: ["css-modules"],
+      mode: "morph",
+    });
+    const resolved = plugins[0].configResolved;
+    assert.ok(typeof resolved === "function");
+    const run = resolved as (this: unknown, config: object) => void;
+    assert.throws(
+      function () {
+        run.call(
+          {},
+          {
+            root: MODULES_FIXTURE,
+            css: {
+              transformer: "lightningcss",
+              modules: {
+                generateScopedName: function () {
+                  return "x";
+                },
+              },
+            },
+          },
+        );
+      },
+      new RegExp(
+        LIGHTNING_MODULES_ERROR.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+      ),
+    );
+  });
+
+  it("syncs words naming between JS exports and CSS selectors", async function () {
+    if (process.env.MINWIND_SKIP_BUILD === "1") return;
+    await rm(path.join(MODULES_FIXTURE, ".output"), {
+      recursive: true,
+      force: true,
+    });
+    const vocabulary = ["quill", "willow", "ember", "lark"];
+    const naming = { strategy: "words" as const, vocabulary };
+    const prepared = prepareModulesNaming(MODULES_FIXTURE, naming);
+    const rootName = prepared.registry.nameFor(
+      moduleLocalKey(MODULES_FIXTURE, BUTTON_CSS, "root"),
+    );
+    assert.ok(rootName !== undefined);
+    const outDir = path.join(MODULES_FIXTURE, "dist-modules-words");
+    await build({
+      root: MODULES_FIXTURE,
+      logLevel: "silent",
+      plugins: minwind({
+        root: MODULES_FIXTURE,
+        engines: ["css-modules"],
+        mode: "morph",
+        naming,
+      }),
+      build: {
+        outDir,
+        emptyOutDir: true,
+        rollupOptions: { input: path.join(MODULES_FIXTURE, "index.html") },
+      },
+    });
+    const files = await readOutputTree(outDir);
+    const js = findFile(files, /assets\/.*\.js$/);
+    const css = findFile(files, /assets\/.*\.css$/);
+    assert.ok(js.text.includes(rootName));
+    assert.ok(css.text.includes(`.${rootName}`));
+    assert.ok(vocabulary.includes(rootName));
+    await rm(outDir, { recursive: true, force: true });
+    await rm(path.join(MODULES_FIXTURE, ".output"), {
+      recursive: true,
+      force: true,
+    });
+  });
+});
+
+describe("minwind dual Tailwind and CSS Modules (AE3)", function () {
+  const DUAL = path.join(HERE, "fixtures", "dual-site");
+  const CARD = path.join(DUAL, "src", "Card.module.css");
+
+  it("builds with a Modules local named flex without a utilities-layer failure", async function () {
+    if (process.env.MINWIND_SKIP_BUILD === "1") return;
+    await rm(path.join(DUAL, ".output"), { recursive: true, force: true });
+    const outDir = path.join(DUAL, "dist-dual");
+    await build({
+      root: DUAL,
+      logLevel: "silent",
+      plugins: minwind({
+        root: DUAL,
+        engines: ["tailwind", "css-modules"],
+        mode: "morph",
+        cssEntry: path.join(DUAL, "src", "app.css"),
+      }),
+      build: {
+        outDir,
+        emptyOutDir: true,
+        rollupOptions: { input: path.join(DUAL, "index.html") },
+      },
+    });
+    const files = await readOutputTree(outDir);
+    const js = findFile(files, /assets\/.*\.js$/);
+    const css = findFile(files, /assets\/.*\.css$/);
+    const twFlex = hashClassName("flex");
+    const modFlex = hashModuleLocal(DUAL, CARD, "flex");
+    assert.notStrictEqual(twFlex, modFlex);
+    assert.ok(js.text.includes(twFlex) || css.text.includes(`.${twFlex}`));
+    assert.ok(js.text.includes(modFlex));
+    assert.ok(css.text.includes(`.${modFlex}`));
+    await rm(outDir, { recursive: true, force: true });
+    await rm(path.join(DUAL, ".output"), { recursive: true, force: true });
   });
 });

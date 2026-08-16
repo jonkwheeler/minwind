@@ -1,0 +1,13 @@
+{
+  "name": "turbopack-modules-site",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "next build --turbopack"
+  },
+  "dependencies": {
+    "next": "16.3.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  }
+}

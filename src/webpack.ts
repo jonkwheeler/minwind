@@ -8,8 +8,12 @@ import {
   type ConsolidatedRuleInfo,
 } from "./consolidate.js";
 import type { ExclusionConfig } from "./names.js";
-import type { NamingConfig } from "./naming.js";
-import { runPrepass, type PrepassResult } from "./prepass.js";
+import { isThemedNaming, type NamingConfig } from "./naming.js";
+import {
+  emptyPrepassResult,
+  runPrepass,
+  type PrepassResult,
+} from "./prepass.js";
 import {
   buildRenameMap,
   buildReport,
@@ -23,6 +27,19 @@ import {
 } from "./transform-css.js";
 import type { TransformWarning } from "./transform-source.js";
 import type { CustomPropertiesConfig } from "./custom-properties.js";
+import {
+  enginesInclude,
+  isModulesOnly,
+  resolveFlags,
+  type MinwindEngineId,
+  type MinwindMode,
+} from "./flags.js";
+import {
+  createGetLocalIdent,
+  NameCollisionSpace,
+  prepareModulesNaming,
+  type ScopedNameOptions,
+} from "./engines/css-modules.js";
 
 // webpack/rspack adapter (U3 outside Vite). The shape mirrors the Vite
 // plugin: a pre-pass runs once before compilation (beforeCompile), a loader
@@ -40,13 +57,16 @@ export interface MinwindWebpackOptions {
   // Tailwind CSS entry compiled by the pre-pass; defaults to
   // <root>/src/app.css.
   cssEntry?: string;
-  // Themed naming (words/quotes) replaces content-hash naming.
+  // Themed naming (words): a built-in theme id or a custom vocabulary.
   naming?: NamingConfig;
   // Site-specific classes the transform must not touch.
   exclusions?: ExclusionConfig;
   customProperties?: CustomPropertiesConfig;
+  // User-facing morph vs compress. Defaults to compress.
+  mode?: MinwindMode;
+  engines?: ReadonlyArray<MinwindEngineId>;
   // Consolidation (repeated static lists collapse to one generated class).
-  // Defaults to true.
+  // Defaults from mode. Explicit false maps to morph; env still overrides.
   consolidate?: boolean;
   // Master switch. Defaults to true.
   enabled?: boolean;
@@ -127,7 +147,7 @@ export function rewriteCssAssets(
     warnings.push(...renamed.warnings);
     renamedAssets.push(renamed.css);
     let finalCss = renamed.css;
-    if (consolidate) {
+    if (consolidate && /@layer\s+utilities\b/.test(original)) {
       const merged = consolidateStylesheet({
         css: renamed.css,
         verdicts: prepass.consolidationVerdicts,
@@ -155,9 +175,30 @@ export class MinwindWebpackPlugin {
     new URL("./webpack-loader.js", import.meta.url),
   );
 
+  static createGetLocalIdent(root: string, options?: ScopedNameOptions) {
+    if (isThemedNaming(options?.naming)) {
+      const reserved = options.collision?.reservedNames();
+      const prepared = prepareModulesNaming(
+        root,
+        options.naming,
+        reserved,
+        undefined,
+      );
+      return createGetLocalIdent(root, {
+        onName: options.onName,
+        registry: prepared.registry,
+        collision: options.collision,
+      });
+    }
+    return createGetLocalIdent(root, options);
+  }
+
   // Read by the loader between beforeCompile and the end of compilation.
   prepass: PrepassResult | undefined;
+  readonly collision: NameCollisionSpace;
   readonly consolidate: boolean;
+  readonly mode: MinwindMode;
+  private readonly modeWarning: string | undefined;
   private readonly options: MinwindWebpackOptions;
   private readonly enabled: boolean;
   private detectedModules = 0;
@@ -167,9 +208,17 @@ export class MinwindWebpackPlugin {
   private readonly consolidated: Array<ConsolidatedRuleInfo> = [];
 
   constructor(options: MinwindWebpackOptions = {}) {
+    this.collision = new NameCollisionSpace();
     this.options = options;
-    this.consolidate = options.consolidate ?? true;
-    this.enabled = options.enabled ?? true;
+    const flags = resolveFlags(process.env, {
+      mode: options.mode,
+      engines: options.engines,
+      consolidate: options.consolidate,
+    });
+    this.consolidate = flags.consolidate;
+    this.enabled = (options.enabled ?? true) && flags.enabled;
+    this.mode = flags.mode;
+    this.modeWarning = flags.modeWarning;
   }
 
   // The loader reports each class-bearing module it saw (a transform result,
@@ -193,18 +242,32 @@ export class MinwindWebpackPlugin {
         return;
       }
       const root = plugin.options.root ?? compiler.context ?? process.cwd();
-      const prepass = await runPrepass({
-        root,
-        cssEntry: plugin.options.cssEntry ?? path.join(root, "src", "app.css"),
-        naming: plugin.options.naming,
-        exclusions: plugin.options.exclusions,
-        customProperties: plugin.options.customProperties,
+      const flags = resolveFlags(process.env, {
+        mode: plugin.options.mode,
+        engines: plugin.options.engines,
+        consolidate: plugin.options.consolidate,
       });
+      const prepass = isModulesOnly(flags.engines)
+        ? emptyPrepassResult()
+        : await runPrepass({
+            root,
+            cssEntry:
+              plugin.options.cssEntry ?? path.join(root, "src", "app.css"),
+            naming: plugin.options.naming,
+            exclusions: plugin.options.exclusions,
+            customProperties: plugin.options.customProperties,
+          });
       if (plugin.consolidate) {
         assertConsolidatedNames(
           prepass.registry,
           prepass.consolidationVerdicts,
         );
+      }
+      if (
+        enginesInclude(flags.engines, "css-modules") &&
+        !isModulesOnly(flags.engines)
+      ) {
+        plugin.collision.seed(prepass.registry);
       }
       plugin.prepass = prepass;
     });
@@ -272,6 +335,8 @@ export class MinwindWebpackPlugin {
         verdicts: prepass.consolidationVerdicts,
         warnings: plugin.warnings,
         consolidate: plugin.consolidate,
+        mode: plugin.mode,
+        modeWarning: plugin.modeWarning,
         customProperties: prepass.customProperties,
       });
       const map = buildRenameMap(

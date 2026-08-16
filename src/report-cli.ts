@@ -14,7 +14,7 @@ Prints the summary of the latest minwind build report. Defaults to
 `;
 
 interface ReportShape {
-  flags?: { enabled?: boolean; consolidate?: boolean };
+  flags?: { enabled?: boolean; consolidate?: boolean; mode?: string };
   summary?: {
     renamed?: number;
     excluded?: number;
@@ -76,7 +76,9 @@ export async function runReportCli(args: Array<string>): Promise<number> {
       const lines: Array<string> = [];
       lines.push(`minwind report: ${reportPath}`);
       lines.push(
-        `flags: enabled=${String(flags.enabled)} consolidate=${String(flags.consolidate)}`,
+        `flags: enabled=${String(flags.enabled)}` +
+          ` consolidate=${String(flags.consolidate)}` +
+          (flags.mode !== undefined ? ` mode=${flags.mode}` : ""),
       );
       lines.push(
         `renamed: ${summary.renamed ?? 0}  excluded: ${summary.excluded ?? 0}  ` +
