@@ -2,6 +2,8 @@
 
 Build-time CSS name compression for Tailwind and CSS Modules.
 
+<video src="./minwind-promo.mp4" controls playsinline></video>
+
 minwind renames classes to short, stable, or themed names. For Tailwind it can
 also consolidate repeated class lists. It rewrites HTML, JavaScript, and CSS
 together so every reference stays consistent. It runs only in production
@@ -430,11 +432,10 @@ would send to the group chat with "I can't believe this is in the DOM."
 Innuendo, cursed fandom, locker-room vernacular, an in-joke legal would
 sweat: those belong. Generic words like `button` and `hero` do not.
 
-Drop [examples/themes/SKILL.md](./examples/themes/SKILL.md) into a project's
-`.cursor/skills/` (or paste it as a prompt) and ask the agent for a list.
-Every entry has to be a CSS identifier (`/^(?:[a-z][a-z0-9]*|_[a-z0-9]+)$/`),
-unique, and at least 40 words so leftovers can still hash. Digit-leading
-words get a leading underscore (`2b` becomes `_2b`).
+Every custom word has to be a CSS identifier
+(`/^(?:[a-z][a-z0-9]*|_[a-z0-9]+)$/`), unique, and you want at least 40
+so leftovers can still hash. Digit-leading words get a leading underscore
+(`2b` becomes `_2b`).
 
 ### Subliminal messages
 
@@ -648,8 +649,6 @@ pnpm check         # typecheck, formatting, and tests
 The Next/Turbopack CSS Modules fixture is skipped only when
 `MINWIND_SKIP_BUILD=1`. `pnpm compare` remains Tailwind-only; there is no
 Modules harness site.
-
-Coding agents should read [AGENTS.md](./AGENTS.md).
 
 ## License
 

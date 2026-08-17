@@ -5,8 +5,8 @@ to hash names. Generate a prominence manifest from a minwind-off build so
 the first words land on the document shell.
 
 To generate a custom list (a sport, a brand, a speech, something you would
-screenshot), copy [SKILL.md](./SKILL.md) into your project's `.cursor/skills/`
-or paste it as a prompt.
+screenshot), write words that are valid CSS identifiers and funny enough
+to inspect.
 
 ```ts
 minwind({
