@@ -62,7 +62,8 @@ Tailwind-only Vite, webpack, and `minwind apply` defaults stay
 - The old quote-order rewrite (one class list spells a quote) is gone. The
   `quotes` strategy now splits sentences into CSS idents and deals them in
   quote order. Use a prominence manifest so the document shell reads the
-  line.
+  line. A leftover `naming.corpus` config fails the build and tells you
+  to switch to `naming.quotes`.
 
 ### Changed
 
@@ -75,8 +76,9 @@ Tailwind-only Vite, webpack, and `minwind apply` defaults stay
 Tailwind-only hash or words projects: upgrade as a feature release. No
 apply-flag changes.
 
-Projects using the old quote-order rewrite: switch to `quotes` with a
-prominence manifest, or to `words` with a custom `vocabulary`.
+Projects using the old quote-order rewrite (`naming.corpus`): the build
+stops and prints the fix. Switch to `quotes` with a prominence manifest,
+or to `words` with a custom `vocabulary`.
 
 CSS Modules on Vite or webpack: set `engines: ["css-modules"]` (or both
 engines) and `naming.strategy` to `hash` or `words`.

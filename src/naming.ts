@@ -149,8 +149,23 @@ export function assertHashConfig(config: NamingConfig): void {
   resolveHashSalt(config.salt);
 }
 
+const LEGACY_QUOTES_CORPUS_ERROR =
+  "minwind: naming.corpus is gone. The old quotes rewrite that spelled a" +
+  " quote across one class list is no longer supported. Set" +
+  ' naming.strategy to "quotes" and naming.quotes to an array of' +
+  " sentences. Add a prominence manifest so the document shell reads the" +
+  " line.";
+
+export function assertLegacyQuotesConfig(config: NamingConfig): void {
+  const record = config as unknown as Record<string, unknown>;
+  if (record.corpus !== undefined) {
+    throw new Error(LEGACY_QUOTES_CORPUS_ERROR);
+  }
+}
+
 export function assertThemedConfig(config: NamingConfig): void {
   if (!isThemedNaming(config)) return;
+  assertLegacyQuotesConfig(config);
   assertBannedNamingFields(config, config.strategy, [
     "prefix",
     "alphabet",
@@ -206,6 +221,9 @@ export function hashSaltOf(
 export function resolveHasher(
   config: NamingConfig | undefined,
 ): (token: string) => string {
+  if (config !== undefined) {
+    assertLegacyQuotesConfig(config);
+  }
   if (config !== undefined && isDialectNaming(config)) {
     assertDialectConfig(config);
     return createDialectHasher(config.strategy, config.maps);
@@ -324,6 +342,7 @@ export function resolveNaming(
   reserved: ReadonlySet<string>,
 ): NamingResult | undefined {
   if (!isThemedNaming(config)) return undefined;
+  assertLegacyQuotesConfig(config);
   assertThemedConfig(config);
 
   const vocabulary = sanitizeVocabulary(resolveVocabulary(config), reserved);

@@ -438,6 +438,22 @@ describe("resolveNaming quotes strategy", function () {
     assert.strictEqual(result.names.get("mb-16"), "not");
   });
 
+  it("fails the old corpus quotes config with a migration error", function () {
+    const legacy = {
+      strategy: "quotes",
+      corpus: ["May the Schwartz be with you"],
+    } as never;
+    assert.throws(function () {
+      resolveNaming(legacy, ["flex"], [], new Set());
+    }, /naming\.corpus is gone[\s\S]*naming\.quotes/);
+    assert.throws(function () {
+      resolveHasher(legacy);
+    }, /naming\.corpus is gone[\s\S]*prominence manifest/);
+    assert.throws(function () {
+      assertThemedConfig(legacy);
+    }, /no longer supported/);
+  });
+
   it("skips duplicate quote words", function () {
     const result = resolveNaming(
       {
