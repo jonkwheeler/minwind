@@ -1,7 +1,18 @@
 import assert from "node:assert";
+import { readFileSync, rmSync } from "node:fs";
+import path from "node:path";
 import { describe, it } from "node:test";
-import { createNameRegistry } from "../src/names.js";
+import { fileURLToPath } from "node:url";
+import MiniCssExtractPlugin from "mini-css-extract-plugin";
+import webpack from "webpack";
+import { createNameRegistry, hashClassName } from "../src/names.js";
 import type { PrepassResult } from "../src/prepass.js";
+import type { NamingConfig } from "../src/naming.js";
+import {
+  hashModuleLocal,
+  moduleLocalKey,
+  prepareModulesNaming,
+} from "../src/engines/css-modules.js";
 import {
   MinwindWebpackPlugin,
   rewriteCssAssets,
@@ -11,11 +22,9 @@ import {
 import minwindLoader from "../src/webpack-loader.js";
 import { createCustomPropertyRegistry } from "../src/custom-properties.js";
 
-// The webpack adapter's wiring is exercised against structural fakes — the
-// pure cores (transformSource, transformStylesheet, consolidateStylesheet)
-// have their own suites; these tests pin the adapter contract: the loader
-// finds its plugin on the compiler, CSS assets rewrite after minification,
-// and the zero-rename tripwire fires.
+// Adapter wiring uses structural fakes. CSS Modules production proof compiles
+// test/fixtures/modules-site with webpack, css-loader, and MiniCssExtractPlugin
+// so JS export values match emitted selectors (same bar as Vite).
 
 const TOKENS = ["flex", "items-center", "p-4"];
 
@@ -262,6 +271,57 @@ describe("MinwindWebpackPlugin hooks", function () {
     assert.ok(MinwindWebpackPlugin.loader.endsWith("webpack-loader.js"));
   });
 
+  it("mode morph disables consolidation", function () {
+    const plugin = new MinwindWebpackPlugin({ mode: "morph" });
+    assert.strictEqual(plugin.consolidate, false);
+    assert.strictEqual(plugin.mode, "morph");
+  });
+
+  it("owns a collision space and seeds it from Tailwind in beforeCompile (KTD5)", async function () {
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const dual = path.join(here, "fixtures", "dual-site");
+    const plugin = new MinwindWebpackPlugin({
+      root: dual,
+      engines: ["tailwind", "css-modules"],
+      cssEntry: path.join(dual, "src", "app.css"),
+    });
+    const { compiler, taps } = fakeCompiler();
+    plugin.apply(compiler);
+    const beforeCompile = taps.get(
+      "beforeCompile:minwind",
+    ) as () => Promise<void>;
+    await beforeCompile();
+    const twName = hashClassName("flex");
+    assert.throws(function () {
+      plugin.collision.claim("src/Card.module.css\0flex", twName);
+    }, /name collision/);
+  });
+
+  it("createGetLocalIdent words names stay distinct from seeded Tailwind names (F1)", function () {
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const dual = path.join(here, "fixtures", "dual-site");
+    const card = path.join(dual, "src", "Card.module.css");
+    const tw = createNameRegistry({
+      universe: new Set(["flex"]),
+      sourceTokens: new Set(["flex"]),
+      hash: function () {
+        return "quill";
+      },
+    });
+    const plugin = new MinwindWebpackPlugin({
+      engines: ["tailwind", "css-modules"],
+      naming: { strategy: "words", vocabulary: ["quill", "willow"] },
+    });
+    plugin.collision.seed(tw);
+    const ident = MinwindWebpackPlugin.createGetLocalIdent(dual, {
+      naming: { strategy: "words", vocabulary: ["quill", "willow"] },
+      collision: plugin.collision,
+    });
+    const modName = ident({ resourcePath: card }, "[hash]", "flex");
+    assert.strictEqual(tw.nameFor("flex"), "quill");
+    assert.strictEqual(modName, "willow");
+  });
+
   it("fires the zero-rename tripwire when modules were detected but none renamed", async function () {
     const plugin = new MinwindWebpackPlugin({ enabled: false });
     const { compiler, taps } = fakeCompiler();
@@ -273,4 +333,153 @@ describe("MinwindWebpackPlugin hooks", function () {
     const afterEmit = taps.get("afterEmit:minwind") as () => Promise<void>;
     await assert.rejects(afterEmit, /tripwire/);
   });
+});
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const MODULES_FIXTURE = path.join(HERE, "fixtures", "modules-site");
+const WEBPACK_OUT = path.join(MODULES_FIXTURE, "dist-webpack-modules");
+const WEBPACK_ENTRY = path.join(MODULES_FIXTURE, "src", "webpack-entry.js");
+const BUTTON_CSS = path.join(MODULES_FIXTURE, "src", "Button.module.css");
+const OTHER_CSS = path.join(MODULES_FIXTURE, "src", "other.module.css");
+const COMPOSED_CSS = path.join(MODULES_FIXTURE, "src", "composed.module.css");
+const MINWIND_LOADER = fileURLToPath(
+  new URL("./helpers/minwind-webpack-loader.mjs", import.meta.url),
+);
+
+function skipBuild(): boolean {
+  return process.env.MINWIND_SKIP_BUILD === "1";
+}
+
+function compileModules(naming: NamingConfig | undefined): Promise<void> {
+  const plugin = new MinwindWebpackPlugin({
+    root: MODULES_FIXTURE,
+    engines: ["css-modules"],
+    mode: "morph",
+    naming,
+  });
+  const compiler = webpack({
+    mode: "production",
+    context: MODULES_FIXTURE,
+    entry: WEBPACK_ENTRY,
+    output: {
+      path: WEBPACK_OUT,
+      filename: "bundle.js",
+      clean: true,
+    },
+    module: {
+      rules: [
+        {
+          test: /\.js$/,
+          enforce: "pre",
+          use: [MINWIND_LOADER],
+        },
+        {
+          test: /\.module\.css$/,
+          use: [
+            MiniCssExtractPlugin.loader,
+            {
+              loader: "css-loader",
+              options: {
+                modules: {
+                  namedExport: false,
+                  exportLocalsConvention: "as-is",
+                  getLocalIdent: MinwindWebpackPlugin.createGetLocalIdent(
+                    MODULES_FIXTURE,
+                    {
+                      collision: plugin.collision,
+                      naming,
+                    },
+                  ),
+                },
+              },
+            },
+          ],
+        },
+      ],
+    },
+    plugins: [plugin, new MiniCssExtractPlugin({ filename: "bundle.css" })],
+  });
+  return new Promise(function (resolve, reject) {
+    compiler.run(function (err, stats) {
+      compiler.close(function (closeErr) {
+        if (err !== null) {
+          reject(err);
+          return;
+        }
+        if (closeErr) {
+          reject(closeErr);
+          return;
+        }
+        if (stats !== undefined && stats.hasErrors()) {
+          reject(new Error(stats.toString({ colors: false })));
+          return;
+        }
+        resolve();
+      });
+    });
+  });
+}
+
+describe("webpack CSS Modules production build", function () {
+  it(
+    "keeps export keys and syncs JS values with CSS selectors",
+    { timeout: 120000 },
+    async function () {
+      if (skipBuild()) return;
+      try {
+        await compileModules(undefined);
+        const js = readFileSync(path.join(WEBPACK_OUT, "bundle.js"), "utf8");
+        const css = readFileSync(path.join(WEBPACK_OUT, "bundle.css"), "utf8");
+        const rootName = hashModuleLocal(MODULES_FIXTURE, BUTTON_CSS, "root");
+        const buttonName = hashModuleLocal(
+          MODULES_FIXTURE,
+          COMPOSED_CSS,
+          "button",
+        );
+        const baseName = hashModuleLocal(MODULES_FIXTURE, OTHER_CSS, "base");
+        assert.ok(js.includes(rootName));
+        assert.ok(css.includes(`.${rootName}`));
+        assert.ok(js.includes(buttonName));
+        assert.ok(js.includes(baseName));
+        assert.ok(css.includes(`.${buttonName}`));
+        assert.ok(css.includes(`.${baseName}`));
+        assert.ok(!js.includes('root:"Button_root'));
+      } finally {
+        rmSync(WEBPACK_OUT, { recursive: true, force: true });
+        rmSync(path.join(MODULES_FIXTURE, ".output"), {
+          recursive: true,
+          force: true,
+        });
+      }
+    },
+  );
+
+  it(
+    "syncs words naming between JS exports and CSS selectors",
+    { timeout: 120000 },
+    async function () {
+      if (skipBuild()) return;
+      const vocabulary = ["quill", "willow", "ember", "lark"];
+      const naming = { strategy: "words" as const, vocabulary };
+      try {
+        await compileModules(naming);
+        const prepared = prepareModulesNaming(MODULES_FIXTURE, naming);
+        const rootName = prepared.registry.nameFor(
+          moduleLocalKey(MODULES_FIXTURE, BUTTON_CSS, "root"),
+        );
+        assert.ok(rootName !== undefined);
+        const js = readFileSync(path.join(WEBPACK_OUT, "bundle.js"), "utf8");
+        const css = readFileSync(path.join(WEBPACK_OUT, "bundle.css"), "utf8");
+        assert.ok(js.includes(rootName));
+        assert.ok(css.includes(`.${rootName}`));
+        assert.ok(vocabulary.includes(rootName));
+      } finally {
+        rmSync(WEBPACK_OUT, { recursive: true, force: true });
+        rmSync(path.join(MODULES_FIXTURE, ".output"), {
+          recursive: true,
+          force: true,
+        });
+      }
+    },
+  );
 });

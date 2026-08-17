@@ -19,17 +19,15 @@ import {
 //   - string literal values of class / className object properties
 //     (React/Vue jsx-runtime props).
 //
-// Everything else keeps its bytes. Consolidation collapses and quote
-// reordering apply to full-list spans exactly as in the source transform;
-// whole-word registry-token occurrences no edit consumed warn (the KTD7
-// leak posture) rather than failing.
+// Everything else keeps its bytes. Consolidation collapses full-list spans
+// exactly as in the source transform; whole-word registry-token occurrences
+// no edit consumed warn (the KTD7 leak posture) rather than failing.
 
 export interface TransformBundleOptions {
   code: string;
   id: string;
   registry: NameRegistry;
   consolidationVerdicts?: ReadonlyArray<ConsolidationVerdict>;
-  quoteOrder?: ReadonlyMap<string, ReadonlyArray<string>>;
 }
 
 interface ClassListSpan {
@@ -176,8 +174,8 @@ export function transformBundle(
   }
 
   // One span is one class list: collapse when the canonical list matches a
-  // safe verdict, reorder when the quote solver covered it, else rename
-  // token by token — the source transform's class-attribute rules.
+  // safe verdict, else rename token by token — the source transform's
+  // class-attribute rules.
   for (const span of spans) {
     const tokens = tokenize(span.text);
     if (tokens.length === 0) continue;
@@ -186,23 +184,6 @@ export function transformBundle(
     if (collapsed !== undefined) {
       addEdit(span.start, span.end, span.text, collapsed);
       continue;
-    }
-    const ordered = options.quoteOrder?.get(key);
-    if (ordered !== undefined) {
-      const names: Array<string> = [];
-      let missing = false;
-      for (const token of ordered) {
-        const name = registry.nameFor(token);
-        if (name === undefined) {
-          missing = true;
-          break;
-        }
-        names.push(name);
-      }
-      if (!missing) {
-        addEdit(span.start, span.end, span.text, names.join(" "));
-        continue;
-      }
     }
     for (const match of span.text.matchAll(/[^ \t\n\f\r]+/g)) {
       const token = match[0];

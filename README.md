@@ -1,11 +1,13 @@
 # minwind
 
-Build-time CSS name compression for Tailwind projects.
+Build-time CSS name compression for Tailwind and CSS Modules.
 
-minwind renames utility classes to short, stable names and consolidates repeated
-class lists. It rewrites HTML, JavaScript, and CSS together so every reference
-stays consistent. It runs only in production builds; source files and the dev
-server remain readable.
+<video src="./minwind-promo.mp4" controls playsinline></video>
+
+minwind renames classes to short, stable, or themed names. For Tailwind it can
+also consolidate repeated class lists. It rewrites HTML, JavaScript, and CSS
+together so every reference stays consistent. It runs only in production
+builds; source files and the dev server remain readable.
 
 ```html
 <!-- before -->
@@ -32,16 +34,18 @@ prerendered routes:
 
 Use minwind when all of these are true:
 
-- You use Tailwind CSS v4.
+- You use Tailwind CSS v4 and/or CSS Modules (`*.module.css` / `*.module.scss`).
 - You ship a production build containing HTML, CSS, and JavaScript.
-- Shorter shipped markup or a cleaner production DOM is worth adding a build
-  transform.
+- Shorter shipped markup, themed production class names, or a cleaner DOM is
+  worth adding a build transform.
 - Runtime-generated or third-party classes can remain unchanged or be listed as
   exclusions.
 
 minwind is not a CSS minifier, a runtime library, or a source-code formatter.
 It does not rename classes in development and never guesses about dynamic class
-references.
+references. CSS Modules support is rename/theme sync (JS export values match
+emitted selectors). It does not consolidate or atomically decompose Modules
+stylesheets.
 
 Unsure whether the savings justify it? Measure an existing build first. This is
 read-only and does not require adding minwind to your project:
@@ -55,11 +59,11 @@ theoretical upper bound, with gzip and Brotli estimates.
 
 ## Choose an integration
 
-| Build system                                    | Integration     | Coverage                                    | Trade-off                                 |
-| ----------------------------------------------- | --------------- | ------------------------------------------- | ----------------------------------------- |
-| Vite, SolidStart, Astro on Vite, SvelteKit      | `minwind()`     | Source modules and emitted CSS              | Best coverage; production builds only     |
-| webpack or rspack, including Next.js on webpack | Plugin + loader | Source modules and emitted CSS              | Loader must run before JSX/TS compilation |
-| Turbopack, esbuild, Parcel, or another bundler  | `minwind apply` | Emitted HTML, CSS, and provable JS literals | Conservative; may rename fewer tokens     |
+| Build system                                    | Integration     | Coverage                                    | Trade-off                                           |
+| ----------------------------------------------- | --------------- | ------------------------------------------- | --------------------------------------------------- |
+| Vite, SolidStart, Astro on Vite, SvelteKit      | `minwind()`     | Source modules, emitted CSS, CSS Modules    | Best coverage; production builds only               |
+| webpack or rspack, including Next.js on webpack | Plugin + loader | Source modules, emitted CSS, CSS Modules    | Loader must run before JSX/TS compilation           |
+| Turbopack, esbuild, Parcel, or another bundler  | `minwind apply` | Emitted HTML, CSS, and provable JS literals | Tailwind plus CSS/SCSS Modules via export-map remap |
 
 All three routes share the same contract:
 
@@ -69,16 +73,16 @@ All three routes share the same contract:
    everywhere.
 4. Internal inconsistency fails the build instead of shipping partial output.
 
-See [Architecture and safety](./docs/architecture.md) for the complete model.
-
 ## Install
 
 ```bash
 npm install minwind
 ```
 
-Requirements: Node.js 20 or newer and Tailwind CSS v4. Vite is an optional peer
-dependency used only by the Vite integration.
+Requirements: Node.js 20 or newer. The Tailwind engine needs Tailwind CSS v4.
+Vite is an optional peer used only by the Vite integration. `sass` is an
+optional peer used only when CSS Modules `words` naming inventories
+`*.module.scss` files.
 
 ## Vite
 
@@ -95,6 +99,34 @@ export default defineConfig({
 ```
 
 Run the normal production build. The plugin does nothing during development.
+
+### Mode, engines, and CSS Modules
+
+`mode` chooses rename-only vs rename plus consolidation:
+
+- `compress` (default) — rename and consolidate where the engine supports it.
+- `morph` — rename or theme class names only; skip consolidation.
+
+```ts
+minwind({
+  mode: "morph",
+  engines: ["css-modules"],
+  naming: { strategy: "words", theme: "star-wars" },
+});
+```
+
+`engines` defaults to `["tailwind"]`. Add `"css-modules"` for CSS/SCSS Modules,
+or pass both for a dual-stack app. Modules-only `compress` coerces to `morph`
+with a warning: Modules v1 does not consolidate. Dual-stack `compress`
+consolidates Tailwind assets only.
+
+CSS Modules morph owns Vite `css.modules.generateScopedName` so `styles.foo`
+**keys stay `foo`** while export **values** match the emitted selectors. Use
+PostCSS Modules. Vite Lightning CSS Modules is unsupported and fails the build
+when the Modules engine is enabled. Themed `words` naming needs a complete
+Modules inventory; SCSS Modules + `words` needs the optional `sass` peer.
+For webpack/rspack `getLocalIdent` wiring, including dual-stack collision,
+see [webpack and rspack](#webpack-and-rspack).
 
 ## webpack and rspack
 
@@ -121,6 +153,39 @@ framework compiler consumes them; the plugin rewrites emitted CSS before
 content hashes are finalized. A zero-rename tripwire fails the build when loader
 ordering is wrong. The same configuration works with rspack.
 
+CSS Modules morph owns css-loader `getLocalIdent` so `styles.foo` keys stay
+`foo` while export values match the emitted selectors. Dual-stack builds should
+share the plugin instance's collision space:
+
+```ts
+const plugin = new MinwindWebpackPlugin({
+  engines: ["tailwind", "css-modules"],
+});
+
+export default {
+  // ...rules including MinwindWebpackPlugin.loader with enforce: "pre"
+  plugins: [plugin],
+  module: {
+    rules: [
+      {
+        test: /\.module\.css$/,
+        use: {
+          loader: "css-loader",
+          options: {
+            modules: {
+              getLocalIdent: MinwindWebpackPlugin.createGetLocalIdent(
+                __dirname,
+                { collision: plugin.collision },
+              ),
+            },
+          },
+        },
+      },
+    ],
+  },
+};
+```
+
 ## Post-build apply
 
 For bundlers without the necessary plugin hooks, rewrite the completed output
@@ -136,17 +201,48 @@ provable class lists in JavaScript bundles. A token found in an ambiguous
 runtime context keeps its original name everywhere and appears in the report as
 a `runtime-context` exclusion.
 
+CSS/SCSS Modules are supported on apply for bundlers without a name-generator
+hook (Turbopack). Pass `--engines css-modules` (or `tailwind,css-modules`).
+Apply proves Module names from CSS Module JS export maps, then rewrites those
+proven bundler names in JS, CSS, and HTML. Unprovable strings stay original.
+
 ```text
 minwind apply <build-directory> [options]
 
 --root <directory>     Project root used to discover source and write reports
 --css-entry <file>     Tailwind CSS entrypoint
---no-consolidate       Rename only
+--mode morph|compress  morph = rename only; compress = rename + consolidation
+--no-consolidate       Alias for --mode morph
+--engines <ids>        Comma-separated engines (default: tailwind)
+--naming hash|words|quotes|maps|<dialect>
+                       Name strategy (default: hash). Dialect ids:
+                       boston, australia, texas, england, scotland,
+                       ireland, wales, newyork, canada, savannah,
+                       ghetto, degenerate, emojis, yorkshire,
+                       newzealand, jamaica, appalachia, geordie,
+                       piglatin
+--hash-length <n>      Hash name length (default 4, minimum 4)
+--hash-prefix <s>      Prepended to hash names (hash strategy only)
+--hash-alphabet <s>    Hash body characters (lowercase letters and digits)
+--hash-salt <s>        Mixed into the hash digest (hash strategy only)
+--theme <id>           Built-in words pack (star-wars, klingon, …)
+--vocabulary <file>    JSON array of strings; custom words list
+--quotes <file>        JSON array of sentences; implies quotes naming
+--maps <file>          JSON object of word→spelling; maps naming, or
+                       overlay on a dialect id
 --dry-run              Report the result without changing the build
 ```
 
-Post-build apply uses stable hash names. Themed naming requires a source-level
-plugin because it depends on the complete source class-list context.
+Tailwind-only apply without `--naming` still uses stable hash names. Modules
+apply accepts `hash`, `words`, `quotes`, `maps`, or a dialect id. `--theme` or
+`--vocabulary` for `words`; `--quotes` for `quotes`; `--maps` for `maps`, or
+with a dialect id to overlay those runs onto the mouth.
+
+```bash
+npx minwind apply out --root . --engines css-modules --naming words --theme star-wars
+npx minwind apply out --root . --engines css-modules --naming words --vocabulary words.json
+npx minwind apply out --naming boston
+```
 
 ## Verify the result
 
@@ -171,21 +267,62 @@ pnpm compare --site path/to/your/site
 ```
 
 The harness fails on a visual, console, navigation, theme, or interaction
-mismatch.
+mismatch. The checked-in compare site is Tailwind-only; CSS Modules morph is
+proven by the Vite and webpack builds of `test/fixtures/modules-site` and the
+Next/Turbopack apply fixture (`test/fixtures/turbopack-modules-site`), not by
+`pnpm compare`.
 
 ## Naming strategies
 
 The default strategy uses stable four-character content hashes. An unchanged
 Tailwind token keeps the same name across builds, which preserves long-term
-caching.
-
-You can instead provide a vocabulary or quote corpus:
+caching. Raise `length` when you want more collision headroom; the minimum is 4.
+Set `prefix` to prepend a string to each hash body (the digest stays the same).
+Hyphens are allowed (`tw-s2k9`). Set `alphabet` to restrict the hash body to
+those lowercase letters and digits; the first character still comes from the
+letters in the set. Set `salt` to mix extra bytes into the digest: the same
+token keeps the same name for a given salt, and a new salt rotates every name.
+Prefix, alphabet, and salt are hash-strategy only: they do not apply to dialect
+mouths, maps, or leftover `words` / `quotes` hashes.
 
 ```ts
 minwind({
+  naming: { strategy: "hash", length: 6 },
+});
+
+minwind({
+  naming: { strategy: "hash", prefix: "tw" },
+});
+
+minwind({
+  naming: { strategy: "hash", alphabet: "abcdefghijk" },
+});
+
+minwind({
+  naming: { strategy: "hash", salt: "v2" },
+});
+```
+
+You can instead deal names from a built-in theme. Tokens the pack cannot cover
+fall back to the same content-hash names (including `length`):
+
+```ts
+minwind({
+  naming: { strategy: "words", theme: "star-wars", length: 6 },
+});
+```
+
+Or pass your own list. `theme` and `vocabulary` cannot both be set; to extend a
+pack, spread it into `vocabulary`:
+
+```ts
+import { THEMES } from "minwind";
+
+minwind({
   naming: {
     strategy: "words",
-    vocabulary: ["quill", "willow", "ember", "lark", "glen", "harbor"],
+    vocabulary: [...THEMES["star-wars"], "myword"],
+    length: 6,
   },
 });
 ```
@@ -193,17 +330,160 @@ minwind({
 Available strategies:
 
 - `hash` — stable content hashes; the default and smallest predictable option.
-- `words` — generated names drawn from your vocabulary.
-- `quotes` — class lists can spell fragments from a quote corpus, then fall
-  back to vocabulary words and hashes.
+  Optional `prefix` prepends a string to each hash body. Optional `alphabet`
+  sets the characters used in that body. Optional `salt` rotates the map
+  without leaving content-hash stability.
+- `words` — generated names drawn from a built-in `theme` or a custom
+  `vocabulary`, then hash fallback.
+- `quotes` — sentences split into CSS idents and dealt in quote order. With
+  a prominence manifest, the document shell wears the start of the line.
+  Leftover tokens still hash. Personality, not extra compression. See
+  [Subliminal messages](#subliminal-messages).
+- `boston`, `australia`, `texas`, `england`, `scotland`, `ireland`,
+  `wales`, `newyork`, `canada`, `savannah`, `ghetto`, `degenerate`,
+  `emojis`, `yorkshire`, `newzealand`, `jamaica`, `appalachia`,
+  `geordie`, `piglatin` — keep the Tailwind hyphen string (emoji drops
+  hyphens) and respell each word in that mouth. `hover:items-center`
+  becomes `hovah:items-centah`. Yorkshire `right-4` is `reet-4`.
+  New Zealand `sticky` is `stucky`. Jamaica `flex-row` is `flex-roh`.
+  Appalachia `right-4` is `raht-4`. Geordie `flex-row` is `flex-roo`.
+  Pig Latin `flex-row` is `exflay-owray`. `hover:items-center` is
+  `overhay:itemsway-entercay`. Abbreviations expand (`px-6` → `pee-ecks-6`)
+  except pig Latin, which respells the letters (`px-6` → `pxay-6`). Emoji
+  concatenates
+  (`bg-red-500` → `🎨🔴5️⃣0️⃣0️⃣`). Not a `words` pack. Two tokens that
+  land on the same ident fail the build.
+- `maps` — the same hyphen-preserving hasher with a site-supplied
+  word→spelling table. `{ flex: "muscles" }` turns `flex-col` into
+  `muscles-col`. Unmapped runs stay themselves. Pass the same `maps`
+  object on a dialect strategy to overlay: mapped runs replace the
+  mouth spelling, unmapped runs still use the mouth (`boston` plus
+  `{ flex: "muscles" }` turns `flex-col` into `muscles-cawl`). Not a
+  `words` pack.
 
-Copy-paste vocabularies for Star Wars, Star Trek, Super Mario, Zelda, The
-Witcher, Zoolander, and other cult packs are in
-[examples/themes](./examples/themes).
+```ts
+minwind({
+  naming: { strategy: "boston" },
+});
+
+minwind({
+  naming: { strategy: "maps", maps: { flex: "muscles" } },
+});
+
+minwind({
+  naming: { strategy: "boston", maps: { flex: "muscles" } },
+});
+```
+
+```html
+<!-- source -->
+<div class="mx-auto flex px-6 items-center hover:border"></div>
+
+<!-- boston -->
+<div class="em-ecks-auto flex pee-ecks-6 items-centah hovah:bawdah"></div>
+
+<!-- piglatin -->
+<div
+  class="mxay-autoway exflay pxay-6 itemsway-entercay overhay:orderbay"
+></div>
+
+<!-- emojis -->
+<div class="↔️🚗 💪 ↔️6️⃣ 🧺🎯 🛸:🖼️"></div>
+```
+
+Built-in theme ids: `star-wars`, `huttese`, `mandoa`, `aurebesh`, `star-trek`,
+`klingon`, `game-of-thrones`, `high-valyrian`, `dothraki`, `stranger-things`,
+`twin-peaks`, `buffy`, `x-files`, `cowboy-bebop`, `mr-robot`,
+`battlestar-galactica`, `lost`, `severance`, `dark`, `the-expanse`,
+`rick-and-morty`, `super-mario`, `zelda`, `witcher`, `zoolander`, `lebowski`,
+`portal`, `dune`, `princess-bride`, `office-space`, `firefly`, `disney`,
+`pirates`, `classic-cartoon`, `pokemon`, `lotr`, `harry-potter`, `futurama`,
+`lorem-ipsum`.
+See [examples/themes](./examples/themes) for what the shell might read.
 
 Names are sanitized as CSS identifiers and never collide with excluded classes.
-Quote words participate only in multi-token lists; isolated words otherwise
-read like fragments detached from their sentence.
+
+### Bring your own names
+
+Built-in packs are a demo. The interesting DOM is yours.
+
+A golf major can ship player names and course slang (`augusta`, `amen`,
+`albatross`). Any sport can do the same with roster, venues, and broadcast
+calls. A brand can use product names and the jokes only that team tells. If
+you are building something people will inspect, the class list should be
+the thing they screenshot.
+
+```ts
+minwind({
+  naming: {
+    strategy: "words",
+    vocabulary: ["augusta", "amen", "albatross", "birdie", "fore"],
+    prominence: loadProminence(),
+  },
+});
+```
+
+Speeches and slogans use `quotes` the same way. See
+[Subliminal messages](#subliminal-messages) for the inspector recipe and
+the one-token-one-name limits.
+
+Safe-for-work is optional. The list that goes viral is the one a stranger
+would send to the group chat with "I can't believe this is in the DOM."
+Innuendo, cursed fandom, locker-room vernacular, an in-joke legal would
+sweat: those belong. Generic words like `button` and `hero` do not.
+
+Every custom word has to be a CSS identifier
+(`/^(?:[a-z][a-z0-9]*|_[a-z0-9]+)$/`), unique, and you want at least 40
+so leftovers can still hash. Digit-leading words get a leading underscore
+(`2b` becomes `_2b`).
+
+### Subliminal messages
+
+Class names are not painted as text. Visitors see the page. Anyone who
+opens Inspect or views source sees your words instead of `flex` and
+`px-4`. The names are in the HTML. Treat it as an Easter egg.
+
+**A line of speech.** Use `quotes` and a prominence manifest so the first
+unique utilities on the document shell take the first unique words of the
+line:
+
+```ts
+minwind({
+  naming: {
+    strategy: "quotes",
+    quotes: [
+      "Ask not what your country can do for you. Ask what you can do for your country.",
+    ],
+    prominence: loadProminence(),
+  },
+});
+```
+
+```bash
+MINWIND=off pnpm build
+npx minwind prominence .output/public
+pnpm build
+```
+
+Open the production page, Inspect, and read `<html>` plus the next few
+class-bearing elements.
+
+Those elements received the start of the quote. They will not always
+spell it from left to right. Each original utility still maps to one
+name everywhere, and a class attribute still lists names in source
+order. Duplicate quote words are used once (`you` in that speech is one
+ident). Leftover utilities hash. Raise `--window` if the first 32
+class-bearing elements do not expose enough unique tokens for the line.
+
+A nested shell where each node introduces a new utility gets closer to a
+readable sequence. A long class list on `<html>` will mix the words. For
+a punchline that survives any neighbor, use `words` and put the screenshot
+names first in `vocabulary`. That is the usual Easter egg: every inspected
+node is on-theme, none of them have to spell.
+
+The Vite and webpack plugins take `prominence`. `minwind apply` deals
+`quotes` without that manifest, so the most frequent tokens get the start
+of the line rather than the inspector's first nodes.
 
 ### Prominence-aware words
 
@@ -233,15 +513,11 @@ function loadProminence(): Record<string, number> | undefined {
 minwind({
   naming: {
     strategy: "words",
-    vocabulary: MY_VOCABULARY,
+    theme: "star-wars",
     prominence: loadProminence(),
   },
 });
 ```
-
-See the [Spaceballs naming case study](./docs/spaceballs-case-study.md) for a
-real deployment, including why themed words worked better than quotes and how
-the prominence window affected compression.
 
 ## Consolidation
 
@@ -363,15 +639,16 @@ JavaScript and supports React projects that place JSX in `.js` files.
 
 ```bash
 pnpm install
-pnpm test          # unit tests
-pnpm compare       # full browser harness against examples/demo
+pnpm test          # full suite, including Next/Turbopack Modules apply
+pnpm test:unit     # skip bundler builds (MINWIND_SKIP_BUILD=1)
+pnpm compare       # Tailwind browser harness; N/A for CSS Modules
 pnpm build         # emit dist/ JavaScript and declarations
 pnpm check         # typecheck, formatting, and tests
 ```
 
-Repository architecture, module ownership, and change invariants are documented
-in [Architecture and safety](./docs/architecture.md). Coding agents should also
-read [AGENTS.md](./AGENTS.md).
+The Next/Turbopack CSS Modules fixture is skipped only when
+`MINWIND_SKIP_BUILD=1`. `pnpm compare` remains Tailwind-only; there is no
+Modules harness site.
 
 ## License
 

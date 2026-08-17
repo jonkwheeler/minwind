@@ -66,6 +66,7 @@ export interface ConsolidationVerdict {
 // consolidation because those references never collapse.
 export interface ConsolidationUsage {
   dynamicTokens?: ReadonlySet<string>;
+  hash?: (token: string) => string;
 }
 
 export interface ModelStylesheetOptions {
@@ -334,7 +335,9 @@ export function computeConsolidationVerdicts(
   }
   for (const verdict of verdicts) {
     if (!verdict.safe) continue;
-    verdict.name = hashClassName(canonicalListKey(verdict.tokens));
+    verdict.name = (usage?.hash ?? hashClassName)(
+      canonicalListKey(verdict.tokens),
+    );
     const removable: Array<string> = [];
     for (const member of verdict.tokens) {
       if (usage?.dynamicTokens?.has(member) === true) continue;
@@ -392,7 +395,7 @@ export function assertConsolidatedNames(
       throw new Error(
         `minwind: name collision: consolidated name "${name}" for` +
           ` "${verdict.tokens.join(" ")}" equals the generated name for` +
-          ` "${renamedOwner}"; bump NAME_LENGTH`,
+          ` "${renamedOwner}"; increase naming.length`,
       );
     }
     for (const entry of registry.entries()) {
@@ -400,7 +403,7 @@ export function assertConsolidatedNames(
         throw new Error(
           `minwind: name collision: consolidated name "${name}" for` +
             ` "${verdict.tokens.join(" ")}" equals the registry class` +
-            ` "${entry.token}"; bump NAME_LENGTH`,
+            ` "${entry.token}"; increase naming.length`,
         );
       }
     }
@@ -409,7 +412,7 @@ export function assertConsolidatedNames(
         throw new Error(
           `minwind: name collision: consolidated name "${name}" for` +
             ` "${verdict.tokens.join(" ")}" equals the excluded class` +
-            ` "${name}"; bump NAME_LENGTH`,
+            ` "${name}"; increase naming.length`,
         );
       }
     }
@@ -418,7 +421,7 @@ export function assertConsolidatedNames(
     if (existing !== undefined && existing !== key) {
       throw new Error(
         `minwind: name collision: "${existing}" and "${key}" both hash` +
-          ` to consolidated name "${name}"; bump NAME_LENGTH`,
+          ` to consolidated name "${name}"; increase naming.length`,
       );
     }
     ownerByName.set(name, key);

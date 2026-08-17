@@ -1,5 +1,6 @@
 import assert from "node:assert";
 import { describe, it } from "node:test";
+import { dialectClassName } from "../src/dialect.js";
 import { createNameRegistry, type NameRegistry } from "../src/names.js";
 import {
   assertNoSurvivingTokens,
@@ -500,5 +501,33 @@ describe("assertPresence (cross-asset, U6 contract)", function () {
     assert.throws(function () {
       assertPresence(REGISTRY, [cssA]);
     }, /presence.*site-card/s);
+  });
+});
+
+describe("transformStylesheet dialect names", function () {
+  it("encodes colons and keeps hyphens in Boston names", function () {
+    const registry = createNameRegistry({
+      universe: new Set(["hover:flex", "items-center"]),
+      sourceTokens: new Set(["hover:flex", "items-center"]),
+      hash: function (token: string): string {
+        return dialectClassName(token, "boston");
+      },
+    });
+    const result = transform(
+      "@layer theme,base,components,utilities;" +
+        "@layer utilities{" +
+        ".hover\\:flex:hover{display:flex}" +
+        ".items-center{align-items:center}" +
+        "}",
+      registry,
+    );
+    assert.strictEqual(
+      result.css,
+      "@layer theme,base,components,utilities;" +
+        "@layer utilities{" +
+        ".hovah\\:flex:hover{display:flex}" +
+        ".items-centah{align-items:center}" +
+        "}",
+    );
   });
 });

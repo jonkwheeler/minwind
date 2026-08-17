@@ -1,6 +1,15 @@
 node_modules/
 dist/
 .output/
+docs/
+**/plans/
+AGENTS.md
+**/SKILL.md
+CLAUDE.md
+.agents/
+.cursor/
+test/fixtures/turbopack-modules-site/.next/
+test/fixtures/turbopack-modules-site/out/
 .vinxi/
 *.log
 .DS_Store

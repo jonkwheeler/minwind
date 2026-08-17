@@ -5,6 +5,7 @@ import type { ConsolidationVerdict } from "./consolidate.js";
 import type { NameRegistry } from "./names.js";
 import type { CssTransformWarning } from "./transform-css.js";
 import type { TransformWarning } from "./transform-source.js";
+import { formatModuleKey } from "./engines/css-modules.js";
 import { compareCodeUnits } from "./util.js";
 import type { CustomPropertyRegistry } from "./custom-properties.js";
 
@@ -29,7 +30,7 @@ export interface ReportVerdict {
 
 export interface TransformReport {
   version: 1;
-  flags: { enabled: boolean; consolidate: boolean };
+  flags: { enabled: boolean; consolidate: boolean; mode: "morph" | "compress" };
   summary: {
     renamed: number;
     excluded: number;
@@ -95,12 +96,18 @@ export interface BuildReportInput {
   verdicts: ReadonlyArray<ConsolidationVerdict>;
   warnings: ReadonlyArray<TransformWarning | CssTransformWarning>;
   consolidate: boolean;
+  mode?: "morph" | "compress";
+  modeWarning?: string;
   customProperties?: CustomPropertyRegistry;
 }
 
 export function buildReport(input: BuildReportInput): TransformReport {
-  const renames = input.registry.entries();
-  const exclusions = input.registry.exclusions();
+  const renames = input.registry.entries().map(function (entry) {
+    return { token: formatModuleKey(entry.token), name: entry.name };
+  });
+  const exclusions = input.registry.exclusions().map(function (entry) {
+    return { token: formatModuleKey(entry.token), reason: entry.reason };
+  });
 
   const verdicts: Array<ReportVerdict> = [];
   if (input.consolidate) {
@@ -128,13 +135,28 @@ export function buildReport(input: BuildReportInput): TransformReport {
     seen.add(key);
     warnings.push(record);
   }
+  if (input.modeWarning !== undefined) {
+    const record: Record<string, unknown> = {
+      kind: "mode-coerced",
+      message: input.modeWarning,
+    };
+    const key = warningKey(record);
+    if (!seen.has(key)) {
+      seen.add(key);
+      warnings.push(record);
+    }
+  }
   warnings.sort(function (a, b) {
     return compareCodeUnits(warningKey(a), warningKey(b));
   });
 
   const report: TransformReport = {
     version: 1,
-    flags: { enabled: true, consolidate: input.consolidate },
+    flags: {
+      enabled: true,
+      consolidate: input.consolidate,
+      mode: input.mode ?? (input.consolidate ? "compress" : "morph"),
+    },
     summary: {
       renamed: renames.length,
       excluded: exclusions.length,
@@ -166,7 +188,7 @@ export function buildRenameMap(
 ): RenameMap {
   const names: Record<string, string> = {};
   for (const entry of registry.entries()) {
-    names[entry.name] = entry.token;
+    names[entry.name] = formatModuleKey(entry.token);
   }
   const consolidated: Record<string, Array<string>> = {};
   const consolidatedVerdicts = verdicts

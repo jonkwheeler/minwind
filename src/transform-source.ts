@@ -53,12 +53,6 @@ export interface TransformSourceOptions {
   // insensitive) collapses to the consolidated name; partially-dynamic
   // groups never collapse and their tokens still rename per R1.
   consolidationVerdicts?: ReadonlyArray<ConsolidationVerdict>;
-  // Quote naming: canonical list key -> tokens in quote word order. A
-  // fully-static rename group whose canonical key appears is rewritten with
-  // its renamed tokens in that order — class order inside an attribute is
-  // semantically free, so the DOM reads as the quote. Consolidation wins
-  // when both match (a collapsed list has no order to preserve).
-  quoteOrder?: ReadonlyMap<string, ReadonlyArray<string>>;
   customProperties?: CustomPropertyRegistry;
 }
 
@@ -259,10 +253,6 @@ export function transformModule(
     kind: RenameContextKind;
     literals: Array<LiteralOccurrence>;
     editKeys: Array<string>;
-    // Per-literal spans of the edit keys it added, so a dynamic group's
-    // literal-level quote reorder can withdraw exactly its own per-token
-    // edits.
-    literalEdits: Array<{ literal: LiteralOccurrence; keys: Array<string> }>;
   }
   const groupStack: Array<OpenGroup> = [];
 
@@ -312,43 +302,6 @@ export function transformModule(
     return true;
   }
 
-  // Quote-order rewrite (naming 'quotes' strategy): same span math as the
-  // collapse, but the replacement is the group's renamed tokens in the
-  // quote's word order. classList groups never reorder — object semantics
-  // are not string-joinable — and a group keeps its per-token renames
-  // whenever the order map or the registry cannot vouch for every token.
-  function reorderGroup(group: OpenGroup): boolean {
-    if (options.quoteOrder === undefined) return false;
-    if (group.kind === "classList-key") return false;
-    for (const literal of group.literals) {
-      if (!literal.quoted) return false;
-    }
-    const ordered = options.quoteOrder.get(
-      canonicalListKey(
-        group.literals.flatMap(function (literal) {
-          return tokenize(literal.text);
-        }),
-      ),
-    );
-    if (ordered === undefined) return false;
-    const names: Array<string> = [];
-    for (const token of ordered) {
-      const name = registry.nameFor(token);
-      if (name === undefined) return false;
-      names.push(name);
-    }
-    for (const key of group.editKeys) edits.delete(key);
-    const single = group.kind === "class-attribute";
-    const first = group.literals[0];
-    const last = group.literals[group.literals.length - 1];
-    const start = single ? first.start : first.start - 1;
-    const end = single ? last.end : last.end + 1;
-    const replacement = single ? names.join(" ") : `'${names.join(" ")}'`;
-    const expected = code.slice(start, end);
-    edits.set(`${start}:${end}`, { start, end, expected, replacement });
-    return true;
-  }
-
   function handleLiteral(literal: LiteralOccurrence): void {
     const raw = code.slice(literal.start, literal.end);
     if (raw !== literal.text) {
@@ -374,57 +327,15 @@ export function transformModule(
     }
   }
 
-  // Dynamic groups (cn('base', cond && 'extra')) never reorder as a whole —
-  // the rendered attribute's token set varies at runtime — but each static
-  // string literal is one contiguous run in that attribute, so a literal
-  // whose tokens the solver covered reorders in place into its fragment.
-  function reorderDynamicLiterals(group: OpenGroup): void {
-    if (options.quoteOrder === undefined) return;
-    if (group.kind !== "cn-argument") return;
-    const done = new Set<string>();
-    for (const entry of group.literalEdits) {
-      const spanKey = `${entry.literal.start}:${entry.literal.end}`;
-      if (done.has(spanKey)) continue;
-      const tokens = tokenize(entry.literal.text);
-      if (tokens.length < 2) continue;
-      const ordered = options.quoteOrder.get(canonicalListKey(tokens));
-      if (ordered === undefined) continue;
-      const names: Array<string> = [];
-      let missing = false;
-      for (const token of ordered) {
-        const name = registry.nameFor(token);
-        if (name === undefined) {
-          missing = true;
-          break;
-        }
-        names.push(name);
-      }
-      if (missing) continue;
-      for (const key of entry.keys) edits.delete(key);
-      edits.set(spanKey, {
-        start: entry.literal.start,
-        end: entry.literal.end,
-        expected: code.slice(entry.literal.start, entry.literal.end),
-        replacement: names.join(" "),
-      });
-      done.add(spanKey);
-    }
-  }
-
   const visitor: ClassContextVisitor = {
     enterRenameGroup: function (kind: RenameContextKind): void {
-      groupStack.push({ kind, literals: [], editKeys: [], literalEdits: [] });
+      groupStack.push({ kind, literals: [], editKeys: [] });
     },
     renameLiteral: function (literal: LiteralOccurrence): void {
       const open = groupStack[groupStack.length - 1];
-      const before = open !== undefined ? open.editKeys.length : 0;
       handleLiteral(literal);
       if (open !== undefined) {
         open.literals.push(literal);
-        open.literalEdits.push({
-          literal,
-          keys: open.editKeys.slice(before),
-        });
       }
     },
     exitRenameGroup: function (
@@ -434,15 +345,9 @@ export function transformModule(
     ): void {
       const group = groupStack.pop();
       if (group === undefined || group.literals.length === 0) return;
-      // Only a provably static list may collapse or reorder as a whole (R3);
-      // a partially-dynamic group keeps per-token renames except that its
-      // static literals may still reorder into quote fragments.
-      // Consolidation wins when both match.
-      if (staticList) {
-        if (!collapseGroup(group)) reorderGroup(group);
-      } else {
-        reorderDynamicLiterals(group);
-      }
+      // Only a provably static list may collapse as a whole (R3);
+      // a partially-dynamic group keeps per-token renames.
+      if (staticList) collapseGroup(group);
     },
     unprovableTemplate: function (node, kind: ClassContextKind): void {
       // No sourceFile argument: in the SFC path the node belongs to the
