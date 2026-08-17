@@ -1,10 +1,15 @@
 # Changelog
 
+## 1.0.3
+
+npm release of the 1.0 contract. Versions 1.0.0–1.0.2 were published and
+unpublished earlier this year; the registry will not accept those numbers
+again.
+
 ## 1.0.0
 
 First release that treats CSS/SCSS Modules as a supported engine alongside
-Tailwind. npm still has 0.3.0; git `main` is 0.4.0 (unpublished).
-Tailwind-only Vite, webpack, and `minwind apply` defaults stay
+Tailwind. Tailwind-only Vite, webpack, and `minwind apply` defaults stay
 `engines: ["tailwind"]` with hash names.
 
 ### Added
