@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import * as parse5 from "parse5";
 import type { DefaultTreeAdapterMap } from "parse5";
 import { compareCodeUnits } from "./util.js";
@@ -20,6 +22,8 @@ import { compareCodeUnits } from "./util.js";
 
 type TreeNode = DefaultTreeAdapterMap["node"];
 type TreeElement = DefaultTreeAdapterMap["element"];
+
+export const DEFAULT_WINDOW = 32;
 
 export interface ProminencePage {
   path: string;
@@ -98,4 +102,33 @@ export function computeProminence(
     tokens[token] = index;
   }
   return { window, pages: sorted.length, tokens };
+}
+
+export function walkHtmlFiles(directory: string): Array<string> {
+  const files: Array<string> = [];
+  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    const full = path.join(directory, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...walkHtmlFiles(full));
+    } else if (entry.isFile() && entry.name.endsWith(".html")) {
+      files.push(full);
+    }
+  }
+  return files;
+}
+
+// Ranks every .html file under a build output directory.
+export function computeProminenceFromDir(
+  directory: string,
+  window: number,
+): ProminenceManifest {
+  const pages: Array<ProminencePage> = walkHtmlFiles(directory).map(
+    function (file) {
+      return {
+        path: path.relative(directory, file),
+        html: fs.readFileSync(file, "utf8"),
+      };
+    },
+  );
+  return computeProminence(pages, window);
 }

@@ -1,0 +1,40 @@
+---
+import Badge from "../components/Badge.astro";
+import Card from "../components/Card.astro";
+import Base from "../layouts/Base.astro";
+---
+
+<Base title="Inbox" description="Follow-ups waiting on a reply.">
+  <h1 class="text-3xl font-bold tracking-tight">Inbox</h1>
+  <p class="mt-4 text-base text-stone-600">
+    Three threads are waiting on a reply.
+  </p>
+  <div class="mt-6 flex items-center gap-3">
+    <Badge label="New" tone="info" />
+    <Badge label="Overdue" tone="warn" />
+  </div>
+  <p data-follow-up class="mt-8 rounded-md bg-white p-4 text-sm shadow-sm">
+    Waiting for the script
+  </p>
+  <section class="flex-col gap-2">
+    <h2>Today</h2>
+    <p>Two replies due.</p>
+  </section>
+  <section class="flex-col gap-2">
+    <h2>This week</h2>
+    <p>One reply due.</p>
+  </section>
+  <Card class="flex-col gap-2">
+    <h2>Pinned</h2>
+    <p>Follow up with the printer.</p>
+  </Card>
+</Base>
+
+<script>
+  // Hooks by data attribute, never by class, so renaming cannot break it.
+  const status = document.querySelector<HTMLElement>("[data-follow-up]");
+  if (status !== null) {
+    status.dataset.ready = "yes";
+    status.textContent = "Follow-up sent";
+  }
+</script>

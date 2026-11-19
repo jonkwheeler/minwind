@@ -7,6 +7,8 @@ export type {
   MinwindMode,
   MinwindOptions,
 } from "./plugin.js";
+export { runApply } from "./run-apply.js";
+export type { RunApplyOptions, RunApplyResult } from "./run-apply.js";
 export type { NamingConfig, NamingList, NamingResult } from "./naming.js";
 export {
   resolveVocabulary,

@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
-import { computeProminence, type ProminencePage } from "./prominence.js";
+import { computeProminenceFromDir, DEFAULT_WINDOW } from "./prominence.js";
 
 const USAGE = `Usage: minwind prominence <build-output-directory> [options]
 
@@ -30,8 +30,6 @@ Exit codes:
   0  manifest written
   1  usage or input error
 `;
-
-const DEFAULT_WINDOW = 32;
 
 interface CliOptions {
   buildDir: string;
@@ -89,19 +87,6 @@ export function parseArgs(argv: Array<string>): CliOptions {
   return { buildDir, out, window };
 }
 
-function walkHtmlFiles(directory: string): Array<string> {
-  const files: Array<string> = [];
-  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
-    const full = path.join(directory, entry.name);
-    if (entry.isDirectory()) {
-      files.push(...walkHtmlFiles(full));
-    } else if (entry.isFile() && entry.name.endsWith(".html")) {
-      files.push(full);
-    }
-  }
-  return files;
-}
-
 export function runProminenceCli(argv: Array<string>): number {
   const options = parseArgs(argv);
   if (
@@ -113,18 +98,11 @@ export function runProminenceCli(argv: Array<string>): number {
     );
     return 1;
   }
-  const htmlFiles = walkHtmlFiles(options.buildDir);
-  if (htmlFiles.length === 0) {
+  const manifest = computeProminenceFromDir(options.buildDir, options.window);
+  if (manifest.pages === 0) {
     process.stderr.write(`Error: no .html files under ${options.buildDir}\n`);
     return 1;
   }
-  const pages: Array<ProminencePage> = htmlFiles.map(function (file) {
-    return {
-      path: path.relative(options.buildDir, file),
-      html: fs.readFileSync(file, "utf8"),
-    };
-  });
-  const manifest = computeProminence(pages, options.window);
   fs.writeFileSync(options.out, JSON.stringify(manifest, null, 2) + "\n");
   const count = Object.keys(manifest.tokens).length;
   process.stdout.write(

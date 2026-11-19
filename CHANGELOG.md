@@ -1,5 +1,69 @@
 # Changelog
 
+## 1.1.0
+
+Adds an Astro integration and one-build visibility ranking for `minwind
+apply`. No option or flag is removed or renamed, but a new check can fail a
+build that used to ship broken styles; see Changed.
+
+### Added
+
+- `minwind/astro`, an integration for Astro 7 static sites. It runs the apply
+  engine on the finished output at the end of `astro build`. With `words` or
+  `quotes` naming it first ranks the built pages by visibility, so `<html>`,
+  `<body>`, and the first class-bearing elements get the first vocabulary
+  words in one build. Options: `naming`, `mode`, `engines`, `exclusions`,
+  `cssEntry`, and `prominence` (on by default; `false` turns ranking off).
+  On `astro build` it sets `build.inlineStylesheets` to `"never"` and refuses
+  an adapter, server output, `security.csp`, `customProperties`, a `srcDir`
+  other than `src/`, and a final config that still inlines stylesheets. `astro dev`, `preview`, and `sync`
+  are untouched. Tested on Astro 7.4.13, which needs Node.js 22.23.4 or
+  newer. Set it up by hand in `astro.config.mjs`; `astro add` is not
+  supported.
+- `minwind apply --prominence <file|auto>` for `words` and `quotes` naming.
+  `auto` ranks the output directory's HTML before renaming it. For a custom
+  window, pass a manifest from `minwind prominence --window <n>`.
+- `runApply`, exported from the package root, runs `minwind apply`
+  in-process and throws on failure.
+- Vite 8 support. The plugin's build suites pass on Vite 6 and Vite 8, and
+  the `vite` peer range is now `^5 || ^6 || ^7 || ^8`.
+
+### Changed
+
+- `minwind apply` and `minwind/astro` now fail when an HTML `<style>` block
+  in the output references a renamed class, and the error lists each file
+  and class. minwind does not rewrite inline styles, so those rules used to
+  match nothing and the page shipped with broken styling. Builds that passed
+  before can fail now.
+- `minwind apply` honors `MINWIND=off`: it prints that it is disabled and
+  leaves the directory unchanged.
+- In `.astro` layouts, `<html>` and `<body>` classes, `class:list` included,
+  are renamed after frontmatter (including empty frontmatter) and when
+  `<head>` holds components or `{...}` expressions. They used to keep their
+  original names.
+- The same recovery applies to plain `.html` (`minwind apply` and the Vite
+  plugin): when content in `<head>` makes the HTML parser imply `<body>`, the
+  literal `<body>` tag's classes are now renamed. They used to keep their
+  original names, so the output bytes of such pages change.
+- The README no longer lists Astro under the Vite plugin. Astro compiles
+  `.astro` files before Vite plugins run; use `minwind/astro`.
+- The README no longer documents `MINWIND_REPORT=0`. No code read it.
+
+### Fixed
+
+- Brace expressions written across lines in Astro and Svelte templates, the
+  usual shape after Prettier formats a file, were cut short at the first
+  line break. Multi-line `class:list` tokens are now renamed. A multi-line
+  `class={cond ? ... : ...}` is now marked unprovable; before, it emitted
+  nothing, so a class renamed elsewhere could lose its styling there.
+- In compress mode, `minwind apply` deleted a merged class list's member
+  rules even when the built output still used those classes outside that
+  list, for example a component that merges a `class` prop into its own
+  classes. Those elements shipped unstyled with no warning. Members the
+  output renames on their own now keep their rules.
+- `minwind apply` and `runApply` report the CSS Modules-only
+  compress-to-morph coercion, as the Vite and webpack plugins already do.
+
 ## 1.0.3
 
 npm release of the 1.0 contract. Versions 1.0.0–1.0.2 were published and

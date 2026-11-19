@@ -1,12 +1,16 @@
 {
   "name": "minwind",
-  "version": "1.0.3",
-  "description": "Build-time CSS name compression for Tailwind and CSS Modules: renames and consolidates classes across JS/TS, SFC, HTML, and CSS, with optional custom-property aliases. Vite and webpack/rspack plugins plus a post-build CLI.",
+  "version": "1.1.0",
+  "description": "Build-time CSS name compression for Tailwind and CSS Modules: renames and consolidates classes across JS/TS, SFC, HTML, and CSS, with optional custom-property aliases. Vite and webpack/rspack plugins, an Astro integration, and a post-build CLI.",
   "type": "module",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./astro": {
+      "types": "./dist/astro.d.ts",
+      "import": "./dist/astro.js"
     },
     "./measure": {
       "types": "./dist/measure/index.d.ts",
@@ -49,7 +53,8 @@
     "vite",
     "vite-plugin",
     "css",
-    "css-modules"
+    "css-modules",
+    "astro"
   ],
   "license": "MIT",
   "repository": {
@@ -62,7 +67,7 @@
   "peerDependencies": {
     "sass": "^1",
     "tailwindcss": "^4",
-    "vite": "^5 || ^6 || ^7"
+    "vite": "^5 || ^6 || ^7 || ^8"
   },
   "peerDependenciesMeta": {
     "vite": {
@@ -94,6 +99,7 @@
     "tailwindcss": "^4.1.18",
     "tsx": "^4.21.0",
     "vite": "^6.4.1",
+    "vite8": "npm:vite@^8",
     "webpack": "^5.109.2"
   },
   "packageManager": "pnpm@9.15.9"

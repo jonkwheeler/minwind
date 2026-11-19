@@ -13,7 +13,11 @@ import path from "node:path";
 import process from "node:process";
 import { describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
-import { build, type Plugin } from "vite";
+import { build as buildVite6, type InlineConfig, type Plugin } from "vite";
+import {
+  build as buildVite8,
+  type InlineConfig as Vite8InlineConfig,
+} from "vite8";
 import { hashClassName } from "../src/names.js";
 import { resolveFlags, minwind } from "../src/plugin.js";
 import { MODULES_COMPRESS_WARNING } from "../src/flags.js";
@@ -48,6 +52,29 @@ const FADE_IN = hashClassName("fade-in");
 const SITE_CARD = hashClassName("site-card");
 
 const FLAG_NAMES = ["MINWIND", "MINWIND_RENAME", "MINWIND_CONSOLIDATE"];
+
+// The real-build suites run on two Vite majors: the root `vite`
+// devDependency (6.x) and the `vite8` alias, which backs the `^8` peer range.
+// Vite 8 transforms JSX with Oxc, which defaults to the automatic runtime,
+// while the fixtures are written for classic JSX (plugin-site/src/render.tsx),
+// so only the Vite 8 build opts back into it. The rest of the config is shared.
+interface ViteVersion {
+  label: string;
+  build: (config: InlineConfig) => Promise<unknown>;
+}
+
+const VITE_VERSIONS: ReadonlyArray<ViteVersion> = [
+  { label: "Vite 6", build: buildVite6 },
+  {
+    label: "Vite 8",
+    build: function (config: InlineConfig): Promise<unknown> {
+      return buildVite8({
+        ...(config as Vite8InlineConfig),
+        oxc: { jsx: { runtime: "classic" } },
+      });
+    },
+  },
+];
 
 function clearFlags(): void {
   for (const name of FLAG_NAMES) delete process.env[name];
@@ -113,11 +140,12 @@ function findFile(
 }
 
 async function buildFixture(
+  vite: ViteVersion,
   outDirName: string,
   plugins: Array<Plugin>,
 ): Promise<Map<string, Buffer>> {
   const outDir = path.join(FIXTURE, outDirName);
-  await build({
+  await vite.build({
     root: FIXTURE,
     logLevel: "silent",
     plugins,
@@ -433,205 +461,209 @@ describe("minwind plugin shape (R4, R9)", function () {
   });
 });
 
-describe("minwind production build (R1, R3, R8, R11)", function () {
-  it("renames modules and CSS, consolidates, and writes artifacts", async function () {
-    await withFlags({}, async function () {
-      await cleanOutputs();
-      const files = await buildFixture("dist-on", [
-        ...minwind({ root: FIXTURE, cssEntry: CSS_ENTRY }),
-      ]);
+for (const vite of VITE_VERSIONS) {
+  describe(`minwind production build (R1, R3, R8, R11) [${vite.label}]`, function () {
+    it("renames modules and CSS, consolidates, and writes artifacts", async function () {
+      await withFlags({}, async function () {
+        await cleanOutputs();
+        const files = await buildFixture(vite, "dist-on", [
+          ...minwind({ root: FIXTURE, cssEntry: CSS_ENTRY }),
+        ]);
 
-      const js = findFile(files, /assets\/.*\.js$/);
-      // The repeated list collapses to the consolidated name in all three
-      // class="flex items-center p-4" usage sites.
-      const occurrences = js.text.split(CONSOLIDATED_NAME).length - 1;
-      assert.ok(
-        occurrences === 3,
-        `expected the consolidated name 3 times in the bundle, got ${occurrences}`,
-      );
-      assert.ok(!js.text.includes("items-center"));
-      assert.ok(!js.text.includes("fade-in"));
-      assert.ok(!js.text.includes("site-card"));
-      assert.ok(!js.text.includes("flex-col"));
-      assert.ok(
-        js.text.includes(FLEX_COL) &&
-          js.text.includes(FADE_IN) &&
-          js.text.includes(SITE_CARD),
-        "renamed singleton classes must appear in the bundle",
-      );
+        const js = findFile(files, /assets\/.*\.js$/);
+        // The repeated list collapses to the consolidated name in all three
+        // class="flex items-center p-4" usage sites.
+        const occurrences = js.text.split(CONSOLIDATED_NAME).length - 1;
+        assert.ok(
+          occurrences === 3,
+          `expected the consolidated name 3 times in the bundle, got ${occurrences}`,
+        );
+        assert.ok(!js.text.includes("items-center"));
+        assert.ok(!js.text.includes("fade-in"));
+        assert.ok(!js.text.includes("site-card"));
+        assert.ok(!js.text.includes("flex-col"));
+        assert.ok(
+          js.text.includes(FLEX_COL) &&
+            js.text.includes(FADE_IN) &&
+            js.text.includes(SITE_CARD),
+          "renamed singleton classes must appear in the bundle",
+        );
 
-      const cssFile = findFile(files, /assets\/.*\.css$/);
-      assert.ok(
-        cssFile.text.includes(`.${CONSOLIDATED_NAME}{`),
-        "shared consolidated rule must exist",
-      );
-      // The three member rules merged away; the shared rule carries their
-      // declarations at the earliest member position.
-      assert.ok(
-        cssFile.text.includes(
-          `.${CONSOLIDATED_NAME}{display:flex;align-items:center;padding:1rem}`,
-        ),
-      );
-      assert.ok(!cssFile.text.includes(".flex{"));
-      assert.ok(!cssFile.text.includes(".items-center{"));
-      assert.ok(!cssFile.text.includes(".p-4{"));
-      assert.ok(cssFile.text.includes(`.${FLEX_COL}{flex-direction:column}`));
-      assert.ok(cssFile.text.includes(`.${SITE_CARD}{border:1px solid}`));
-      // css-only-class is not in source: excluded, byte-identical (R5).
-      assert.ok(cssFile.text.includes(".css-only-class{color:red}"));
+        const cssFile = findFile(files, /assets\/.*\.css$/);
+        assert.ok(
+          cssFile.text.includes(`.${CONSOLIDATED_NAME}{`),
+          "shared consolidated rule must exist",
+        );
+        // The three member rules merged away; the shared rule carries their
+        // declarations at the earliest member position.
+        assert.ok(
+          cssFile.text.includes(
+            `.${CONSOLIDATED_NAME}{display:flex;align-items:center;padding:1rem}`,
+          ),
+        );
+        assert.ok(!cssFile.text.includes(".flex{"));
+        assert.ok(!cssFile.text.includes(".items-center{"));
+        assert.ok(!cssFile.text.includes(".p-4{"));
+        assert.ok(cssFile.text.includes(`.${FLEX_COL}{flex-direction:column}`));
+        assert.ok(cssFile.text.includes(`.${SITE_CARD}{border:1px solid}`));
+        // css-only-class is not in source: excluded, byte-identical (R5).
+        assert.ok(cssFile.text.includes(".css-only-class{color:red}"));
 
-      const report = JSON.parse(
-        await readFile(path.join(ARTIFACT_DIR, "report.json"), "utf8"),
-      );
-      assert.deepStrictEqual(report.flags, {
-        enabled: true,
-        consolidate: true,
-        mode: "compress",
+        const report = JSON.parse(
+          await readFile(path.join(ARTIFACT_DIR, "report.json"), "utf8"),
+        );
+        assert.deepStrictEqual(report.flags, {
+          enabled: true,
+          consolidate: true,
+          mode: "compress",
+        });
+        assert.deepStrictEqual(
+          report.renames.map(function (entry: { token: string }) {
+            return entry.token;
+          }),
+          ["fade-in", "flex", "flex-col", "items-center", "p-4", "site-card"],
+        );
+        for (const entry of report.renames) {
+          assert.strictEqual(entry.name, hashClassName(entry.token));
+        }
+        assert.deepStrictEqual(report.exclusions, [
+          { token: "css-only-class", reason: "css-only" },
+        ]);
+        assert.deepStrictEqual(report.warnings, []);
+        // a.tsx, b.tsx, and render.tsx each use the list once.
+        assert.deepStrictEqual(report.consolidation.verdicts, [
+          {
+            tokens: ["flex", "items-center", "p-4"],
+            frequency: 3,
+            safe: true,
+            name: CONSOLIDATED_NAME,
+          },
+        ]);
+        assert.deepStrictEqual(report.summary, {
+          renamed: 6,
+          excluded: 1,
+          consolidatedRules: 1,
+          warnings: 0,
+        });
+
+        const map = JSON.parse(
+          await readFile(path.join(ARTIFACT_DIR, "map.json"), "utf8"),
+        );
+        assert.deepStrictEqual(map.names, {
+          [FADE_IN]: "fade-in",
+          [FLEX]: "flex",
+          [FLEX_COL]: "flex-col",
+          [ITEMS_CENTER]: "items-center",
+          [P_4]: "p-4",
+          [SITE_CARD]: "site-card",
+        });
+        assert.deepStrictEqual(map.consolidated, {
+          [CONSOLIDATED_NAME]: ["flex", "items-center", "p-4"],
+        });
+
+        await cleanOutputs();
       });
-      assert.deepStrictEqual(
-        report.renames.map(function (entry: { token: string }) {
-          return entry.token;
-        }),
-        ["fade-in", "flex", "flex-col", "items-center", "p-4", "site-card"],
-      );
-      for (const entry of report.renames) {
-        assert.strictEqual(entry.name, hashClassName(entry.token));
-      }
-      assert.deepStrictEqual(report.exclusions, [
-        { token: "css-only-class", reason: "css-only" },
-      ]);
-      assert.deepStrictEqual(report.warnings, []);
-      // a.tsx, b.tsx, and render.tsx each use the list once.
-      assert.deepStrictEqual(report.consolidation.verdicts, [
-        {
-          tokens: ["flex", "items-center", "p-4"],
-          frequency: 3,
-          safe: true,
-          name: CONSOLIDATED_NAME,
-        },
-      ]);
-      assert.deepStrictEqual(report.summary, {
-        renamed: 6,
-        excluded: 1,
-        consolidatedRules: 1,
-        warnings: 0,
-      });
+    });
 
-      const map = JSON.parse(
-        await readFile(path.join(ARTIFACT_DIR, "map.json"), "utf8"),
-      );
-      assert.deepStrictEqual(map.names, {
-        [FADE_IN]: "fade-in",
-        [FLEX]: "flex",
-        [FLEX_COL]: "flex-col",
-        [ITEMS_CENTER]: "items-center",
-        [P_4]: "p-4",
-        [SITE_CARD]: "site-card",
+    it("produces byte-identical output to a plugin-free build when MINWIND=off (AE5)", async function () {
+      await withFlags({ MINWIND: "off" }, async function () {
+        await cleanOutputs();
+        const bare = await buildFixture(vite, "dist-bare", []);
+        const disabled = await buildFixture(vite, "dist-off", [
+          ...minwind({ root: FIXTURE, cssEntry: CSS_ENTRY }),
+        ]);
+        assertSameOutputs(bare, disabled);
+        const artifactExists = await stat(ARTIFACT_DIR).then(
+          function () {
+            return true;
+          },
+          function () {
+            return false;
+          },
+        );
+        assert.ok(!artifactExists, "a disabled transform writes no artifacts");
+        await cleanOutputs();
       });
-      assert.deepStrictEqual(map.consolidated, {
-        [CONSOLIDATED_NAME]: ["flex", "items-center", "p-4"],
-      });
+    });
 
-      await cleanOutputs();
+    it("produces byte-identical output to a plugin-free build when MINWIND_RENAME=off", async function () {
+      await withFlags({ MINWIND_RENAME: "off" }, async function () {
+        await cleanOutputs();
+        const bare = await buildFixture(vite, "dist-bare", []);
+        const disabled = await buildFixture(vite, "dist-off", [
+          ...minwind({ root: FIXTURE, cssEntry: CSS_ENTRY }),
+        ]);
+        assertSameOutputs(bare, disabled);
+        await cleanOutputs();
+      });
+    });
+
+    it("renames without consolidating when MINWIND_CONSOLIDATE=off", async function () {
+      await withFlags({ MINWIND_CONSOLIDATE: "off" }, async function () {
+        await cleanOutputs();
+        const files = await buildFixture(vite, "dist-noconsol", [
+          ...minwind({ root: FIXTURE, cssEntry: CSS_ENTRY }),
+        ]);
+
+        const js = findFile(files, /assets\/.*\.js$/);
+        assert.ok(
+          js.text.includes(`${FLEX} ${ITEMS_CENTER} ${P_4}`),
+          "the repeated list keeps per-token renames",
+        );
+        assert.ok(!js.text.includes(CONSOLIDATED_NAME));
+
+        const cssFile = findFile(files, /assets\/.*\.css$/);
+        assert.ok(cssFile.text.includes(`.${FLEX}{display:flex}`));
+        assert.ok(
+          cssFile.text.includes(`.${ITEMS_CENTER}{align-items:center}`),
+        );
+        assert.ok(cssFile.text.includes(`.${P_4}{padding:1rem}`));
+        assert.ok(!cssFile.text.includes(CONSOLIDATED_NAME));
+
+        const report = JSON.parse(
+          await readFile(path.join(ARTIFACT_DIR, "report.json"), "utf8"),
+        );
+        assert.deepStrictEqual(report.flags, {
+          enabled: true,
+          consolidate: false,
+          mode: "morph",
+        });
+        assert.deepStrictEqual(report.consolidation.verdicts, []);
+        assert.strictEqual(report.summary.consolidatedRules, 0);
+
+        await cleanOutputs();
+      });
+    });
+
+    it("renames without consolidating when mode is morph", async function () {
+      await withFlags({}, async function () {
+        await cleanOutputs();
+        const files = await buildFixture(vite, "dist-morph", [
+          ...minwind({ root: FIXTURE, cssEntry: CSS_ENTRY, mode: "morph" }),
+        ]);
+
+        const js = findFile(files, /assets\/.*\.js$/);
+        assert.ok(
+          js.text.includes(`${FLEX} ${ITEMS_CENTER} ${P_4}`),
+          "the repeated list keeps per-token renames",
+        );
+        assert.ok(!js.text.includes(CONSOLIDATED_NAME));
+
+        const report = JSON.parse(
+          await readFile(path.join(ARTIFACT_DIR, "report.json"), "utf8"),
+        );
+        assert.deepStrictEqual(report.flags, {
+          enabled: true,
+          consolidate: false,
+          mode: "morph",
+        });
+        assert.deepStrictEqual(report.consolidation.verdicts, []);
+
+        await cleanOutputs();
+      });
     });
   });
-
-  it("produces byte-identical output to a plugin-free build when MINWIND=off (AE5)", async function () {
-    await withFlags({ MINWIND: "off" }, async function () {
-      await cleanOutputs();
-      const bare = await buildFixture("dist-bare", []);
-      const disabled = await buildFixture("dist-off", [
-        ...minwind({ root: FIXTURE, cssEntry: CSS_ENTRY }),
-      ]);
-      assertSameOutputs(bare, disabled);
-      const artifactExists = await stat(ARTIFACT_DIR).then(
-        function () {
-          return true;
-        },
-        function () {
-          return false;
-        },
-      );
-      assert.ok(!artifactExists, "a disabled transform writes no artifacts");
-      await cleanOutputs();
-    });
-  });
-
-  it("produces byte-identical output to a plugin-free build when MINWIND_RENAME=off", async function () {
-    await withFlags({ MINWIND_RENAME: "off" }, async function () {
-      await cleanOutputs();
-      const bare = await buildFixture("dist-bare", []);
-      const disabled = await buildFixture("dist-off", [
-        ...minwind({ root: FIXTURE, cssEntry: CSS_ENTRY }),
-      ]);
-      assertSameOutputs(bare, disabled);
-      await cleanOutputs();
-    });
-  });
-
-  it("renames without consolidating when MINWIND_CONSOLIDATE=off", async function () {
-    await withFlags({ MINWIND_CONSOLIDATE: "off" }, async function () {
-      await cleanOutputs();
-      const files = await buildFixture("dist-noconsol", [
-        ...minwind({ root: FIXTURE, cssEntry: CSS_ENTRY }),
-      ]);
-
-      const js = findFile(files, /assets\/.*\.js$/);
-      assert.ok(
-        js.text.includes(`${FLEX} ${ITEMS_CENTER} ${P_4}`),
-        "the repeated list keeps per-token renames",
-      );
-      assert.ok(!js.text.includes(CONSOLIDATED_NAME));
-
-      const cssFile = findFile(files, /assets\/.*\.css$/);
-      assert.ok(cssFile.text.includes(`.${FLEX}{display:flex}`));
-      assert.ok(cssFile.text.includes(`.${ITEMS_CENTER}{align-items:center}`));
-      assert.ok(cssFile.text.includes(`.${P_4}{padding:1rem}`));
-      assert.ok(!cssFile.text.includes(CONSOLIDATED_NAME));
-
-      const report = JSON.parse(
-        await readFile(path.join(ARTIFACT_DIR, "report.json"), "utf8"),
-      );
-      assert.deepStrictEqual(report.flags, {
-        enabled: true,
-        consolidate: false,
-        mode: "morph",
-      });
-      assert.deepStrictEqual(report.consolidation.verdicts, []);
-      assert.strictEqual(report.summary.consolidatedRules, 0);
-
-      await cleanOutputs();
-    });
-  });
-
-  it("renames without consolidating when mode is morph", async function () {
-    await withFlags({}, async function () {
-      await cleanOutputs();
-      const files = await buildFixture("dist-morph", [
-        ...minwind({ root: FIXTURE, cssEntry: CSS_ENTRY, mode: "morph" }),
-      ]);
-
-      const js = findFile(files, /assets\/.*\.js$/);
-      assert.ok(
-        js.text.includes(`${FLEX} ${ITEMS_CENTER} ${P_4}`),
-        "the repeated list keeps per-token renames",
-      );
-      assert.ok(!js.text.includes(CONSOLIDATED_NAME));
-
-      const report = JSON.parse(
-        await readFile(path.join(ARTIFACT_DIR, "report.json"), "utf8"),
-      );
-      assert.deepStrictEqual(report.flags, {
-        enabled: true,
-        consolidate: false,
-        mode: "morph",
-      });
-      assert.deepStrictEqual(report.consolidation.verdicts, []);
-
-      await cleanOutputs();
-    });
-  });
-});
+}
 
 describe("minwind owned custom properties", function () {
   it("wires one property registry through source, CSS, report, and map", async function () {
@@ -1234,10 +1266,11 @@ describe("minwind CSS Modules naming hooks", function () {
   const COMPOSED_CSS = path.join(MODULES_FIXTURE, "src", "composed.module.css");
 
   async function buildModules(
+    vite: ViteVersion,
     outDirName: string,
   ): Promise<Map<string, Buffer>> {
     const outDir = path.join(MODULES_FIXTURE, outDirName);
-    await build({
+    await vite.build({
       root: MODULES_FIXTURE,
       logLevel: "silent",
       plugins: minwind({
@@ -1254,33 +1287,39 @@ describe("minwind CSS Modules naming hooks", function () {
     return readOutputTree(outDir);
   }
 
-  it("keeps export keys and syncs JS values with CSS selectors (AE1)", async function () {
-    await rm(path.join(MODULES_FIXTURE, ".output"), {
-      recursive: true,
-      force: true,
+  for (const vite of VITE_VERSIONS) {
+    it(`keeps export keys and syncs JS values with CSS selectors (AE1) [${vite.label}]`, async function () {
+      await rm(path.join(MODULES_FIXTURE, ".output"), {
+        recursive: true,
+        force: true,
+      });
+      const files = await buildModules(vite, "dist-modules");
+      const rootName = hashModuleLocal(MODULES_FIXTURE, BUTTON_CSS, "root");
+      const buttonName = hashModuleLocal(
+        MODULES_FIXTURE,
+        COMPOSED_CSS,
+        "button",
+      );
+      const baseName = hashModuleLocal(MODULES_FIXTURE, OTHER_CSS, "base");
+      const js = findFile(files, /assets\/.*\.js$/);
+      const css = findFile(files, /assets\/.*\.css$/);
+      assert.ok(js.text.includes(rootName));
+      assert.ok(css.text.includes(`.${rootName}`));
+      assert.ok(js.text.includes(buttonName));
+      assert.ok(js.text.includes(baseName));
+      assert.ok(css.text.includes(`.${buttonName}`));
+      assert.ok(css.text.includes(`.${baseName}`));
+      assert.ok(!js.text.includes('root:"Button_root'));
+      await rm(path.join(MODULES_FIXTURE, "dist-modules"), {
+        recursive: true,
+        force: true,
+      });
+      await rm(path.join(MODULES_FIXTURE, ".output"), {
+        recursive: true,
+        force: true,
+      });
     });
-    const files = await buildModules("dist-modules");
-    const rootName = hashModuleLocal(MODULES_FIXTURE, BUTTON_CSS, "root");
-    const buttonName = hashModuleLocal(MODULES_FIXTURE, COMPOSED_CSS, "button");
-    const baseName = hashModuleLocal(MODULES_FIXTURE, OTHER_CSS, "base");
-    const js = findFile(files, /assets\/.*\.js$/);
-    const css = findFile(files, /assets\/.*\.css$/);
-    assert.ok(js.text.includes(rootName));
-    assert.ok(css.text.includes(`.${rootName}`));
-    assert.ok(js.text.includes(buttonName));
-    assert.ok(js.text.includes(baseName));
-    assert.ok(css.text.includes(`.${buttonName}`));
-    assert.ok(css.text.includes(`.${baseName}`));
-    assert.ok(!js.text.includes('root:"Button_root'));
-    await rm(path.join(MODULES_FIXTURE, "dist-modules"), {
-      recursive: true,
-      force: true,
-    });
-    await rm(path.join(MODULES_FIXTURE, ".output"), {
-      recursive: true,
-      force: true,
-    });
-  });
+  }
 
   it("is build-only so dev does not install the morphing generator", function () {
     const plugins = minwind({
@@ -1322,82 +1361,86 @@ describe("minwind CSS Modules naming hooks", function () {
     );
   });
 
-  it("syncs words naming between JS exports and CSS selectors", async function () {
-    if (process.env.MINWIND_SKIP_BUILD === "1") return;
-    await rm(path.join(MODULES_FIXTURE, ".output"), {
-      recursive: true,
-      force: true,
-    });
-    const vocabulary = ["quill", "willow", "ember", "lark"];
-    const naming = { strategy: "words" as const, vocabulary };
-    const prepared = prepareModulesNaming(MODULES_FIXTURE, naming);
-    const rootName = prepared.registry.nameFor(
-      moduleLocalKey(MODULES_FIXTURE, BUTTON_CSS, "root"),
-    );
-    assert.ok(rootName !== undefined);
-    const outDir = path.join(MODULES_FIXTURE, "dist-modules-words");
-    await build({
-      root: MODULES_FIXTURE,
-      logLevel: "silent",
-      plugins: minwind({
+  for (const vite of VITE_VERSIONS) {
+    it(`syncs words naming between JS exports and CSS selectors [${vite.label}]`, async function () {
+      if (process.env.MINWIND_SKIP_BUILD === "1") return;
+      await rm(path.join(MODULES_FIXTURE, ".output"), {
+        recursive: true,
+        force: true,
+      });
+      const vocabulary = ["quill", "willow", "ember", "lark"];
+      const naming = { strategy: "words" as const, vocabulary };
+      const prepared = prepareModulesNaming(MODULES_FIXTURE, naming);
+      const rootName = prepared.registry.nameFor(
+        moduleLocalKey(MODULES_FIXTURE, BUTTON_CSS, "root"),
+      );
+      assert.ok(rootName !== undefined);
+      const outDir = path.join(MODULES_FIXTURE, "dist-modules-words");
+      await vite.build({
         root: MODULES_FIXTURE,
-        engines: ["css-modules"],
-        mode: "morph",
-        naming,
-      }),
-      build: {
-        outDir,
-        emptyOutDir: true,
-        rollupOptions: { input: path.join(MODULES_FIXTURE, "index.html") },
-      },
+        logLevel: "silent",
+        plugins: minwind({
+          root: MODULES_FIXTURE,
+          engines: ["css-modules"],
+          mode: "morph",
+          naming,
+        }),
+        build: {
+          outDir,
+          emptyOutDir: true,
+          rollupOptions: { input: path.join(MODULES_FIXTURE, "index.html") },
+        },
+      });
+      const files = await readOutputTree(outDir);
+      const js = findFile(files, /assets\/.*\.js$/);
+      const css = findFile(files, /assets\/.*\.css$/);
+      assert.ok(js.text.includes(rootName));
+      assert.ok(css.text.includes(`.${rootName}`));
+      assert.ok(vocabulary.includes(rootName));
+      await rm(outDir, { recursive: true, force: true });
+      await rm(path.join(MODULES_FIXTURE, ".output"), {
+        recursive: true,
+        force: true,
+      });
     });
-    const files = await readOutputTree(outDir);
-    const js = findFile(files, /assets\/.*\.js$/);
-    const css = findFile(files, /assets\/.*\.css$/);
-    assert.ok(js.text.includes(rootName));
-    assert.ok(css.text.includes(`.${rootName}`));
-    assert.ok(vocabulary.includes(rootName));
-    await rm(outDir, { recursive: true, force: true });
-    await rm(path.join(MODULES_FIXTURE, ".output"), {
-      recursive: true,
-      force: true,
-    });
-  });
+  }
 });
 
 describe("minwind dual Tailwind and CSS Modules (AE3)", function () {
   const DUAL = path.join(HERE, "fixtures", "dual-site");
   const CARD = path.join(DUAL, "src", "Card.module.css");
 
-  it("builds with a Modules local named flex without a utilities-layer failure", async function () {
-    if (process.env.MINWIND_SKIP_BUILD === "1") return;
-    await rm(path.join(DUAL, ".output"), { recursive: true, force: true });
-    const outDir = path.join(DUAL, "dist-dual");
-    await build({
-      root: DUAL,
-      logLevel: "silent",
-      plugins: minwind({
+  for (const vite of VITE_VERSIONS) {
+    it(`builds with a Modules local named flex without a utilities-layer failure [${vite.label}]`, async function () {
+      if (process.env.MINWIND_SKIP_BUILD === "1") return;
+      await rm(path.join(DUAL, ".output"), { recursive: true, force: true });
+      const outDir = path.join(DUAL, "dist-dual");
+      await vite.build({
         root: DUAL,
-        engines: ["tailwind", "css-modules"],
-        mode: "morph",
-        cssEntry: path.join(DUAL, "src", "app.css"),
-      }),
-      build: {
-        outDir,
-        emptyOutDir: true,
-        rollupOptions: { input: path.join(DUAL, "index.html") },
-      },
+        logLevel: "silent",
+        plugins: minwind({
+          root: DUAL,
+          engines: ["tailwind", "css-modules"],
+          mode: "morph",
+          cssEntry: path.join(DUAL, "src", "app.css"),
+        }),
+        build: {
+          outDir,
+          emptyOutDir: true,
+          rollupOptions: { input: path.join(DUAL, "index.html") },
+        },
+      });
+      const files = await readOutputTree(outDir);
+      const js = findFile(files, /assets\/.*\.js$/);
+      const css = findFile(files, /assets\/.*\.css$/);
+      const twFlex = hashClassName("flex");
+      const modFlex = hashModuleLocal(DUAL, CARD, "flex");
+      assert.notStrictEqual(twFlex, modFlex);
+      assert.ok(js.text.includes(twFlex) || css.text.includes(`.${twFlex}`));
+      assert.ok(js.text.includes(modFlex));
+      assert.ok(css.text.includes(`.${modFlex}`));
+      await rm(outDir, { recursive: true, force: true });
+      await rm(path.join(DUAL, ".output"), { recursive: true, force: true });
     });
-    const files = await readOutputTree(outDir);
-    const js = findFile(files, /assets\/.*\.js$/);
-    const css = findFile(files, /assets\/.*\.css$/);
-    const twFlex = hashClassName("flex");
-    const modFlex = hashModuleLocal(DUAL, CARD, "flex");
-    assert.notStrictEqual(twFlex, modFlex);
-    assert.ok(js.text.includes(twFlex) || css.text.includes(`.${twFlex}`));
-    assert.ok(js.text.includes(modFlex));
-    assert.ok(css.text.includes(`.${modFlex}`));
-    await rm(outDir, { recursive: true, force: true });
-    await rm(path.join(DUAL, ".output"), { recursive: true, force: true });
-  });
+  }
 });

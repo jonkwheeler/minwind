@@ -1,0 +1,32 @@
+---
+import "../styles/global.css";
+import HeadMeta from "../components/HeadMeta.astro";
+
+interface Props {
+  title: string;
+  description?: string;
+}
+
+const { title, description } = Astro.props;
+---
+
+<!doctype html>
+<html lang="en" class="scroll-smooth antialiased">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <HeadMeta title={title} />
+    {description && <meta name="description" content={description} />}
+  </head>
+  <body class="min-h-screen bg-stone-50 text-stone-900">
+    <header class="border-b border-stone-200 bg-white">
+      <nav class="mx-auto flex max-w-2xl gap-6 px-6 py-4 text-sm font-semibold">
+        <a href="/" class="text-stone-700 underline-offset-4 hover:underline">Inbox</a>
+        <a href="/about/" class="text-stone-700 underline-offset-4 hover:underline">About</a>
+      </nav>
+    </header>
+    <main class="mx-auto max-w-2xl px-6 py-12">
+      <slot />
+    </main>
+  </body>
+</html>
