@@ -24,6 +24,7 @@ import {
   computeProminenceFromDir,
   DEFAULT_WINDOW,
   type ProminenceManifest,
+  walkHtmlFiles,
 } from "./prominence.js";
 import { buildRenameMap, buildReport, writeArtifacts } from "./report.js";
 import { compareCodeUnits } from "./util.js";
@@ -69,7 +70,6 @@ export type RunApplyResult =
       renamed: number;
       // Tokens that drew vocabulary by visibility rank.
       prominent: number;
-      // Warnings for the caller to print.
       notices: Array<string>;
     };
 
@@ -78,16 +78,6 @@ export type RunApplyResult =
 // usually a CSS value), so a renamed class referenced in one would stop
 // matching without a warning. This is the span the mask blanks.
 const STYLE_CONTENT = /<style\b[^>]*>([\s\S]*?)<\/style\s*>/gi;
-
-function htmlFilesIn(directory: string): Array<string> {
-  const files: Array<string> = [];
-  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
-    const full = path.join(directory, entry.name);
-    if (entry.isDirectory()) files.push(...htmlFilesIn(full));
-    else if (entry.isFile() && entry.name.endsWith(".html")) files.push(full);
-  }
-  return files;
-}
 
 // Decoded class names in a stylesheet's selectors. css-tree 3.2.1 leaves a
 // nested rule whose selector does not start with `&` as a Raw node (see
@@ -117,7 +107,7 @@ function assertInlineStylesUnrenamed(
   registry: NameRegistry,
 ): void {
   const matches: Array<string> = [];
-  for (const file of htmlFilesIn(dir).sort(compareCodeUnits)) {
+  for (const file of walkHtmlFiles(dir).sort(compareCodeUnits)) {
     const classes = new Set<string>();
     for (const match of fs.readFileSync(file, "utf8").matchAll(STYLE_CONTENT)) {
       collectSelectorClasses(match[1], classes);
@@ -211,7 +201,6 @@ export async function runApply(
     dryRun,
     modules,
   });
-  // The registry view after the skip-and-warn drops: what was renamed.
   const effective = filterRegistry(
     prepass.registry,
     new Set(result.keptOriginal),

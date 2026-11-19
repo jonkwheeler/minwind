@@ -23,7 +23,6 @@ import { compareCodeUnits } from "./util.js";
 type TreeNode = DefaultTreeAdapterMap["node"];
 type TreeElement = DefaultTreeAdapterMap["element"];
 
-// Class-bearing elements ranked per page unless a caller picks a window.
 export const DEFAULT_WINDOW = 32;
 
 export interface ProminencePage {
@@ -105,7 +104,7 @@ export function computeProminence(
   return { window, pages: sorted.length, tokens };
 }
 
-function walkHtmlFiles(directory: string): Array<string> {
+export function walkHtmlFiles(directory: string): Array<string> {
   const files: Array<string> = [];
   for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
     const full = path.join(directory, entry.name);
@@ -118,8 +117,7 @@ function walkHtmlFiles(directory: string): Array<string> {
   return files;
 }
 
-// Ranks every .html file under a build output directory. Shared by
-// `minwind prominence` and `minwind apply --prominence auto`.
+// Ranks every .html file under a build output directory.
 export function computeProminenceFromDir(
   directory: string,
   window: number,

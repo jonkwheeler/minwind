@@ -71,10 +71,7 @@ function findScriptRegions(
   const regions: Array<ContentRegion> = [];
   if (format === "astro") {
     const content = FRONTMATTER.exec(text)?.[1];
-    // An empty block (---\n--- or ---\n\n---) has no script to walk.
     if (content !== undefined && content !== "") {
-      // The match starts at offset 0, so the content starts on the line
-      // after the opening fence.
       const contentStart = text.indexOf("\n") + 1;
       regions.push({
         contentStart,

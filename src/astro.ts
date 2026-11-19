@@ -47,7 +47,6 @@ export interface AstroLoggerLike {
   warn(message: string): void;
 }
 
-// The resolved config as astro:config:done passes it.
 export interface AstroConfigLike {
   root: URL;
   adapter?: { name: string };
@@ -222,9 +221,6 @@ export default function minwind(
         }
         const ranked =
           isThemedNaming(options.naming) && options.prominence !== false;
-        // runApply resolves the MINWIND flags itself and, when they are
-        // off, returns before ranking, renaming, or writing artifacts. Its
-        // errors propagate, failing `astro build`.
         const outcome = await runApply({
           dir: fileURLToPath(params.dir),
           root,
