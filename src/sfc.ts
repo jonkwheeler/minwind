@@ -60,9 +60,11 @@ const SCRIPT_TAG = /<script\b([^>]*)>([\s\S]*?)<\/script\s*>/gi;
 const STYLE_TAG = /<style\b[^>]*>[\s\S]*?<\/style\s*>/gi;
 const LANG_ATTRIBUTE = /\blang\s*=\s*["']([^"']+)["']/i;
 
-// Astro frontmatter is only valid as the very first bytes of the file. The
-// content group is absent for an empty block (---\n---).
-const FRONTMATTER = /^---[ \t]*\r?\n(?:([\s\S]*?)\r?\n)?---/;
+// Astro frontmatter is only valid as the very first bytes of the file, and
+// Astro ends it at the first `---` after the opening fence. The content group
+// is absent for an empty block (---\n---); it is lazy so that block ends at
+// its own fence rather than at a later template line starting with `---`.
+const FRONTMATTER = /^---[ \t]*\r?\n(?:([\s\S]*?)\r?\n)??---/;
 
 function findScriptRegions(
   format: SfcFormat,
@@ -427,6 +429,26 @@ function emitClassAttribute(
   }
 }
 
+// Astro class:list={expr}: the expression between the outermost braces gets
+// cn() semantics. A value without braces is not an expression.
+function emitClassListAttribute(
+  filePath: string,
+  text: string,
+  span: SourceSpan,
+  visitor: ClassContextVisitor,
+): void {
+  const value = text.slice(span.start, span.end);
+  const open = value.indexOf("{");
+  const close = value.lastIndexOf("}");
+  if (open === -1 || close <= open) return;
+  walkBindingExpression(
+    filePath,
+    value.slice(open + 1, close),
+    span.start + open + 1,
+    visitor,
+  );
+}
+
 type TreeNode = DefaultTreeAdapterMap["node"];
 type TreeElement = DefaultTreeAdapterMap["element"];
 type TreeTemplate = DefaultTreeAdapterMap["template"];
@@ -465,7 +487,8 @@ function attributeValueSpan(
 // (a component tag, a {cond && ...} expression, <ClientRouter />), and
 // implies <html> when content precedes it. The real start tag that arrives
 // later only adds its attributes to the implied element, without source
-// locations, so the class value span is recovered from that literal tag.
+// locations, so the class or class:list value span is recovered from that
+// literal tag.
 const HTML_OR_BODY_START_TAG = /<(html|body)(?=[\t\n\f\r />])/gi;
 
 // HTML elements whose content the tokenizer reads as text.
@@ -522,10 +545,14 @@ function nonTagSpans(
   return spans;
 }
 
-// The value span of a start tag's first class attribute (the HTML tokenizer
+// The value span of a start tag's first `name` attribute (the HTML tokenizer
 // drops later duplicates), scanning attributes from just after the tag name;
-// null when the tag has none.
-function startTagClassSpan(source: string, from: number): SourceSpan | null {
+// null when the tag has none. `name` is lowercase, as parse5 reports it.
+function startTagAttributeSpan(
+  source: string,
+  from: number,
+  name: string,
+): SourceSpan | null {
   function isNameEnd(ch: string): boolean {
     return isAsciiWhitespace(ch) || ch === "/" || ch === ">" || ch === "=";
   }
@@ -542,7 +569,7 @@ function startTagClassSpan(source: string, from: number): SourceSpan | null {
     // A leading "=" is part of the attribute name.
     i += 1;
     while (i < source.length && !isNameEnd(source[i])) i += 1;
-    const name = source.slice(nameStart, i).toLowerCase();
+    const attributeName = source.slice(nameStart, i).toLowerCase();
     while (i < source.length && isAsciiWhitespace(source[i])) i += 1;
     let value: SourceSpan = { start: i, end: i };
     if (source[i] === "=") {
@@ -567,16 +594,17 @@ function startTagClassSpan(source: string, from: number): SourceSpan | null {
         value = { start: valueStart, end: i };
       }
     }
-    if (name === "class") return value;
+    if (attributeName === name) return value;
   }
   return null;
 }
 
-// The first literal <html> or <body> start tag that carries a class
-// attribute is the one whose class parse5 adopted.
-function adoptedClassSpan(
+// The first literal <html> or <body> start tag that carries the attribute is
+// the one whose value parse5 adopted.
+function adoptedAttributeSpan(
   templateText: string,
   tagName: string,
+  attributeName: string,
   nonTags: ReadonlyArray<SourceSpan>,
 ): SourceSpan | null {
   HTML_OR_BODY_START_TAG.lastIndex = 0;
@@ -588,7 +616,11 @@ function adoptedClassSpan(
       return span.start <= at && at < span.end;
     });
     if (notATag) continue;
-    const span = startTagClassSpan(templateText, at + match[0].length);
+    const span = startTagAttributeSpan(
+      templateText,
+      at + match[0].length,
+      attributeName,
+    );
     if (span !== null) return span;
   }
   return null;
@@ -669,14 +701,19 @@ export function walkSfcClassContexts(
     for (const attr of element.attrs) {
       const location = locations?.[attr.name];
       if (location === undefined) {
-        if (
-          attr.name === "class" &&
-          (element.tagName === "html" || element.tagName === "body")
-        ) {
-          if (nonTags === null) nonTags = nonTagSpans(document);
-          const span = adoptedClassSpan(templateText, element.tagName, nonTags);
-          if (span !== null) emitClassAttribute(format, text, span, visitor);
-        }
+        if (element.tagName !== "html" && element.tagName !== "body") continue;
+        const classList = format === "astro" && attr.name === "class:list";
+        if (attr.name !== "class" && !classList) continue;
+        if (nonTags === null) nonTags = nonTagSpans(document);
+        const span = adoptedAttributeSpan(
+          templateText,
+          element.tagName,
+          attr.name,
+          nonTags,
+        );
+        if (span === null) continue;
+        if (classList) emitClassListAttribute(filePath, text, span, visitor);
+        else emitClassAttribute(format, text, span, visitor);
         continue;
       }
       if (attr.name === "class") {
@@ -707,19 +744,10 @@ export function walkSfcClassContexts(
         continue;
       }
       if (format === "astro" && attr.name === "class:list") {
-        const span = attributeValueSpan(
-          text,
-          location.startOffset,
-          location.endOffset,
-        );
-        const value = text.slice(span.start, span.end);
-        const open = value.indexOf("{");
-        const close = value.lastIndexOf("}");
-        if (open === -1 || close <= open) continue;
-        walkBindingExpression(
+        emitClassListAttribute(
           filePath,
-          value.slice(open + 1, close),
-          span.start + open + 1,
+          text,
+          attributeValueSpan(text, location.startOffset, location.endOffset),
           visitor,
         );
         continue;

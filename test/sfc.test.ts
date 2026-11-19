@@ -338,6 +338,72 @@ ${head}
 `;
 }
 
+interface ClassEvent {
+  event: string;
+  kind: string;
+  source?: string;
+  text?: string;
+  quoted?: boolean;
+  fullyLiteral?: boolean;
+  staticList?: boolean;
+}
+
+// Every visitor callback in order. Literal spans are sliced from the file,
+// so two layouts that differ only outside the class compare equal exactly
+// when they classify the class the same way.
+function classEvents(code: string): Array<ClassEvent> {
+  const events: Array<ClassEvent> = [];
+  function literalEvent(
+    event: string,
+    literal: { text: string; start: number; end: number; quoted: boolean },
+    kind: string,
+  ): ClassEvent {
+    return {
+      event,
+      kind,
+      source: code.slice(literal.start, literal.end),
+      text: literal.text,
+      quoted: literal.quoted,
+    };
+  }
+  walkSfcClassContexts("/site/src/layouts/Layout.astro", code, {
+    enterRenameGroup: function (kind) {
+      events.push({ event: "enter", kind });
+    },
+    exitRenameGroup: function (kind, fullyLiteral, staticList) {
+      events.push({ event: "exit", kind, fullyLiteral, staticList });
+    },
+    renameLiteral: function (literal, kind) {
+      events.push(literalEvent("rename", literal, kind));
+    },
+    runtimeLiteral: function (literal, kind) {
+      events.push(literalEvent("runtime", literal, kind));
+    },
+    unprovableTemplate: function (_node, kind) {
+      events.push({ event: "unprovable", kind });
+    },
+  });
+  return events;
+}
+
+function classListLayout(head: string, classList: string): string {
+  return `---
+import HeadMeta from "../components/HeadMeta.astro";
+const dark = true;
+---
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    ${head}
+  </head>
+  <body class:list=${classList}>
+    <slot />
+  </body>
+</html>
+`;
+}
+
 const LAYOUT_TOKENS = ["scroll-smooth", "antialiased", "min-h-screen"];
 
 const LAYOUT_REGISTRY: NameRegistry = createNameRegistry({
@@ -504,6 +570,23 @@ ${layoutMarkup(`    <title>{title}</title>`)}`);
     assert.deepStrictEqual(result.renamed, ["scroll-smooth", "min-h-screen"]);
   });
 
+  it("ends empty frontmatter at its own fence, not a later --- line", function () {
+    // Astro closes frontmatter at the first ---, so everything up to the
+    // <pre> line is template too.
+    const result = classContexts(`---
+---
+<p class="flex flex-col">before</p>
+<pre>
+---
+</pre>
+<p class="mb-16">after</p>
+`);
+    assert.deepStrictEqual(result, {
+      renamed: ["flex flex-col", "mb-16"],
+      runtime: [],
+    });
+  });
+
   it("reports the body class when <head> holds a component tag", function () {
     const result = classContexts(`---
 import BaseHead from "../components/BaseHead.astro";
@@ -526,6 +609,34 @@ import { ClientRouter } from "astro:transitions";
 ---
 ${layoutMarkup(`    <ClientRouter />`)}`);
     assert.deepStrictEqual(result.renamed, ["scroll-smooth", "min-h-screen"]);
+  });
+
+  it("reports an adopted <body class:list> exactly like a located one", function () {
+    for (const classList of [
+      `{["rounded-lg flex gap-4", { "bg-black": dark }]}`,
+      `{[
+      "rounded-lg flex gap-4",
+      { "bg-black": dark },
+    ]}`,
+    ]) {
+      // A plain <head> keeps the body's source location; <HeadMeta /> makes
+      // parse5 imply <body> and adopt the literal tag's attributes.
+      const control = classEvents(
+        classListLayout(`<title>x</title>`, classList),
+      );
+      const adopted = classEvents(classListLayout(`<HeadMeta />`, classList));
+      assert.ok(
+        control.some(function (event) {
+          return event.source === "rounded-lg flex gap-4";
+        }),
+      );
+      assert.ok(
+        control.some(function (event) {
+          return event.source === "bg-black";
+        }),
+      );
+      assert.deepStrictEqual(adopted, control);
+    }
   });
 
   it("recovers the body class from the real tag, not a commented-out one", function () {
