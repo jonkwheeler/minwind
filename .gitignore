@@ -10,6 +10,8 @@ CLAUDE.md
 .cursor/
 test/fixtures/turbopack-modules-site/.next/
 test/fixtures/turbopack-modules-site/out/
+test/fixtures/astro-site/.astro/
+test/fixtures/astro-site/dist-*/
 .vinxi/
 *.log
 .DS_Store

@@ -1,0 +1,19 @@
+---
+import Badge from "../components/Badge.astro";
+import Base from "../layouts/Base.astro";
+---
+
+<Base title="About">
+  <h1 class="text-3xl font-bold tracking-tight">About</h1>
+  <p class="mt-4 max-w-prose text-base leading-relaxed text-stone-600">
+    A fixture site for the minwind Astro integration.
+  </p>
+  <ul class="mt-6 grid gap-3 sm:grid-cols-2">
+    <li class="rounded-lg border border-stone-200 bg-white p-4">
+      <Badge label="Static" tone="info" />
+    </li>
+    <li class="rounded-lg border border-stone-200 bg-white p-4">
+      <Badge label="No adapter" tone="warn" />
+    </li>
+  </ul>
+</Base>

@@ -1,0 +1,21 @@
+---
+interface Props {
+  label: string;
+  tone: "info" | "warn";
+}
+
+const { label, tone } = Astro.props;
+---
+
+<span
+  data-badge={tone}
+  class:list={[
+    "inline-flex items-center rounded-full px-3 py-1 text-xs font-medium",
+    {
+      "bg-sky-100 text-sky-800": tone === "info",
+      "bg-amber-100 text-amber-800": tone === "warn",
+    },
+  ]}
+>
+  {label}
+</span>
