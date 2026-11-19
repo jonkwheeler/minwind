@@ -66,8 +66,9 @@ Options:
   --dry-run           Report what would change without writing files
 
 Exit codes:
-  0  applied (or dry-run reported)
-  1  usage or input error
+  0  applied, dry-run reported, or disabled by MINWIND=off
+  1  usage or input error, or a failed check (such as an HTML <style>
+     block that references a renamed class)
 `;
 
 interface CliOptions {

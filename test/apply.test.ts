@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { applyBuildOutput } from "../src/apply.js";
 import { parseArgs, runApplyCli } from "../src/apply-cli.js";
 import { compileTailwindStylesheet } from "../src/engines/tailwind.js";
+import { MODULES_COMPRESS_WARNING } from "../src/flags.js";
 import { runProminenceCli } from "../src/prominence-cli.js";
 import type { RenameMap, TransformReport } from "../src/report.js";
 import { runApply } from "../src/run-apply.js";
@@ -1022,6 +1023,22 @@ describe("runApply (apply-site fixture)", function () {
       if (previous === undefined) delete process.env.MINWIND;
       else process.env.MINWIND = previous;
       cleanArtifacts();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("surfaces the modules-only compress-to-morph coercion", async function () {
+    const dir = await copyApplySiteOut();
+    try {
+      const outcome = await runApply({
+        dir,
+        root: APPLY_SITE,
+        engines: ["css-modules"],
+        dryRun: true,
+      });
+      assert.ok(outcome.enabled);
+      assert.ok(outcome.notices.includes(MODULES_COMPRESS_WARNING));
+    } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });

@@ -176,6 +176,8 @@ ranking.
   class.
 - `customProperties` is not supported here and fails the build. Use the Vite
   or webpack plugin for [owned custom properties](#owned-css-custom-properties).
+- Keep Astro's default `srcDir` (`src/`). minwind reads class names and lists
+  from `<root>/src`, so another `srcDir` fails the build.
 - `astro add minwind` is not supported: it would register the package root,
   which is the Vite plugin. Add the integration by hand as above.
 - Node.js 22.23.4 or newer. That floor is Astro's, not minwind's: Astro

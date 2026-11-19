@@ -15,8 +15,8 @@ build that used to ship broken styles; see Changed.
   words in one build. Options: `naming`, `mode`, `engines`, `exclusions`,
   `cssEntry`, and `prominence` (on by default; `false` turns ranking off).
   On `astro build` it sets `build.inlineStylesheets` to `"never"` and refuses
-  an adapter, server output, `security.csp`, `customProperties`, and a final
-  config that still inlines stylesheets. `astro dev`, `preview`, and `sync`
+  an adapter, server output, `security.csp`, `customProperties`, a `srcDir`
+  other than `src/`, and a final config that still inlines stylesheets. `astro dev`, `preview`, and `sync`
   are untouched. Tested on Astro 7.4.13, which needs Node.js 22.23.4 or
   newer. Set it up by hand in `astro.config.mjs`; `astro add` is not
   supported.
@@ -37,9 +37,14 @@ build that used to ship broken styles; see Changed.
   before can fail now.
 - `minwind apply` honors `MINWIND=off`: it prints that it is disabled and
   leaves the directory unchanged.
-- In `.astro` layouts, `<html>` and `<body>` classes are renamed after
-  frontmatter (including empty frontmatter) and when `<head>` holds
-  components or `{...}` expressions. They used to keep their original names.
+- In `.astro` layouts, `<html>` and `<body>` classes, `class:list` included,
+  are renamed after frontmatter (including empty frontmatter) and when
+  `<head>` holds components or `{...}` expressions. They used to keep their
+  original names.
+- The same recovery applies to plain `.html` (`minwind apply` and the Vite
+  plugin): when content in `<head>` makes the HTML parser imply `<body>`, the
+  literal `<body>` tag's classes are now renamed. They used to keep their
+  original names, so the output bytes of such pages change.
 - The README no longer lists Astro under the Vite plugin. Astro compiles
   `.astro` files before Vite plugins run; use `minwind/astro`.
 - The README no longer documents `MINWIND_REPORT=0`. No code read it.
@@ -51,6 +56,13 @@ build that used to ship broken styles; see Changed.
   line break. Multi-line `class:list` tokens are now renamed. A multi-line
   `class={cond ? ... : ...}` is now marked unprovable; before, it emitted
   nothing, so a class renamed elsewhere could lose its styling there.
+- In compress mode, `minwind apply` deleted a merged class list's member
+  rules even when the built output still used those classes outside that
+  list, for example a component that merges a `class` prop into its own
+  classes. Those elements shipped unstyled with no warning. Members the
+  output renames on their own now keep their rules.
+- `minwind apply` and `runApply` report the CSS Modules-only
+  compress-to-morph coercion, as the Vite and webpack plugins already do.
 
 ## 1.0.3
 

@@ -158,6 +158,7 @@ export async function runApply(
       });
   const prominent = prepass.naming?.prominent ?? 0;
   const notices: Array<string> = [];
+  if (flags.modeWarning !== undefined) notices.push(flags.modeWarning);
   if (
     manifest !== undefined &&
     prepass.naming !== undefined &&
@@ -220,6 +221,7 @@ export async function runApply(
       warnings: result.warnings,
       consolidate: flags.consolidate,
       mode: flags.mode,
+      modeWarning: flags.modeWarning,
     });
     const map = buildRenameMap(effective, prepass.consolidationVerdicts);
     await writeArtifacts(options.root, report, map);
