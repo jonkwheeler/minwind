@@ -3,8 +3,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
+import { fileURLToPath } from "node:url";
 import { applyBuildOutput } from "../src/apply.js";
 import { parseArgs, runApplyCli } from "../src/apply-cli.js";
+import { compileTailwindStylesheet } from "../src/engines/tailwind.js";
+import { runProminenceCli } from "../src/prominence-cli.js";
+import type { RenameMap, TransformReport } from "../src/report.js";
+import { runApply } from "../src/run-apply.js";
 import {
   collectModuleInventory,
   createModuleNameRegistry,
@@ -867,6 +872,285 @@ describe("applyBuildOutput Modules remap", function () {
       assert.ok(!card.includes("combo"));
     } finally {
       fs.rmSync(site, { recursive: true, force: true });
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// runApply on test/fixtures/apply-site: src/ is the source the pre-pass
+// scans, out/ the emitted pages. The stylesheet is compiled from
+// src/app.css at test time so it tracks the installed Tailwind. Artifacts
+// land in the fixture's .output/minwind (gitignored); each test clears it.
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const APPLY_SITE = path.join(HERE, "fixtures", "apply-site");
+// Curation order: the shortest word first, so the length-weighted deal
+// (shortest word to the most-listed token) and the prominence deal (first
+// word to the first class-bearing element) pick different tokens for it.
+const VOCABULARY = [
+  "fyi",
+  "circlingback",
+  "pinging",
+  "touchbase",
+  "perourlastemail",
+  "justbumpingthis",
+  "hopethisfindsyouwell",
+];
+
+let applySiteCss: string | undefined;
+
+async function copyApplySiteOut(): Promise<string> {
+  if (applySiteCss === undefined) {
+    const compiled = await compileTailwindStylesheet({
+      cssEntry: path.join(APPLY_SITE, "src", "app.css"),
+      root: APPLY_SITE,
+    });
+    applySiteCss = compiled.stylesheet;
+  }
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minwind-apply-site-"));
+  fs.cpSync(path.join(APPLY_SITE, "out"), dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, "assets", "app.css"), applySiteCss);
+  return dir;
+}
+
+function readTree(dir: string): Record<string, string> {
+  const files: Record<string, string> = {};
+  function walk(directory: string): void {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      const full = path.join(directory, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else files[path.relative(dir, full)] = fs.readFileSync(full, "utf8");
+    }
+  }
+  walk(dir);
+  return files;
+}
+
+function artifactsDir(): string {
+  return path.join(APPLY_SITE, ".output", "minwind");
+}
+
+function readArtifacts(): { report: TransformReport; map: RenameMap } {
+  return {
+    report: JSON.parse(
+      fs.readFileSync(path.join(artifactsDir(), "report.json"), "utf8"),
+    ) as TransformReport,
+    map: JSON.parse(
+      fs.readFileSync(path.join(artifactsDir(), "map.json"), "utf8"),
+    ) as RenameMap,
+  };
+}
+
+function cleanArtifacts(): void {
+  fs.rmSync(path.join(APPLY_SITE, ".output"), {
+    recursive: true,
+    force: true,
+  });
+}
+
+function writeVocabulary(): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minwind-vocab-"));
+  const file = path.join(dir, "words.json");
+  fs.writeFileSync(file, JSON.stringify(VOCABULARY));
+  return file;
+}
+
+describe("runApply (apply-site fixture)", function () {
+  it("rewrites files and artifacts exactly as runApplyCli does", async function () {
+    const viaCli = await copyApplySiteOut();
+    const direct = await copyApplySiteOut();
+    cleanArtifacts();
+    try {
+      assert.strictEqual(await runApplyCli([viaCli, "--root", APPLY_SITE]), 0);
+      const cliArtifacts = readArtifacts();
+      cleanArtifacts();
+      const outcome = await runApply({ dir: direct, root: APPLY_SITE });
+      assert.ok(outcome.enabled);
+      assert.strictEqual(outcome.renamed, 6);
+      assert.deepStrictEqual(readTree(direct), readTree(viaCli));
+      assert.deepStrictEqual(readArtifacts(), cliArtifacts);
+      const html = readTree(direct)["index.html"];
+      assert.ok(
+        html.includes(`<main class="${hashClassName("min-h-screen")}">`),
+      );
+      assert.ok(
+        html.includes(
+          `<ul class="${hashClassName("flex")} ${hashClassName("flex-col")}">`,
+        ),
+      );
+    } finally {
+      cleanArtifacts();
+      fs.rmSync(viaCli, { recursive: true, force: true });
+      fs.rmSync(direct, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps an excluded class's name and reports it excluded", async function () {
+    const dir = await copyApplySiteOut();
+    cleanArtifacts();
+    try {
+      await runApply({
+        dir,
+        root: APPLY_SITE,
+        exclusions: { names: ["sr-only"], prefixes: [] },
+      });
+      const tree = readTree(dir);
+      assert.ok(tree["index.html"].includes('<h1 class="sr-only">'));
+      assert.ok(tree["assets/app.css"].includes(".sr-only"));
+      const { report, map } = readArtifacts();
+      assert.deepStrictEqual(report.exclusions, [
+        { token: "sr-only", reason: "excluded-prefix" },
+      ]);
+      assert.ok(!Object.values(map.names).includes("sr-only"));
+    } finally {
+      cleanArtifacts();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rewrites nothing and writes no artifacts under MINWIND=off", async function () {
+    const dir = await copyApplySiteOut();
+    const before = readTree(dir);
+    const previous = process.env.MINWIND;
+    cleanArtifacts();
+    process.env.MINWIND = "off";
+    try {
+      const outcome = await runApply({ dir, root: APPLY_SITE });
+      assert.deepStrictEqual(readTree(dir), before);
+      assert.ok(!fs.existsSync(artifactsDir()));
+      assert.strictEqual(outcome.enabled, false);
+    } finally {
+      if (previous === undefined) delete process.env.MINWIND;
+      else process.env.MINWIND = previous;
+      cleanArtifacts();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("apply --prominence", function () {
+  it("auto deals the first word to the first class-bearing element", async function () {
+    const vocabulary = writeVocabulary();
+    const unranked = await copyApplySiteOut();
+    const ranked = await copyApplySiteOut();
+    cleanArtifacts();
+    try {
+      const words = ["--naming", "words", "--vocabulary", vocabulary];
+      // Without ranking, the shortest word goes to flex (four lists), not
+      // to min-h-screen (one list) on the first class-bearing element.
+      assert.strictEqual(
+        await runApplyCli([unranked, "--root", APPLY_SITE, ...words]),
+        0,
+      );
+      assert.strictEqual(readArtifacts().map.names["fyi"], "flex");
+      cleanArtifacts();
+      assert.strictEqual(
+        await runApplyCli([
+          ranked,
+          "--root",
+          APPLY_SITE,
+          ...words,
+          "--prominence",
+          "auto",
+        ]),
+        0,
+      );
+      assert.strictEqual(readArtifacts().map.names["fyi"], "min-h-screen");
+      assert.ok(readTree(ranked)["index.html"].includes('<main class="fyi">'));
+    } finally {
+      cleanArtifacts();
+      fs.rmSync(path.dirname(vocabulary), { recursive: true, force: true });
+      fs.rmSync(unranked, { recursive: true, force: true });
+      fs.rmSync(ranked, { recursive: true, force: true });
+    }
+  });
+
+  it("a manifest file from minwind prominence matches auto", async function () {
+    const vocabulary = writeVocabulary();
+    const auto = await copyApplySiteOut();
+    const fromFile = await copyApplySiteOut();
+    const manifestDir = fs.mkdtempSync(path.join(os.tmpdir(), "minwind-mf-"));
+    const manifest = path.join(manifestDir, "minwind.prominence.json");
+    cleanArtifacts();
+    try {
+      assert.strictEqual(runProminenceCli([fromFile, "--out", manifest]), 0);
+      const words = ["--naming", "words", "--vocabulary", vocabulary];
+      assert.strictEqual(
+        await runApplyCli([
+          auto,
+          "--root",
+          APPLY_SITE,
+          ...words,
+          "--prominence",
+          "auto",
+        ]),
+        0,
+      );
+      const autoArtifacts = readArtifacts();
+      cleanArtifacts();
+      assert.strictEqual(
+        await runApplyCli([
+          fromFile,
+          "--root",
+          APPLY_SITE,
+          ...words,
+          "--prominence",
+          manifest,
+        ]),
+        0,
+      );
+      assert.deepStrictEqual(readArtifacts(), autoArtifacts);
+      assert.deepStrictEqual(readTree(fromFile), readTree(auto));
+      assert.strictEqual(autoArtifacts.map.names["fyi"], "min-h-screen");
+    } finally {
+      cleanArtifacts();
+      fs.rmSync(path.dirname(vocabulary), { recursive: true, force: true });
+      fs.rmSync(manifestDir, { recursive: true, force: true });
+      fs.rmSync(auto, { recursive: true, force: true });
+      fs.rmSync(fromFile, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects --prominence with hash naming", function () {
+    const exit = process.exit;
+    const writes: Array<string> = [];
+    const write = process.stderr.write;
+    process.stderr.write = function (chunk: string | Uint8Array) {
+      writes.push(String(chunk));
+      return true;
+    } as typeof process.stderr.write;
+    process.exit = function (code?: number): never {
+      throw new Error(`exit ${code}`);
+    } as typeof process.exit;
+    try {
+      assert.throws(function () {
+        parseArgs(["/tmp/out", "--prominence", "auto", "--naming", "hash"]);
+      }, /exit 1/);
+      assert.ok(
+        writes
+          .join("")
+          .includes("--prominence requires --naming words or quotes"),
+      );
+    } finally {
+      process.exit = exit;
+      process.stderr.write = write;
+    }
+  });
+
+  it("warns, naming the window, when zero tokens rank", async function () {
+    const dir = await copyApplySiteOut();
+    try {
+      const outcome = await runApply({
+        dir,
+        root: APPLY_SITE,
+        naming: { strategy: "words", vocabulary: VOCABULARY },
+        prominence: { window: 7, pages: 1, tokens: { "not-renamed": 0 } },
+        dryRun: true,
+      });
+      assert.ok(outcome.enabled);
+      assert.strictEqual(outcome.prominent, 0);
+      assert.strictEqual(outcome.notices.length, 1);
+      assert.match(outcome.notices[0], /first 7 class-bearing elements/);
+    } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });

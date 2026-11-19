@@ -2,22 +2,14 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
-import { applyBuildOutput, filterRegistry } from "./apply.js";
-import { assertConsolidatedNames } from "./consolidate.js";
 import {
-  enginesInclude,
-  isModulesOnly,
   parseEngineList,
   resolveFlags,
   type MinwindEngineId,
   type MinwindMode,
 } from "./flags.js";
-import {
-  assertSharedCollision,
-  prepareModulesNaming,
-  reservedFromRegistry,
-} from "./engines/css-modules.js";
-import type { NamingConfig } from "./naming.js";
+import { isThemedNaming, type NamingConfig } from "./naming.js";
+import type { ProminenceManifest } from "./prominence.js";
 import { DIALECT_IDS, isDialectId, type DialectId } from "./dialect.js";
 import {
   resolveNameLength,
@@ -26,13 +18,13 @@ import {
   resolveHashSalt,
 } from "./names.js";
 import { isThemeId, THEME_IDS, type ThemeId } from "./themes/index.js";
-import { emptyPrepassResult, runPrepass } from "./prepass.js";
-import { buildRenameMap, buildReport, writeArtifacts } from "./report.js";
+import { runApply } from "./run-apply.js";
 
 // `minwind apply` — the post-build path for bundlers without a plugin hook
-// (Turbopack, esbuild, Parcel, plain Rollup). Runs the same pre-pass the
-// plugins run against the site source, then rewrites an already-emitted
-// output directory in place. Tailwind apply rewrites HTML class attributes,
+// (Turbopack, esbuild, Parcel, plain Rollup). Parses argv and prints the
+// summary; runApply (run-apply.ts) runs the same pre-pass the plugins run
+// against the site source, then rewrites an already-emitted output
+// directory in place. Tailwind apply rewrites HTML class attributes,
 // stylesheet selectors (plus consolidation), and conservative JS class
 // literals. Modules apply proves export maps and remaps those bundler names
 // in JS, CSS, and HTML. Tailwind-only apply stays content-hash unless
@@ -66,6 +58,11 @@ Options:
   --quotes <path>     JSON array of sentences; --naming quotes requires this
   --maps <path>       JSON object of word→spelling; --naming maps requires this.
                       With a dialect id, overlays those runs onto the mouth
+  --prominence <path|auto>
+                      Deal words or quotes to the most visible classes first:
+                      a manifest from minwind prominence, or auto to rank this
+                      directory's HTML (first 32 class-bearing elements)
+                      before renaming it
   --dry-run           Report what would change without writing files
 
 Exit codes:
@@ -81,6 +78,7 @@ interface CliOptions {
   mode: "morph" | "compress";
   engines: Array<MinwindEngineId>;
   naming: NamingConfig | undefined;
+  prominence: "auto" | ProminenceManifest | undefined;
   dryRun: boolean;
 }
 
@@ -130,6 +128,31 @@ function loadJsonStringRecord(
     maps[key] = value;
   }
   return maps;
+}
+
+function loadProminenceManifest(filePath: string): ProminenceManifest {
+  const parsed = readJsonFile(filePath, "--prominence", "prominence manifest");
+  const shapeError = "--prominence must be a manifest from minwind prominence";
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    usageError(shapeError);
+  }
+  const { window, pages, tokens } = parsed as Record<string, unknown>;
+  if (
+    typeof window !== "number" ||
+    typeof pages !== "number" ||
+    tokens === null ||
+    typeof tokens !== "object" ||
+    Array.isArray(tokens)
+  ) {
+    usageError(shapeError);
+  }
+  const ranks: Record<string, number> = {};
+  for (const token of Object.keys(tokens)) {
+    const rank = (tokens as Record<string, unknown>)[token];
+    if (typeof rank !== "number") usageError(shapeError);
+    ranks[token] = rank;
+  }
+  return { window, pages, tokens: ranks };
 }
 
 function usageError(message: string): never {
@@ -213,6 +236,7 @@ export function parseArgs(argv: Array<string>): CliOptions {
   let vocabularyPath: string | undefined;
   let quotesPath: string | undefined;
   let mapsPath: string | undefined;
+  let prominenceValue: string | undefined;
   let themeId: ThemeId | undefined;
   let hashLength: number | undefined;
   let hashPrefix: string | undefined;
@@ -339,6 +363,14 @@ export function parseArgs(argv: Array<string>): CliOptions {
       i += 2;
     } else if (arg.startsWith("--maps=")) {
       mapsPath = arg.slice("--maps=".length);
+      i += 1;
+    } else if (arg === "--prominence") {
+      const value = argv[i + 1];
+      if (value === undefined) usageError("--prominence requires a value");
+      prominenceValue = value;
+      i += 2;
+    } else if (arg.startsWith("--prominence=")) {
+      prominenceValue = arg.slice("--prominence=".length);
       i += 1;
     } else if (arg.startsWith("-")) {
       usageError(`unknown option: ${arg}`);
@@ -496,6 +528,16 @@ export function parseArgs(argv: Array<string>): CliOptions {
     if (hashAlphabet !== undefined) naming.alphabet = hashAlphabet;
     if (hashSalt !== undefined) naming.salt = hashSalt;
   }
+  let prominence: "auto" | ProminenceManifest | undefined;
+  if (prominenceValue !== undefined) {
+    if (!isThemedNaming(naming)) {
+      usageError("--prominence requires --naming words or quotes");
+    }
+    prominence =
+      prominenceValue === "auto"
+        ? "auto"
+        : loadProminenceManifest(prominenceValue);
+  }
   return {
     dir,
     root,
@@ -504,6 +546,7 @@ export function parseArgs(argv: Array<string>): CliOptions {
     mode: flags.mode,
     engines: flags.engines,
     naming,
+    prominence,
     dryRun,
   };
 }
@@ -516,67 +559,28 @@ export async function runApplyCli(argv: Array<string>): Promise<number> {
     );
     return 1;
   }
-  const prepass = isModulesOnly(options.engines)
-    ? emptyPrepassResult()
-    : await runPrepass({
-        root: options.root,
-        cssEntry: options.cssEntry ?? path.join(options.root, "src", "app.css"),
-        naming: options.naming,
-      });
-  const modulesPrepared = enginesInclude(options.engines, "css-modules")
-    ? prepareModulesNaming(
-        options.root,
-        options.naming,
-        isModulesOnly(options.engines)
-          ? undefined
-          : reservedFromRegistry(prepass.registry),
-      )
-    : undefined;
-  const modules =
-    modulesPrepared === undefined
-      ? undefined
-      : {
-          root: options.root,
-          inventory: modulesPrepared.inventory,
-          registry: modulesPrepared.registry,
-        };
-  if (modules !== undefined && !isModulesOnly(options.engines)) {
-    assertSharedCollision(prepass.registry, modules.registry);
-  }
-  if (options.consolidate) {
-    assertConsolidatedNames(prepass.registry, prepass.consolidationVerdicts);
-  }
-  const result = applyBuildOutput({
+  const outcome = await runApply({
     dir: options.dir,
-    registry: prepass.registry,
-    consolidationVerdicts: prepass.consolidationVerdicts,
+    root: options.root,
+    cssEntry: options.cssEntry,
+    naming: options.naming,
+    mode: options.mode,
     consolidate: options.consolidate,
+    engines: options.engines,
+    prominence: options.prominence,
     dryRun: options.dryRun,
-    modules,
   });
-  if (!options.dryRun) {
-    // Artifacts publish to the site root's .output/minwind — the same
-    // convention as the plugins, so `minwind report` finds them and the
-    // deployable output directory stays clean. The report's registry view
-    // reflects the skip-and-warn drops as runtime-context exclusions.
-    const effective = filterRegistry(
-      prepass.registry,
-      new Set(result.keptOriginal),
+  if (!outcome.enabled) {
+    process.stdout.write(
+      "minwind apply: disabled by MINWIND=off or MINWIND_RENAME=off;" +
+        ` left ${options.dir} unchanged\n`,
     );
-    const report = buildReport({
-      registry: effective,
-      verdicts: prepass.consolidationVerdicts,
-      warnings: result.warnings,
-      consolidate: options.consolidate,
-      mode: options.mode,
-    });
-    const map = buildRenameMap(effective, prepass.consolidationVerdicts);
-    await writeArtifacts(options.root, report, map);
+    return 0;
   }
-  const renamed =
-    prepass.registry.entries().length +
-    (modules === undefined ? 0 : modules.registry.entries().length) -
-    result.keptOriginal.length;
+  for (const notice of outcome.notices) {
+    process.stderr.write(`${notice}\n`);
+  }
+  const { result, renamed } = outcome;
   process.stdout.write(
     `minwind apply${options.dryRun ? " (dry run)" : ""}: renamed ${renamed}` +
       ` class(es) across ${result.rewrittenFiles} file(s)` +

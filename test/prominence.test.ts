@@ -1,6 +1,14 @@
 import assert from "node:assert";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, it } from "node:test";
-import { computeProminence } from "../src/prominence.js";
+import {
+  computeProminence,
+  computeProminenceFromDir,
+  DEFAULT_WINDOW,
+} from "../src/prominence.js";
+import { runProminenceCli } from "../src/prominence-cli.js";
 
 describe("computeProminence", function () {
   it("ranks tokens by the first class-bearing element in document order", function () {
@@ -84,5 +92,39 @@ describe("computeProminence", function () {
     const first = computeProminence(pages, 32);
     const second = computeProminence(Array.from(pages).reverse(), 32);
     assert.deepStrictEqual(first, second);
+  });
+});
+
+describe("computeProminenceFromDir", function () {
+  it("matches the minwind prominence CLI's manifest for the same directory", function () {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minwind-prom-dir-"));
+    const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "minwind-prom-out-"));
+    const out = path.join(outDir, "minwind.prominence.json");
+    fs.writeFileSync(
+      path.join(dir, "index.html"),
+      '<html class="shell"><body class="bg-white"><p class="text-lg">',
+    );
+    fs.mkdirSync(path.join(dir, "about"));
+    fs.writeFileSync(
+      path.join(dir, "about", "index.html"),
+      '<html class="shell"><body><main class="p-4">',
+    );
+    fs.writeFileSync(path.join(dir, "notes.txt"), '<div class="ignored">');
+    try {
+      assert.strictEqual(runProminenceCli([dir, "--out", out]), 0);
+      const manifest = computeProminenceFromDir(dir, DEFAULT_WINDOW);
+      assert.deepStrictEqual(
+        JSON.parse(fs.readFileSync(out, "utf8")),
+        manifest,
+      );
+      assert.deepStrictEqual(manifest, {
+        window: 32,
+        pages: 2,
+        tokens: { shell: 0, "bg-white": 1, "p-4": 1, "text-lg": 2 },
+      });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+      fs.rmSync(outDir, { recursive: true, force: true });
+    }
   });
 });
