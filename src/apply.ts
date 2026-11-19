@@ -7,7 +7,11 @@ import {
 } from "./engines/modules-remap.js";
 import type { ExclusionEntry, NameRegistry } from "./names.js";
 import { transformBundle } from "./transform-bundle.js";
-import { transformModule, type TransformWarning } from "./transform-source.js";
+import {
+  transformModule,
+  type TransformSourceResult,
+  type TransformWarning,
+} from "./transform-source.js";
 import type { CssTransformWarning } from "./transform-css.js";
 import { rewriteCssAssets } from "./webpack.js";
 
@@ -92,9 +96,84 @@ export function filterRegistry(
   };
 }
 
+// HTML through the SFC walker, JS bundles through the bundle pass.
+function transformOutput(
+  file: string,
+  code: string,
+  registry: NameRegistry,
+  consolidationVerdicts?: ReadonlyArray<ConsolidationVerdict>,
+): TransformSourceResult | null {
+  const options = { code, id: file, registry, consolidationVerdicts };
+  return file.endsWith(".html")
+    ? transformModule(options)
+    : transformBundle(options);
+}
+
+// A registry view that renames nothing and has no entries, so a rewrite
+// through it applies only consolidation collapses and runs no leak scan.
+// With `asked`, it records each token the rewrite looked up a name for that
+// the full registry renames: exactly the tokens the rewrite renames one by
+// one.
+function namelessView(
+  registry: NameRegistry,
+  asked?: Set<string>,
+): NameRegistry {
+  return {
+    nameFor: function (token: string): string | undefined {
+      if (asked !== undefined && registry.nameFor(token) !== undefined) {
+        asked.add(token);
+      }
+      return undefined;
+    },
+    tokenFor: function (): string | undefined {
+      return undefined;
+    },
+    entries: function () {
+      return [];
+    },
+    exclusions: function (): Array<ExclusionEntry> {
+      return [];
+    },
+    assertBijection: function (): void {},
+  };
+}
+
+// Registry tokens the rewrite renames one by one somewhere in the output,
+// outside any list that collapses to a consolidated name. Consolidation
+// judged member removability from source class lists, but the output's
+// lists can differ (an Astro component merging a class prop renders
+// `rounded-lg flex gap-4` where the source has `flex gap-4`), and such a
+// token needs its own rule. The first rewrite applies only the collapses;
+// the second asks for a name for every token left in a class list.
+function individuallyRenamedTokens(
+  files: ReadonlyArray<string>,
+  registry: NameRegistry,
+  consolidationVerdicts: ReadonlyArray<ConsolidationVerdict>,
+): Set<string> {
+  const renamed = new Set<string>();
+  for (const file of files) {
+    const code = fs.readFileSync(file, "utf8");
+    const collapsed = transformOutput(
+      file,
+      code,
+      namelessView(registry),
+      consolidationVerdicts,
+    );
+    transformOutput(
+      file,
+      collapsed?.code ?? code,
+      namelessView(registry, renamed),
+    );
+  }
+  return renamed;
+}
+
 export function applyBuildOutput(options: ApplyOptions): ApplyResult {
   const { dir, consolidate } = options;
   const files = walkAssets(dir);
+  const classFiles = files.filter(function (file) {
+    return file.endsWith(".html") || BUNDLE_PATTERN.test(file);
+  });
 
   // Pass 1 (detection, never written): run the HTML and bundle transforms
   // against the full registry. A reverse-leak warning marks a registry
@@ -102,13 +181,9 @@ export function applyBuildOutput(options: ApplyOptions): ApplyResult {
   // in the stylesheet while the DOM keeps the original would break the
   // page, so the token drops out of the rename set entirely.
   const leaked = new Set<string>();
-  for (const file of files) {
-    const isHtml = file.endsWith(".html");
-    if (!isHtml && !BUNDLE_PATTERN.test(file)) continue;
+  for (const file of classFiles) {
     const code = fs.readFileSync(file, "utf8");
-    const detected = isHtml
-      ? transformModule({ code, id: file, registry: options.registry })
-      : transformBundle({ code, id: file, registry: options.registry });
+    const detected = transformOutput(file, code, options.registry);
     if (detected === null) continue;
     for (const warning of detected.warnings) {
       if (warning.kind === "reverse-leak" && warning.token !== undefined) {
@@ -119,13 +194,32 @@ export function applyBuildOutput(options: ApplyOptions): ApplyResult {
   const registry = filterRegistry(options.registry, leaked);
   // A consolidation verdict mentioning a dropped token can no longer merge:
   // its kept-original member rule must survive.
-  const consolidationVerdicts = options.consolidationVerdicts.filter(
-    function (verdict) {
-      return !verdict.tokens.some(function (token) {
-        return leaked.has(token);
-      });
-    },
-  );
+  const mergeable = options.consolidationVerdicts.filter(function (verdict) {
+    return !verdict.tokens.some(function (token) {
+      return leaked.has(token);
+    });
+  });
+  // Pass 2 (detection, never written): a member the output renames outside
+  // a collapsed list keeps its rule. An empty removable list keeps every
+  // member rule; the merged rule ships either way.
+  const pinned =
+    consolidate &&
+    mergeable.some(function (verdict) {
+      return (verdict.removableTokens ?? []).length > 0;
+    })
+      ? individuallyRenamedTokens(classFiles, registry, mergeable)
+      : new Set<string>();
+  const consolidationVerdicts = mergeable.map(function (verdict) {
+    if (verdict.removableTokens === undefined || pinned.size === 0) {
+      return verdict;
+    }
+    return {
+      ...verdict,
+      removableTokens: verdict.removableTokens.filter(function (token) {
+        return !pinned.has(token);
+      }),
+    };
+  });
 
   const result: ApplyResult = {
     htmlFiles: 0,
@@ -164,29 +258,15 @@ export function applyBuildOutput(options: ApplyOptions): ApplyResult {
     }
   }
 
-  for (const file of files) {
-    if (file.endsWith(".css")) continue;
+  for (const file of classFiles) {
     const isHtml = file.endsWith(".html");
-    const isBundle = BUNDLE_PATTERN.test(file);
-    if (!isHtml && !isBundle) continue;
     const code = fs.readFileSync(file, "utf8");
-    const transformed = isHtml
-      ? transformModule({
-          code,
-          id: file,
-          registry,
-          consolidationVerdicts: consolidate
-            ? consolidationVerdicts
-            : undefined,
-        })
-      : transformBundle({
-          code,
-          id: file,
-          registry,
-          consolidationVerdicts: consolidate
-            ? consolidationVerdicts
-            : undefined,
-        });
+    const transformed = transformOutput(
+      file,
+      code,
+      registry,
+      consolidate ? consolidationVerdicts : undefined,
+    );
     if (isHtml) result.htmlFiles += 1;
     else result.jsFiles += 1;
     if (transformed === null) continue;

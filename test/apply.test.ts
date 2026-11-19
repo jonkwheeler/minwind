@@ -1027,6 +1027,146 @@ describe("runApply (apply-site fixture)", function () {
   });
 });
 
+// Consolidation judges member removability from source class lists, but apply
+// rewrites the built output, whose lists can differ: an Astro component that
+// merges a class prop renders `<Card class="flex gap-4">` as
+// `<div class="rounded-lg flex gap-4">`, a list the source scan never saw.
+// The stylesheet is plain CSS in the utilities layer, so the pre-pass
+// compiles it without resolving tailwindcss from the temp root.
+const MERGE_CSS = `@layer utilities {
+  .flex { display: flex; }
+  .gap-4 { gap: 1rem; }
+  .rounded-lg { border-radius: 0.5rem; }
+}
+`;
+
+const MERGE_CARD = `---
+const { class: className } = Astro.props;
+---
+<div class:list={["rounded-lg", className]}><slot /></div>
+`;
+
+const MERGE_PAGE = `---
+import Card from "../components/Card.astro";
+---
+<Card class="flex gap-4">a</Card>
+<section class="flex gap-4">b</section>
+<section class="flex gap-4">c</section>
+`;
+
+const MERGE_HTML =
+  '<!DOCTYPE html><html><head><link rel="stylesheet" href="/_astro/index.css">' +
+  '</head><body><div class="rounded-lg flex gap-4">a</div>' +
+  '<section class="flex gap-4">b</section>' +
+  '<section class="flex gap-4">c</section></body></html>';
+
+async function makeMergeSite(): Promise<string> {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "minwind-merge-"));
+  function write(relative: string, text: string): void {
+    const file = path.join(root, relative);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, text);
+  }
+  write(path.join("src", "app.css"), MERGE_CSS);
+  write(path.join("src", "components", "Card.astro"), MERGE_CARD);
+  write(path.join("src", "pages", "index.astro"), MERGE_PAGE);
+  const compiled = await compileTailwindStylesheet({
+    cssEntry: path.join(root, "src", "app.css"),
+    root,
+  });
+  write(path.join("dist", "_astro", "index.css"), compiled.stylesheet);
+  write(path.join("dist", "index.html"), MERGE_HTML);
+  return root;
+}
+
+function hasRule(css: string, name: string): boolean {
+  return new RegExp(`\\.${name}\\s*\\{`).test(css);
+}
+
+describe("consolidation against built class lists", function () {
+  it("keeps the member rules a merged class prop still uses (compress)", async function () {
+    const root = await makeMergeSite();
+    try {
+      const outcome = await runApply({ dir: path.join(root, "dist"), root });
+      assert.ok(outcome.enabled);
+      const tree = readTree(path.join(root, "dist"));
+      const html = tree["index.html"];
+      const css = tree[path.join("_astro", "index.css")];
+      // The repeated list still merges: both sections wear its shared rule.
+      const merged = Object.keys(
+        (
+          JSON.parse(
+            fs.readFileSync(
+              path.join(root, ".output", "minwind", "map.json"),
+              "utf8",
+            ),
+          ) as RenameMap
+        ).consolidated,
+      );
+      assert.strictEqual(merged.length, 1);
+      assert.strictEqual(outcome.result.consolidated, 1);
+      assert.strictEqual(
+        html.split(`<section class="${merged[0]}">`).length - 1,
+        2,
+        html,
+      );
+      assert.ok(hasRule(css, merged[0]), css);
+      // Every class the built page wears, the merged card's included, has
+      // a rule.
+      for (const attribute of html.matchAll(/\sclass="([^"]*)"/g)) {
+        for (const name of attribute[1].split(" ")) {
+          assert.ok(hasRule(css, name), `no .${name} rule in:\n${css}`);
+        }
+      }
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps only the member rules a bundle renames outside the merged list", function () {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minwind-apply-"));
+    try {
+      fs.writeFileSync(
+        path.join(dir, "index.html"),
+        `<!doctype html><div class="flex p-4">a</div><div class="p-4 flex">b</div>`,
+      );
+      fs.writeFileSync(path.join(dir, "app.css"), LAYERED_CSS);
+      fs.writeFileSync(
+        path.join(dir, "app.js"),
+        'jsx("div", { className: "flex mb-16" });\n',
+      );
+      const verdicts: Array<ConsolidationVerdict> = [
+        {
+          tokens: ["flex", "p-4"],
+          frequency: 2,
+          safe: true,
+          name: "combo",
+          removableTokens: ["flex", "p-4"],
+        },
+      ];
+      const result = applyBuildOutput({
+        dir,
+        registry: REGISTRY,
+        consolidationVerdicts: verdicts,
+        consolidate: true,
+      });
+      assert.strictEqual(result.consolidated, 1);
+      const css = fs.readFileSync(path.join(dir, "app.css"), "utf8");
+      assert.ok(css.includes(".combo{display:flex;padding:1rem}"), css);
+      assert.ok(css.includes(`.${nameOf("flex")}{display:flex}`), css);
+      assert.ok(!css.includes(`.${nameOf("p-4")}{`), css);
+      assert.ok(
+        fs
+          .readFileSync(path.join(dir, "app.js"), "utf8")
+          .includes(`className: "${nameOf("flex")} ${nameOf("mb-16")}"`),
+      );
+      assert.deepStrictEqual(verdicts[0].removableTokens, ["flex", "p-4"]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 // R7: minwind never rewrites HTML <style> contents, so a renamed class
 // referenced there would silently stop matching. The fixture page gains a
 // <style> block; page is relative to the copied out/ directory.
@@ -1100,6 +1240,47 @@ describe("inline-style tripwire (R7)", function () {
       assert.ok(
         readTree(dir)["index.html"].includes(
           `<ul class="${hashClassName("flex")} ${hashClassName("flex-col")}">`,
+        ),
+      );
+    } finally {
+      cleanArtifacts();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("fails naming a renamed class referenced in a nested rule", async function () {
+    const dir = await copyApplySiteOut();
+    cleanArtifacts();
+    try {
+      addInlineStyle(dir, "index.html", ".card{.flex{gap:1rem}}");
+      await assert.rejects(
+        runApply({ dir, root: APPLY_SITE }),
+        function (error: Error) {
+          assert.ok(
+            error.message.includes(`${path.join(dir, "index.html")}: .flex`),
+            error.message,
+          );
+          assert.ok(!error.message.includes(".card"), error.message);
+          return true;
+        },
+      );
+      assert.ok(!fs.existsSync(artifactsDir()));
+    } finally {
+      cleanArtifacts();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("passes a nested rule with only non-renamed classes", async function () {
+    const dir = await copyApplySiteOut();
+    cleanArtifacts();
+    try {
+      addInlineStyle(dir, "index.html", ".card{.title{color:red}}");
+      const outcome = await runApply({ dir, root: APPLY_SITE });
+      assert.ok(outcome.enabled);
+      assert.ok(
+        readTree(dir)["index.html"].includes(
+          "<style>.card{.title{color:red}}</style>",
         ),
       );
     } finally {

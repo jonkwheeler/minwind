@@ -1,5 +1,6 @@
 ---
 import Badge from "../components/Badge.astro";
+import Card from "../components/Card.astro";
 import Base from "../layouts/Base.astro";
 ---
 
@@ -15,6 +16,18 @@ import Base from "../layouts/Base.astro";
   <p data-follow-up class="mt-8 rounded-md bg-white p-4 text-sm shadow-sm">
     Waiting for the script
   </p>
+  <section class="flex-col gap-2">
+    <h2>Today</h2>
+    <p>Two replies due.</p>
+  </section>
+  <section class="flex-col gap-2">
+    <h2>This week</h2>
+    <p>One reply due.</p>
+  </section>
+  <Card class="flex-col gap-2">
+    <h2>Pinned</h2>
+    <p>Follow up with the printer.</p>
+  </Card>
 </Base>
 
 <script>

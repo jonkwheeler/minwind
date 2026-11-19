@@ -142,6 +142,7 @@ function configFor(
 ): AstroConfigLike {
   return {
     root: pathToFileURL(root + path.sep),
+    srcDir: pathToFileURL(path.join(root, "src") + path.sep),
     build: { inlineStylesheets: "never" },
     ...overrides,
   };
@@ -253,6 +254,7 @@ describe("astro:config:done", function () {
       setup(integration, command);
       integration.hooks["astro:config:done"]({
         config: configFor(os.tmpdir(), {
+          srcDir: pathToFileURL(path.join(os.tmpdir(), "app") + path.sep),
           build: { inlineStylesheets: "auto" },
           adapter: { name: "@astrojs/node" },
           security: { csp: true },
@@ -316,6 +318,27 @@ describe("astro:config:done", function () {
         buildOutput: "static",
       });
     }, /inlineStylesheets/);
+  });
+
+  it("rejects a srcDir other than src/, naming it", function () {
+    const integration = minwind();
+    setup(integration, "build");
+    const srcDir = path.join(os.tmpdir(), "app");
+    assert.throws(
+      function () {
+        integration.hooks["astro:config:done"]({
+          config: configFor(os.tmpdir(), {
+            srcDir: pathToFileURL(srcDir + path.sep),
+          }),
+          buildOutput: "static",
+        });
+      },
+      function (error: Error) {
+        assert.match(error.message, /default srcDir \(src\/\) only/);
+        assert.ok(error.message.includes(`"${srcDir}"`), error.message);
+        return true;
+      },
+    );
   });
 
   it("still enforces the config under MINWIND=off (R5)", async function () {
@@ -797,6 +820,45 @@ describe(
       for (const entry of report.renames) {
         assert.ok(!selectors.has(entry.token), `.${entry.token} kept in CSS`);
       }
+    });
+
+    it("gives every class on every page a selector, a merged class prop's included", function () {
+      const selectors = selectorClasses(stylesheetOf(builds.on));
+      for (const page of pagesOf(builds.on)) {
+        for (const attribute of builds.on[page].matchAll(
+          /\sclass="([^"]*)"/g,
+        )) {
+          for (const name of splitClasses(attribute[1])) {
+            assert.ok(selectors.has(name), `${page}: no .${name} selector`);
+          }
+        }
+      }
+      // <Card class="flex-col gap-2"> renders the card's own class plus the
+      // two it merges, a list no source file spells out.
+      const page = builds.on["index.html"];
+      const card = /<div\b[^>]*\sdata-card\b[^>]*>/.exec(page);
+      assert.ok(card !== null, page);
+      const classes = classesOf(card[0], "div");
+      assert.deepStrictEqual(sorted(classes.map(decode)), [
+        "flex-col",
+        "gap-2",
+        "rounded-lg",
+      ]);
+      for (const name of classes) {
+        assert.ok(selectors.has(name), `card: no .${name} selector`);
+      }
+      // The same list written out on both sections still merges into one
+      // shared rule.
+      const merged = Object.keys(map.consolidated).filter(function (name) {
+        return sorted(map.consolidated[name]).join(" ") === "flex-col gap-2";
+      });
+      assert.strictEqual(merged.length, 1, JSON.stringify(map.consolidated));
+      assert.strictEqual(
+        page.split(`<section class="${merged[0]}">`).length - 1,
+        2,
+        page,
+      );
+      assert.ok(selectors.has(merged[0]), `no .${merged[0]} selector`);
     });
 
     it("keeps the data-* hooked script's element and selector", function () {

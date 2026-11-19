@@ -49,6 +49,7 @@ export interface AstroLoggerLike {
 
 export interface AstroConfigLike {
   root: URL;
+  srcDir: URL;
   adapter?: { name: string };
   build: { inlineStylesheets: string };
   security?: { csp?: unknown };
@@ -123,6 +124,15 @@ function assertRenameableConfig(
         ` config has "${config.build.inlineStylesheets}". minwind sets it` +
         " during astro:config:setup, so an integration listed after minwind" +
         " changed it; list minwind after that integration.",
+    );
+  }
+  const srcDir = path.resolve(fileURLToPath(config.srcDir));
+  if (srcDir !== path.join(fileURLToPath(config.root), "src")) {
+    throw new Error(
+      "minwind/astro supports Astro's default srcDir (src/) only, but" +
+        ` the config sets "${srcDir}". minwind's pre-pass reads class` +
+        " names and lists from <root>/src, so it would miss the components" +
+        " in another directory.",
     );
   }
 }

@@ -1,0 +1,13 @@
+---
+interface Props {
+  class?: string;
+}
+
+// The caller's class prop merges into the card's own class, so the built
+// list is longer than any list written in source.
+const { class: className } = Astro.props;
+---
+
+<div data-card class:list={["rounded-lg", className]}>
+  <slot />
+</div>
