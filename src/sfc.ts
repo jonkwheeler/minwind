@@ -60,8 +60,9 @@ const SCRIPT_TAG = /<script\b([^>]*)>([\s\S]*?)<\/script\s*>/gi;
 const STYLE_TAG = /<style\b[^>]*>[\s\S]*?<\/style\s*>/gi;
 const LANG_ATTRIBUTE = /\blang\s*=\s*["']([^"']+)["']/i;
 
-// Astro frontmatter is only valid as the very first bytes of the file.
-const FRONTMATTER = /^---[ \t]*\r?\n([\s\S]*?)\r?\n---/;
+// Astro frontmatter is only valid as the very first bytes of the file. The
+// content group is absent for an empty block (---\n---).
+const FRONTMATTER = /^---[ \t]*\r?\n(?:([\s\S]*?)\r?\n)?---/;
 
 function findScriptRegions(
   format: SfcFormat,
@@ -69,12 +70,15 @@ function findScriptRegions(
 ): Array<ContentRegion> {
   const regions: Array<ContentRegion> = [];
   if (format === "astro") {
-    const frontmatter = FRONTMATTER.exec(text);
-    if (frontmatter !== null) {
-      const contentStart = frontmatter[0].indexOf(frontmatter[1]);
+    const content = FRONTMATTER.exec(text)?.[1];
+    // An empty block (---\n--- or ---\n\n---) has no script to walk.
+    if (content !== undefined && content !== "") {
+      // The match starts at offset 0, so the content starts on the line
+      // after the opening fence.
+      const contentStart = text.indexOf("\n") + 1;
       regions.push({
         contentStart,
-        contentEnd: contentStart + frontmatter[1].length,
+        contentEnd: contentStart + content.length,
         lang: "ts",
       });
     }
@@ -404,6 +408,28 @@ function emitStaticClassAttribute(
   visitor.exitRenameGroup?.("class-attribute", true, true);
 }
 
+interface SourceSpan {
+  start: number;
+  end: number;
+}
+
+// Vue 3 forbids mustache interpolation in attributes and plain HTML has no
+// expression syntax, so their class attributes are always static; Svelte
+// and Astro interpolate {}.
+function emitClassAttribute(
+  format: SfcFormat,
+  text: string,
+  span: SourceSpan,
+  visitor: ClassContextVisitor,
+): void {
+  const value = text.slice(span.start, span.end);
+  if ((format === "svelte" || format === "astro") && value.includes("{")) {
+    emitMixedTemplate(value, span.start, visitor);
+  } else {
+    emitStaticClassAttribute(value, span.start, span.end, visitor);
+  }
+}
+
 type TreeNode = DefaultTreeAdapterMap["node"];
 type TreeElement = DefaultTreeAdapterMap["element"];
 type TreeTemplate = DefaultTreeAdapterMap["template"];
@@ -436,6 +462,139 @@ function attributeValueSpan(
     return { start: i + 1, end: close };
   }
   return { start: i, end };
+}
+
+// parse5 implies <body> as soon as <head> holds anything but head elements
+// (a component tag, a {cond && ...} expression, <ClientRouter />), and
+// implies <html> when content precedes it. The real start tag that arrives
+// later only adds its attributes to the implied element, without source
+// locations, so the class value span is recovered from that literal tag.
+const HTML_OR_BODY_START_TAG = /<(html|body)(?=[\t\n\f\r />])/gi;
+
+// HTML elements whose content the tokenizer reads as text.
+const RAW_TEXT_ELEMENTS = new Set([
+  "iframe",
+  "noembed",
+  "noframes",
+  "noscript",
+  "plaintext",
+  "script",
+  "style",
+  "textarea",
+  "title",
+  "xmp",
+]);
+
+// Spans where a literal `<html` or `<body` is not a start tag: comments, the
+// doctype, other tags (attribute values), and raw-text element contents.
+// Plain text needs no span, since the tokenizer reads any `<body` there as a
+// tag. Its spans would also be wrong here: parse5 merges adjacent text
+// across the tags it drops, so one text node can cover the adopted tag.
+function nonTagSpans(
+  node: TreeNode,
+  spans: Array<SourceSpan> = [],
+): Array<SourceSpan> {
+  function push(
+    location: { startOffset: number; endOffset: number } | null | undefined,
+  ): void {
+    if (location === null || location === undefined) return;
+    spans.push({ start: location.startOffset, end: location.endOffset });
+  }
+  let rawText = false;
+  if (isElement(node)) {
+    push(node.sourceCodeLocation?.startTag);
+    push(node.sourceCodeLocation?.endTag);
+    if (node.tagName === "template") {
+      nonTagSpans((node as TreeTemplate).content, spans);
+    }
+    rawText =
+      node.namespaceURI === parse5.html.NS.HTML &&
+      RAW_TEXT_ELEMENTS.has(node.tagName);
+  } else if (
+    node.nodeName === "#comment" ||
+    node.nodeName === "#documentType"
+  ) {
+    push(node.sourceCodeLocation);
+  }
+  if ("childNodes" in node) {
+    for (const child of node.childNodes) {
+      if (rawText) push(child.sourceCodeLocation);
+      else nonTagSpans(child, spans);
+    }
+  }
+  return spans;
+}
+
+// The value span of a start tag's first class attribute (the HTML tokenizer
+// drops later duplicates), scanning attributes from just after the tag name;
+// null when the tag has none.
+function startTagClassSpan(source: string, from: number): SourceSpan | null {
+  function isNameEnd(ch: string): boolean {
+    return isAsciiWhitespace(ch) || ch === "/" || ch === ">" || ch === "=";
+  }
+  let i = from;
+  while (i < source.length) {
+    while (
+      i < source.length &&
+      (isAsciiWhitespace(source[i]) || source[i] === "/")
+    ) {
+      i += 1;
+    }
+    if (i >= source.length || source[i] === ">") return null;
+    const nameStart = i;
+    // A leading "=" is part of the attribute name.
+    i += 1;
+    while (i < source.length && !isNameEnd(source[i])) i += 1;
+    const name = source.slice(nameStart, i).toLowerCase();
+    while (i < source.length && isAsciiWhitespace(source[i])) i += 1;
+    let value: SourceSpan = { start: i, end: i };
+    if (source[i] === "=") {
+      i += 1;
+      while (i < source.length && isAsciiWhitespace(source[i])) i += 1;
+      const quote = source[i];
+      if (quote === '"' || quote === "'") {
+        const close = source.indexOf(quote, i + 1);
+        // An unterminated value runs to EOF, where the tokenizer drops the tag.
+        if (close === -1) return null;
+        value = { start: i + 1, end: close };
+        i = close + 1;
+      } else {
+        const valueStart = i;
+        while (
+          i < source.length &&
+          !isAsciiWhitespace(source[i]) &&
+          source[i] !== ">"
+        ) {
+          i += 1;
+        }
+        value = { start: valueStart, end: i };
+      }
+    }
+    if (name === "class") return value;
+  }
+  return null;
+}
+
+// The first literal <html> or <body> start tag that carries a class
+// attribute is the one whose class parse5 adopted.
+function adoptedClassSpan(
+  templateText: string,
+  tagName: string,
+  nonTags: ReadonlyArray<SourceSpan>,
+): SourceSpan | null {
+  HTML_OR_BODY_START_TAG.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = HTML_OR_BODY_START_TAG.exec(templateText)) !== null) {
+    if (match[1].toLowerCase() !== tagName) continue;
+    const at = match.index;
+    const notATag = nonTags.some(function (span) {
+      return span.start <= at && at < span.end;
+    });
+    if (notATag) continue;
+    const span = startTagClassSpan(templateText, at + match[0].length);
+    if (span !== null) return span;
+  }
+  return null;
 }
 
 function walkTemplateElements(
@@ -486,12 +645,18 @@ export function walkSfcClassContexts(
     walkClassContexts(sourceFile, visitor);
   }
 
-  let templateText = maskSpans(
-    text,
-    regions.map(function (region) {
-      return { start: region.contentStart, end: region.contentEnd };
-    }),
-  );
+  const templateMask = regions.map(function (region) {
+    return { start: region.contentStart, end: region.contentEnd };
+  });
+  // The frontmatter fences are not markup either: left in, the `---` text
+  // makes parse5 imply <html>, <head>, and <body> ahead of the real tags.
+  if (format === "astro") {
+    const frontmatter = FRONTMATTER.exec(text);
+    if (frontmatter !== null) {
+      templateMask.push({ start: 0, end: frontmatter[0].length });
+    }
+  }
+  let templateText = maskSpans(text, templateMask);
   // Only Svelte and Astro interpolate {} in templates; Vue and plain HTML
   // attribute values are always literal (or always-quoted expressions).
   if (format === "svelte" || format === "astro") {
@@ -501,30 +666,29 @@ export function walkSfcClassContexts(
     sourceCodeLocationInfo: true,
   });
 
+  let nonTags: Array<SourceSpan> | null = null;
   walkTemplateElements(document, function (element) {
     const locations = element.sourceCodeLocation?.attrs;
-    if (locations === undefined) return;
     for (const attr of element.attrs) {
-      const location = locations[attr.name];
-      if (location === undefined) continue;
-      if (attr.name === "class") {
-        const span = attributeValueSpan(
-          text,
-          location.startOffset,
-          location.endOffset,
-        );
-        const value = text.slice(span.start, span.end);
-        // Vue 3 forbids mustache interpolation in attributes and plain HTML
-        // has no expression syntax, so their class attributes are always
-        // static; Svelte and Astro interpolate {}.
+      const location = locations?.[attr.name];
+      if (location === undefined) {
         if (
-          (format === "svelte" || format === "astro") &&
-          value.includes("{")
+          attr.name === "class" &&
+          (element.tagName === "html" || element.tagName === "body")
         ) {
-          emitMixedTemplate(value, span.start, visitor);
-        } else {
-          emitStaticClassAttribute(value, span.start, span.end, visitor);
+          if (nonTags === null) nonTags = nonTagSpans(document);
+          const span = adoptedClassSpan(templateText, element.tagName, nonTags);
+          if (span !== null) emitClassAttribute(format, text, span, visitor);
         }
+        continue;
+      }
+      if (attr.name === "class") {
+        emitClassAttribute(
+          format,
+          text,
+          attributeValueSpan(text, location.startOffset, location.endOffset),
+          visitor,
+        );
         continue;
       }
       if (

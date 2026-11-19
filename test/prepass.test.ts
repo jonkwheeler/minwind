@@ -1,4 +1,6 @@
 import assert from "node:assert";
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
@@ -256,5 +258,52 @@ describe("runPrepass error path (R10)", function () {
     await assert.rejects(async function () {
       await runPrepass({ root: siteRoot(), cssEntry: broken });
     });
+  });
+});
+
+describe("runPrepass Astro layouts (R8)", function () {
+  it("renames html and body classes in a layout with frontmatter", async function () {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "minwind-astro-"));
+    try {
+      fs.mkdirSync(path.join(root, "src", "layouts"), { recursive: true });
+      const css = path.join(root, "src", "app.css");
+      fs.writeFileSync(
+        css,
+        `.scroll-smooth { scroll-behavior: smooth; }
+.min-h-screen { min-height: 100vh; }
+`,
+      );
+      fs.writeFileSync(
+        path.join(root, "src", "layouts", "Layout.astro"),
+        `---
+import BaseHead from "../components/BaseHead.astro";
+---
+<!doctype html>
+<html lang="en" class="scroll-smooth">
+  <head>
+    <BaseHead />
+  </head>
+  <body class="min-h-screen">
+    <slot />
+  </body>
+</html>
+`,
+      );
+      const result = await runPrepass({ root, cssEntry: css });
+      const reasons = exclusionReasons(result);
+      for (const token of ["scroll-smooth", "min-h-screen"]) {
+        assert.ok(
+          result.renameTokens.has(token),
+          `${token} must be a rename token`,
+        );
+        assert.strictEqual(reasons.get(token), undefined);
+        assert.strictEqual(
+          result.registry.nameFor(token),
+          hashClassName(token),
+        );
+      }
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 });
