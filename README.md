@@ -61,11 +61,12 @@ theoretical upper bound, with gzip and Brotli estimates.
 
 | Build system                                    | Integration     | Coverage                                    | Trade-off                                           |
 | ----------------------------------------------- | --------------- | ------------------------------------------- | --------------------------------------------------- |
-| Vite, SolidStart, Astro on Vite, SvelteKit      | `minwind()`     | Source modules, emitted CSS, CSS Modules    | Best coverage; production builds only               |
+| Vite, SolidStart, SvelteKit                     | `minwind()`     | Source modules, emitted CSS, CSS Modules    | Best coverage; production builds only               |
+| Astro 7 static sites                            | `minwind/astro` | Emitted HTML, CSS, and provable JS literals | Static output only; no adapter or `security.csp`    |
 | webpack or rspack, including Next.js on webpack | Plugin + loader | Source modules, emitted CSS, CSS Modules    | Loader must run before JSX/TS compilation           |
 | Turbopack, esbuild, Parcel, or another bundler  | `minwind apply` | Emitted HTML, CSS, and provable JS literals | Tailwind plus CSS/SCSS Modules via export-map remap |
 
-All three routes share the same contract:
+All four routes share the same contract:
 
 1. One global registry maps each original class to one generated name.
 2. Every output surface uses that same registry.
@@ -80,9 +81,10 @@ npm install minwind
 ```
 
 Requirements: Node.js 20 or newer. The Tailwind engine needs Tailwind CSS v4.
-Vite is an optional peer used only by the Vite integration. `sass` is an
-optional peer used only when CSS Modules `words` naming inventories
-`*.module.scss` files.
+Vite 5 through 8 is an optional peer used only by the Vite integration. `sass`
+is an optional peer used only when CSS Modules `words` naming inventories
+`*.module.scss` files. Astro is not a peer dependency: `minwind/astro` runs
+inside the Astro 7 your site already installs (see [Astro](#astro)).
 
 ## Vite
 
@@ -127,6 +129,61 @@ when the Modules engine is enabled. Themed `words` naming needs a complete
 Modules inventory; SCSS Modules + `words` needs the optional `sass` peer.
 For webpack/rspack `getLocalIdent` wiring, including dual-stack collision,
 see [webpack and rspack](#webpack-and-rspack).
+
+## Astro
+
+```js
+// astro.config.mjs
+import tailwindcss from "@tailwindcss/vite";
+import { defineConfig } from "astro/config";
+import minwind from "minwind/astro";
+
+export default defineConfig({
+  integrations: [
+    // ...other integrations first
+    minwind({ naming: { strategy: "words", theme: "star-wars" } }),
+  ],
+  vite: {
+    plugins: [tailwindcss()],
+  },
+});
+```
+
+Run the normal `astro build`. Astro compiles `.astro` files before Vite plugins
+see them, so the Vite plugin cannot rename an Astro site. `minwind/astro`
+instead renames the finished static output at the end of the build, with the
+same engine as [`minwind apply`](#post-build-apply). It does nothing during
+`astro dev`, `astro preview`, or `astro sync`.
+
+Options match the Vite plugin's `naming`, `mode`, `engines`, and `exclusions`.
+`cssEntry` resolves against the Astro root and defaults to
+`src/styles/global.css` when that file exists, otherwise `src/app.css`. With
+`words` or `quotes` naming, minwind ranks the built pages by visibility before
+renaming them, so `<html>`, `<body>`, and the first class-bearing elements get
+the first vocabulary words in one build. Pass `prominence: false` to skip the
+ranking.
+
+- Static output only. A configured adapter (the error names it), server
+  output, or `security.csp` fails the build. Adapters run their build hooks
+  before minwind's, and Astro computes CSP hashes before minwind renames.
+- List minwind after your other integrations, so it renames what their build
+  hooks write.
+- On `astro build`, minwind sets `build.inlineStylesheets` to `"never"`,
+  overriding your value, so every stylesheet is a file it can rewrite. If an
+  integration listed after it changes the value back, the build fails.
+- minwind does not rewrite HTML `<style>` blocks such as `<style is:inline>`.
+  If one references a renamed class, the build fails and lists each file and
+  class.
+- `customProperties` is not supported here and fails the build. Use the Vite
+  or webpack plugin for [owned custom properties](#owned-css-custom-properties).
+- `astro add minwind` is not supported: it would register the package root,
+  which is the Vite plugin. Add the integration by hand as above.
+- Node.js 22.23.4 or newer. That floor is Astro's, not minwind's: Astro
+  7.4.13, the version minwind is tested on, refuses older Node.
+- minwind rewrites built CSS and JS in place after Astro has hashed their
+  filenames, so a file's contents can change while its name stays the same.
+  Serve `/_astro/*` with revalidation (for example
+  `Cache-Control: public, max-age=0, must-revalidate`), never `immutable`.
 
 ## webpack and rspack
 
@@ -201,6 +258,11 @@ provable class lists in JavaScript bundles. A token found in an ambiguous
 runtime context keeps its original name everywhere and appears in the report as
 a `runtime-context` exclusion.
 
+`apply` does not rewrite HTML `<style>` blocks. If one references a renamed
+class, apply fails and lists each file and class rather than ship a rule that
+matches nothing. The output is already rewritten by then, so rebuild before
+running apply again.
+
 CSS/SCSS Modules are supported on apply for bundlers without a name-generator
 hook (Turbopack). Pass `--engines css-modules` (or `tailwind,css-modules`).
 Apply proves Module names from CSS Module JS export maps, then rewrites those
@@ -230,19 +292,33 @@ minwind apply <build-directory> [options]
 --quotes <file>        JSON array of sentences; implies quotes naming
 --maps <file>          JSON object of word→spelling; maps naming, or
                        overlay on a dialect id
+--prominence <file|auto>
+                       Deal words or quotes to the most visible classes
+                       first: a manifest from minwind prominence, or auto
+                       to rank this directory's HTML before renaming it
 --dry-run              Report the result without changing the build
 ```
 
 Tailwind-only apply without `--naming` still uses stable hash names. Modules
 apply accepts `hash`, `words`, `quotes`, `maps`, or a dialect id. `--theme` or
 `--vocabulary` for `words`; `--quotes` for `quotes`; `--maps` for `maps`, or
-with a dialect id to overlay those runs onto the mouth.
+with a dialect id to overlay those runs onto the mouth. `--prominence` needs
+`words` or `quotes` naming; see
+[Prominence-aware words](#prominence-aware-words).
 
 ```bash
 npx minwind apply out --root . --engines css-modules --naming words --theme star-wars
 npx minwind apply out --root . --engines css-modules --naming words --vocabulary words.json
 npx minwind apply out --naming boston
+npx minwind apply out --naming words --theme star-wars --prominence auto
 ```
+
+Scripts can run the same thing in-process with `runApply` from `minwind`. Its
+options cover the same ground as the flags (`dir`, `root`, `cssEntry`,
+`naming`, `mode`, `consolidate`, `engines`, `prominence`, `dryRun`) and add
+`exclusions`. `naming` takes the plugin's config object, and `prominence`
+takes `"auto"` or a parsed manifest. It throws on failure and returns
+`{ enabled: false }` under `MINWIND=off`.
 
 ## Verify the result
 
@@ -481,9 +557,9 @@ a punchline that survives any neighbor, use `words` and put the screenshot
 names first in `vocabulary`. That is the usual Easter egg: every inspected
 node is on-theme, none of them have to spell.
 
-The Vite and webpack plugins take `prominence`. `minwind apply` deals
-`quotes` without that manifest, so the most frequent tokens get the start
-of the line rather than the inspector's first nodes.
+The Vite and webpack plugins take `prominence` in `naming`. `minwind apply`
+takes `--prominence <file|auto>`, and `minwind/astro` ranks on its own. See
+[Prominence-aware words](#prominence-aware-words).
 
 ### Prominence-aware words
 
@@ -518,6 +594,17 @@ minwind({
   },
 });
 ```
+
+That two-build flow is for the Vite and webpack plugins, which rename while
+bundling. The routes that rename finished output can rank that output first,
+so one build is enough:
+
+- `minwind/astro` ranks the built pages whenever naming is `words` or
+  `quotes`. Pass `prominence: false` to turn it off.
+- `minwind apply --prominence auto` ranks the output directory's first 32
+  class-bearing elements per page, then renames. For a different window,
+  write a manifest with `minwind prominence <dir> --window <n>` and pass the
+  file instead: `--prominence minwind.prominence.json`.
 
 ## Consolidation
 
@@ -614,7 +701,9 @@ interface for third-party code.
 
 This option is available through the Vite and webpack/rspack integrations.
 `minwind apply` does not accept it because the post-build CLI has no project
-configuration surface on which to declare ownership.
+configuration surface on which to declare ownership. `minwind/astro` rejects
+it: ownership is proven from source, and built Astro output also carries
+`define:vars` styles, `<style is:inline>` blocks, and bundled library strings.
 
 ## Supported source files
 
@@ -632,14 +721,18 @@ JavaScript and supports React projects that place JSX in `.js` files.
 
 ## Flags
 
-- `MINWIND=off` — disable all transforms for the build.
-- `MINWIND_REPORT=0` — skip writing `report.json`.
+- `MINWIND=off` — disable all transforms for the build. The Vite and webpack
+  plugins, `minwind/astro`, and `minwind apply` all honor it, and none of
+  them write `.output/minwind/`. `minwind apply` prints that it is disabled
+  and leaves the directory unchanged. `minwind/astro` still runs its config
+  checks and still sets `inlineStylesheets: "never"`, so on and off builds
+  differ only in class names.
 
 ## Development
 
 ```bash
 pnpm install
-pnpm test          # full suite, including Next/Turbopack Modules apply
+pnpm test          # full suite, including Next/Turbopack and Astro builds
 pnpm test:unit     # skip bundler builds (MINWIND_SKIP_BUILD=1)
 pnpm compare       # Tailwind browser harness; N/A for CSS Modules
 pnpm build         # emit dist/ JavaScript and declarations
@@ -647,8 +740,12 @@ pnpm check         # typecheck, formatting, and tests
 ```
 
 The Next/Turbopack CSS Modules fixture is skipped only when
-`MINWIND_SKIP_BUILD=1`. `pnpm compare` remains Tailwind-only; there is no
-Modules harness site.
+`MINWIND_SKIP_BUILD=1`. The Astro fixture (`test/fixtures/astro-site`) has its
+own lockfile and pins Astro 7.4.13; the suite installs it on first run. It
+needs Node.js 22.23.4 or newer, the floor that Astro version enforces, so it
+is skipped on older Node and when `MINWIND_SKIP_BUILD=1`. The floor moves
+with the pin. `pnpm compare` remains Tailwind-only; there is no Modules
+harness site.
 
 ## License
 
