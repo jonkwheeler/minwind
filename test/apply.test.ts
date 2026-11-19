@@ -1027,6 +1027,121 @@ describe("runApply (apply-site fixture)", function () {
   });
 });
 
+// R7: minwind never rewrites HTML <style> contents, so a renamed class
+// referenced there would silently stop matching. The fixture page gains a
+// <style> block; page is relative to the copied out/ directory.
+function addInlineStyle(dir: string, page: string, css: string): void {
+  const html = fs.readFileSync(path.join(APPLY_SITE, "out", "index.html"));
+  const file = path.join(dir, page);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(
+    file,
+    String(html).replace("</head>", `<style>${css}</style></head>`),
+  );
+}
+
+describe("inline-style tripwire (R7)", function () {
+  it("fails naming the class and the page when a <style> references a renamed class (AE3)", async function () {
+    const dir = await copyApplySiteOut();
+    cleanArtifacts();
+    try {
+      addInlineStyle(dir, "index.html", ".flex{gap:1rem}");
+      await assert.rejects(
+        runApply({ dir, root: APPLY_SITE }),
+        function (error: Error) {
+          assert.ok(
+            error.message.includes(`${path.join(dir, "index.html")}: .flex`),
+            error.message,
+          );
+          return true;
+        },
+      );
+      assert.ok(!fs.existsSync(artifactsDir()));
+    } finally {
+      cleanArtifacts();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("passes when the referenced class kept its original name", async function () {
+    const dir = await copyApplySiteOut();
+    cleanArtifacts();
+    try {
+      addInlineStyle(dir, "index.html", ".flex{gap:1rem}");
+      // A call argument the bundle pass cannot rewrite keeps flex original
+      // everywhere (runtime context).
+      fs.appendFileSync(
+        path.join(dir, "assets", "app.js"),
+        '\nr(document.body, "flex");\n',
+      );
+      const outcome = await runApply({ dir, root: APPLY_SITE });
+      assert.ok(outcome.enabled);
+      assert.deepStrictEqual(outcome.result.keptOriginal, ["flex"]);
+      assert.ok(
+        readTree(dir)["index.html"].includes("<style>.flex{gap:1rem}</style>"),
+      );
+    } finally {
+      cleanArtifacts();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("passes a <style> with only non-renamed classes and element selectors", async function () {
+    const dir = await copyApplySiteOut();
+    cleanArtifacts();
+    try {
+      addInlineStyle(
+        dir,
+        "index.html",
+        "body{margin:0}ul{display:flex}.card .title{color:red}",
+      );
+      const outcome = await runApply({ dir, root: APPLY_SITE });
+      assert.ok(outcome.enabled);
+      assert.ok(
+        readTree(dir)["index.html"].includes(
+          `<ul class="${hashClassName("flex")} ${hashClassName("flex-col")}">`,
+        ),
+      );
+    } finally {
+      cleanArtifacts();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("lists every offending page in one error from the CLI", async function () {
+    const dir = await copyApplySiteOut();
+    cleanArtifacts();
+    try {
+      addInlineStyle(dir, "index.html", ".flex{gap:1rem}");
+      addInlineStyle(
+        dir,
+        path.join("about", "index.html"),
+        "@media (min-width:40rem){.p-4{padding:2rem}}",
+      );
+      await assert.rejects(
+        runApplyCli([dir, "--root", APPLY_SITE]),
+        function (error: Error) {
+          assert.ok(
+            error.message.includes(`${path.join(dir, "index.html")}: .flex`),
+            error.message,
+          );
+          assert.ok(
+            error.message.includes(
+              `${path.join(dir, "about", "index.html")}: .p-4`,
+            ),
+            error.message,
+          );
+          return true;
+        },
+      );
+      assert.ok(!fs.existsSync(artifactsDir()));
+    } finally {
+      cleanArtifacts();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("apply --prominence", function () {
   it("auto deals the first word to the first class-bearing element", async function () {
     const vocabulary = writeVocabulary();

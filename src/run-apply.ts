@@ -1,7 +1,10 @@
+import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
+import { ident, parse, type CssNode } from "css-tree";
 import { applyBuildOutput, filterRegistry, type ApplyResult } from "./apply.js";
 import { assertConsolidatedNames } from "./consolidate.js";
+import { childArray } from "./css-util.js";
 import {
   assertSharedCollision,
   prepareModulesNaming,
@@ -14,7 +17,7 @@ import {
   type MinwindEngineId,
   type MinwindMode,
 } from "./flags.js";
-import type { ExclusionConfig } from "./names.js";
+import type { ExclusionConfig, NameRegistry } from "./names.js";
 import { isThemedNaming, type NamingConfig } from "./naming.js";
 import { emptyPrepassResult, runPrepass } from "./prepass.js";
 import {
@@ -23,6 +26,7 @@ import {
   type ProminenceManifest,
 } from "./prominence.js";
 import { buildRenameMap, buildReport, writeArtifacts } from "./report.js";
+import { compareCodeUnits } from "./util.js";
 
 // The post-build engine run behind `minwind apply`, callable in-process:
 // runs the same pre-pass the plugins run against the site source, rewrites
@@ -68,6 +72,70 @@ export type RunApplyResult =
       // Warnings for the caller to print.
       notices: Array<string>;
     };
+
+// The R7 tripwire (KTD8). Nothing rewrites HTML <style> contents, and the
+// leak check blanks them (maskSfcStyleContent: a utility word there is
+// usually a CSS value), so a renamed class referenced in one would stop
+// matching without a warning. This is the span the mask blanks.
+const STYLE_CONTENT = /<style\b[^>]*>([\s\S]*?)<\/style\s*>/gi;
+
+function htmlFilesIn(directory: string): Array<string> {
+  const files: Array<string> = [];
+  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    const full = path.join(directory, entry.name);
+    if (entry.isDirectory()) files.push(...htmlFilesIn(full));
+    else if (entry.isFile() && entry.name.endsWith(".html")) files.push(full);
+  }
+  return files;
+}
+
+// Decoded class names in a stylesheet's selectors. css-tree 3.2.1 leaves a
+// nested rule whose selector does not start with `&` as a Raw node (see
+// transform-css.ts), so Raw text reparses as rules. A Raw value is a slice
+// of the text it came from and only a strictly shorter one reparses, so the
+// recursion ends.
+function collectSelectorClasses(css: string, out: Set<string>): void {
+  function visit(node: CssNode): void {
+    if (node.type === "ClassSelector" && node.name !== undefined) {
+      out.add(ident.decode(node.name));
+    } else if (
+      node.type === "Raw" &&
+      node.value !== undefined &&
+      node.value.length < css.length
+    ) {
+      collectSelectorClasses(node.value, out);
+    }
+    for (const child of [node.prelude, node.block, ...childArray(node)]) {
+      if (child != null) visit(child);
+    }
+  }
+  visit(parse(css, { onParseError: function () {} }));
+}
+
+function assertInlineStylesUnrenamed(
+  dir: string,
+  registry: NameRegistry,
+): void {
+  const matches: Array<string> = [];
+  for (const file of htmlFilesIn(dir).sort(compareCodeUnits)) {
+    const classes = new Set<string>();
+    for (const match of fs.readFileSync(file, "utf8").matchAll(STYLE_CONTENT)) {
+      collectSelectorClasses(match[1], classes);
+    }
+    for (const token of Array.from(classes).sort(compareCodeUnits)) {
+      if (registry.nameFor(token) !== undefined) {
+        matches.push(`  ${file}: .${token}`);
+      }
+    }
+  }
+  if (matches.length > 0) {
+    throw new Error(
+      "minwind: HTML <style> blocks reference renamed classes. minwind" +
+        " does not rewrite inline styles, so these rules would match" +
+        ` nothing:\n${matches.join("\n")}`,
+    );
+  }
+}
 
 export async function runApply(
   options: RunApplyOptions,
@@ -143,15 +211,20 @@ export async function runApply(
     dryRun,
     modules,
   });
+  // The registry view after the skip-and-warn drops: what was renamed.
+  const effective = filterRegistry(
+    prepass.registry,
+    new Set(result.keptOriginal),
+  );
+  // Fails before the artifacts publish. The output files are already
+  // rewritten by then (applyBuildOutput writes as it goes), but the build
+  // fails instead of shipping.
+  assertInlineStylesUnrenamed(options.dir, effective);
   if (!dryRun) {
     // Artifacts publish to the site root's .output/minwind — the same
     // convention as the plugins, so `minwind report` finds them and the
     // deployable output directory stays clean. The report's registry view
     // reflects the skip-and-warn drops as runtime-context exclusions.
-    const effective = filterRegistry(
-      prepass.registry,
-      new Set(result.keptOriginal),
-    );
     const report = buildReport({
       registry: effective,
       verdicts: prepass.consolidationVerdicts,
