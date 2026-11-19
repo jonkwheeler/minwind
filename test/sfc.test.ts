@@ -271,6 +271,24 @@ const cls = cn("flex", "items-center")
     assert.ok(result.code.includes(`"${nameOf("p-4")}": active`));
   });
 
+  it("renames class:list literals written across lines", function () {
+    const result = transform(
+      `<div
+  class:list={[
+    "flex items-center",
+    { "p-4": active },
+  ]}
+>x</div>
+`,
+      "/site/src/Card.astro",
+    );
+    assert.ok(result !== null);
+    assert.ok(
+      result.code.includes(`"${nameOf("flex")} ${nameOf("items-center")}"`),
+    );
+    assert.ok(result.code.includes(`"${nameOf("p-4")}": active`));
+  });
+
   it("poisons mixed class templates", function () {
     const result = transform(
       `<div class="flex {modifier}">x</div>
@@ -595,6 +613,124 @@ const open = true;
       renamed: [],
       runtime: ["scroll-smooth", "antialiased", "min-h-screen"],
     });
+  });
+});
+
+// prettier-plugin-astro breaks long expressions across lines; each must
+// classify exactly like its one-line form.
+describe("Astro expressions written across lines", function () {
+  it("reports class:list array and object tokens like the one-line form", function () {
+    const oneLine = classContexts(
+      `<span class:list={["inline-flex px-3", { "bg-sky-100": tone === "info" }]}>x</span>\n`,
+    );
+    const multiLine = classContexts(`<span
+  class:list={[
+    "inline-flex px-3",
+    { "bg-sky-100": tone === "info" },
+  ]}
+>x</span>
+`);
+    assert.ok(oneLine.renamed.includes("inline-flex px-3"));
+    assert.ok(oneLine.renamed.includes("bg-sky-100"));
+    assert.deepStrictEqual(multiLine, oneLine);
+  });
+
+  it("reports every class in the astro fixture's Badge.astro", function () {
+    // A verbatim copy of test/fixtures/astro-site/src/components/Badge.astro.
+    const result = classContexts(`---
+interface Props {
+  label: string;
+  tone: "info" | "warn";
+}
+
+const { label, tone } = Astro.props;
+---
+
+<span
+  data-badge={tone}
+  class:list={[
+    "inline-flex items-center rounded-full px-3 py-1 text-xs font-medium",
+    {
+      "bg-sky-100 text-sky-800": tone === "info",
+      "bg-amber-100 text-amber-800": tone === "warn",
+    },
+  ]}
+>
+  {label}
+</span>
+`);
+    for (const classes of [
+      "inline-flex items-center rounded-full px-3 py-1 text-xs font-medium",
+      "bg-sky-100 text-sky-800",
+      "bg-amber-100 text-amber-800",
+    ]) {
+      assert.ok(result.renamed.includes(classes), classes);
+    }
+    assert.deepStrictEqual(result.runtime, []);
+  });
+
+  it("keeps a class={...} ternary unprovable", function () {
+    const oneLine = classContexts(
+      `<div class={open ? "flex p-4" : "items-center"}>x</div>\n`,
+    );
+    const multiLine = classContexts(`<div
+  class={open
+    ? "flex p-4"
+    : "items-center"}
+>x</div>
+`);
+    assert.deepStrictEqual(oneLine, {
+      renamed: [],
+      runtime: ["flex p-4", "items-center"],
+    });
+    assert.deepStrictEqual(multiLine, oneLine);
+  });
+
+  it("keeps an adopted <body> class={...} ternary unprovable", function () {
+    const result = classContexts(`---
+import BaseHead from "../components/BaseHead.astro";
+---
+<!doctype html>
+<html lang="en">
+  <head>
+    <BaseHead />
+  </head>
+  <body
+    class={open
+      ? "min-h-screen"
+      : "antialiased"}
+  >
+    <slot />
+  </body>
+</html>
+`);
+    assert.deepStrictEqual(result, {
+      renamed: [],
+      runtime: ["min-h-screen", "antialiased"],
+    });
+  });
+
+  it("leaves elements around a content expression unchanged", function () {
+    // The expression's own markup is masked with it, as on one line.
+    const oneLine = classContexts(
+      `<ul class="flex flex-col">{items.map((item) => (<li class="p-4">{item}</li>))}</ul>
+<p class="mb-16">after</p>
+`,
+    );
+    const multiLine = classContexts(`<ul class="flex flex-col">
+  {items.map((item) => (
+    <li class="p-4">
+      {item}
+    </li>
+  ))}
+</ul>
+<p class="mb-16">after</p>
+`);
+    assert.deepStrictEqual(oneLine, {
+      renamed: ["flex flex-col", "mb-16"],
+      runtime: [],
+    });
+    assert.deepStrictEqual(multiLine, oneLine);
   });
 });
 

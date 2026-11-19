@@ -139,12 +139,14 @@ function maskSpans(
 // Svelte and Astro interpolate {expression} runs in templates — including
 // inside UNQUOTED attribute values (class:list={["a", { "b": c }]}), whose
 // spaces an HTML parser reads as attribute boundaries. Fill each run's
-// contents with x's (braces kept, quote- and escape-aware, newlines
-// preserved — spaces would re-split the value) so parse5 sees a single
-// space-free value; the run's original bytes are recovered from the
-// unmasked text at the same offsets. Vue needs no masking: its attributes
-// are always quoted and its bindings always expressions. An unterminated
-// run (a stray brace in text) is left alone.
+// contents with x's (braces kept, quote- and escape-aware) so parse5 sees a
+// single whitespace-free value; the run's original bytes are recovered from
+// the unmasked text at the same offsets. Newlines become x's too: a run
+// formatted across lines would otherwise end an unquoted value at its first
+// line break. Nothing reads lines from the masked text — warnings locate
+// offsets in the original. Vue needs no masking: its attributes are always
+// quoted and its bindings always expressions. An unterminated run (a stray
+// brace in text) is left alone.
 function maskBraceExpressions(text: string): string {
   const chars = text.split("");
   let i = 0;
@@ -181,9 +183,7 @@ function maskBraceExpressions(text: string): string {
       i += 1;
       continue;
     }
-    for (let k = i + 1; k < end; k += 1) {
-      if (chars[k] !== "\n" && chars[k] !== "\r") chars[k] = "x";
-    }
+    for (let k = i + 1; k < end; k += 1) chars[k] = "x";
     i = end + 1;
   }
   return chars.join("");
