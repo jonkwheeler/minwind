@@ -320,25 +320,15 @@ describe("astro:config:done", function () {
     }, /inlineStylesheets/);
   });
 
-  it("rejects a srcDir other than src/, naming it", function () {
+  it("accepts a srcDir other than src/ (AE10)", function () {
     const integration = minwind();
     setup(integration, "build");
-    const srcDir = path.join(os.tmpdir(), "app");
-    assert.throws(
-      function () {
-        integration.hooks["astro:config:done"]({
-          config: configFor(os.tmpdir(), {
-            srcDir: pathToFileURL(srcDir + path.sep),
-          }),
-          buildOutput: "static",
-        });
-      },
-      function (error: Error) {
-        assert.match(error.message, /default srcDir \(src\/\) only/);
-        assert.ok(error.message.includes(`"${srcDir}"`), error.message);
-        return true;
-      },
-    );
+    integration.hooks["astro:config:done"]({
+      config: configFor(os.tmpdir(), {
+        srcDir: pathToFileURL(path.join(os.tmpdir(), "app") + path.sep),
+      }),
+      buildOutput: "static",
+    });
   });
 
   it("still enforces the config under MINWIND=off (R5)", async function () {
@@ -534,6 +524,92 @@ describe("astro:build:done", function () {
         assert.match(error.message, /index\.html: \.flex/);
         return true;
       });
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("custom srcDir (R13)", function () {
+  // makeSite's site with its sources under app/ and no src/ directory.
+  // cssEntry is relative to app/.
+  async function makeAppSite(
+    cssEntry: string = path.join("styles", "global.css"),
+  ): Promise<string> {
+    const root = await makeSite(path.join("src", cssEntry));
+    fs.renameSync(path.join(root, "src"), path.join(root, "app"));
+    return root;
+  }
+
+  function buildFromApp(
+    options: MinwindAstroOptions,
+    root: string,
+  ): Promise<Logs> {
+    const integration = minwind(options);
+    setup(integration, "build");
+    integration.hooks["astro:config:done"]({
+      config: configFor(root, {
+        srcDir: pathToFileURL(path.join(root, "app") + path.sep),
+      }),
+      buildOutput: "static",
+    });
+    return buildDone(integration, root);
+  }
+
+  it("renames the classes of app/pages/index.astro and its layout (AE10)", async function () {
+    const root = await makeAppSite();
+    try {
+      const logs = await buildFromApp({ mode: "morph" }, root);
+      const html = builtPage(root);
+      assert.ok(
+        html.includes(
+          `<html lang="en" class="${hashClassName("scroll-smooth")}">`,
+        ),
+        html,
+      );
+      assert.ok(
+        html.includes(
+          `<ul class="${hashClassName("flex")} ${hashClassName("flex-col")}">`,
+        ),
+        html,
+      );
+      assert.ok(
+        logs.info.some(function (line) {
+          return /renamed 5 class\(es\)/.test(line);
+        }),
+        logs.info.join("\n"),
+      );
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to app/app.css when app/styles/global.css is absent", async function () {
+    const root = await makeAppSite("app.css");
+    try {
+      await buildFromApp({}, root);
+      assert.ok(
+        builtPage(root).includes(
+          `<html lang="en" class="${hashClassName("scroll-smooth")}">`,
+        ),
+      );
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("still resolves an explicit cssEntry against the Astro root", async function () {
+    const root = await makeAppSite(path.join("styles", "site.css"));
+    try {
+      await buildFromApp(
+        { cssEntry: path.join("app", "styles", "site.css") },
+        root,
+      );
+      assert.ok(
+        builtPage(root).includes(
+          `<html lang="en" class="${hashClassName("scroll-smooth")}">`,
+        ),
+      );
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }

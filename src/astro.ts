@@ -21,8 +21,8 @@ import { runApply, type RunApplyResult } from "./run-apply.js";
 
 export interface MinwindAstroOptions {
   // Tailwind CSS entry compiled by the pre-pass, resolved against the Astro
-  // root. Defaults to src/styles/global.css when it exists, otherwise
-  // src/app.css.
+  // root. Defaults to <srcDir>/styles/global.css when it exists, otherwise
+  // <srcDir>/app.css.
   cssEntry?: string;
   // As in the Vite plugin: content-hash naming by default; words, quotes,
   // dialect, and maps strategies are opt-in.
@@ -126,21 +126,16 @@ function assertRenameableConfig(
         " changed it; list minwind after that integration.",
     );
   }
-  const srcDir = path.resolve(fileURLToPath(config.srcDir));
-  if (srcDir !== path.join(fileURLToPath(config.root), "src")) {
-    throw new Error(
-      "minwind/astro supports Astro's default srcDir (src/) only, but" +
-        ` the config sets "${srcDir}". minwind's pre-pass reads class` +
-        " names and lists from <root>/src, so it would miss the components" +
-        " in another directory.",
-    );
-  }
 }
 
-function resolveCssEntry(root: string, cssEntry: string | undefined): string {
+function resolveCssEntry(
+  root: string,
+  sourceDir: string,
+  cssEntry: string | undefined,
+): string {
   if (cssEntry !== undefined) return path.resolve(root, cssEntry);
-  const global = path.join(root, "src", "styles", "global.css");
-  return fs.existsSync(global) ? global : path.join(root, "src", "app.css");
+  const global = path.join(sourceDir, "styles", "global.css");
+  return fs.existsSync(global) ? global : path.join(sourceDir, "app.css");
 }
 
 function logSummary(
@@ -195,6 +190,7 @@ export default function minwind(
   // command, so the later hooks read the one astro:config:setup stored.
   let command: string | undefined;
   let root: string | undefined;
+  let sourceDir: string | undefined;
   let cssEntry: string | undefined;
 
   return {
@@ -219,12 +215,17 @@ export default function minwind(
         if (command !== "build") return;
         assertRenameableConfig(params.config, params.buildOutput);
         root = fileURLToPath(params.config.root);
-        cssEntry = resolveCssEntry(root, options.cssEntry);
+        sourceDir = path.resolve(fileURLToPath(params.config.srcDir));
+        cssEntry = resolveCssEntry(root, sourceDir, options.cssEntry);
       },
 
       "astro:build:done": async function (params) {
         if (command !== "build") return;
-        if (root === undefined || cssEntry === undefined) {
+        if (
+          root === undefined ||
+          sourceDir === undefined ||
+          cssEntry === undefined
+        ) {
           throw new Error(
             "minwind/astro: astro:build:done ran before astro:config:done",
           );
@@ -234,6 +235,7 @@ export default function minwind(
         const outcome = await runApply({
           dir: fileURLToPath(params.dir),
           root,
+          sourceDir,
           cssEntry,
           naming: options.naming,
           exclusions: options.exclusions,

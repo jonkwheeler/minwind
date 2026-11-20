@@ -55,6 +55,8 @@ export interface PrepassOptions {
   // markup classes, third-party widget classes). Defaults to none.
   exclusions?: ExclusionConfig;
   customProperties?: CustomPropertiesConfig;
+  // Directory the source scan walks. Defaults to <root>/src.
+  sourceDir?: string;
 }
 
 export interface PrepassResult {
@@ -86,7 +88,7 @@ interface SourceScan {
   literalCounts: Map<string, ListFrequency>;
 }
 
-async function sourceModulePaths(root: string): Promise<Array<string>> {
+async function sourceModulePaths(sourceDir: string): Promise<Array<string>> {
   const found: Array<string> = [];
   async function walk(directory: string): Promise<void> {
     const entries = await readdir(directory, { withFileTypes: true });
@@ -108,7 +110,7 @@ async function sourceModulePaths(root: string): Promise<Array<string>> {
     // final found.sort() in sourceModulePaths restores a canonical order.
     await Promise.all(children);
   }
-  await walk(path.join(root, "src"));
+  await walk(sourceDir);
   return found.sort();
 }
 
@@ -209,7 +211,7 @@ interface SourceInventory {
   texts: Array<string>;
 }
 
-async function scanSources(root: string): Promise<SourceInventory> {
+async function scanSources(sourceDir: string): Promise<SourceInventory> {
   const scan: SourceScan = {
     renameTokens: new Set<string>(),
     runtimeTokens: new Set<string>(),
@@ -217,7 +219,7 @@ async function scanSources(root: string): Promise<SourceInventory> {
     listCounts: new Map<string, ListFrequency>(),
     literalCounts: new Map<string, ListFrequency>(),
   };
-  const paths = await sourceModulePaths(root);
+  const paths = await sourceModulePaths(sourceDir);
   // Reads batch in parallel; the CPU-bound scans stay sequential in path
   // order, and their writes (Sets, Maps, count increments) commute anyway.
   const texts = await Promise.all(
@@ -241,7 +243,9 @@ export async function runPrepass(
   const stylesheet = compiled.stylesheet;
 
   const stylesheetModel = modelStylesheet(stylesheet);
-  const sourceInventory = await scanSources(options.root);
+  const sourceInventory = await scanSources(
+    options.sourceDir ?? path.join(options.root, "src"),
+  );
   const scan = sourceInventory.scan;
 
   const hasher = createHasher(hashLengthOf(options.naming));

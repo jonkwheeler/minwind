@@ -261,6 +261,59 @@ describe("runPrepass error path (R10)", function () {
   });
 });
 
+describe("runPrepass sourceDir (R13, KTD13)", function () {
+  // scroll-smooth is used only under src/, min-h-screen only under app/.
+  function makeTwoDirSite(): string {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "minwind-source-dir-"));
+    fs.mkdirSync(path.join(root, "src"));
+    fs.mkdirSync(path.join(root, "app"));
+    fs.writeFileSync(
+      path.join(root, "app.css"),
+      `.scroll-smooth { scroll-behavior: smooth; }
+.min-h-screen { min-height: 100vh; }
+`,
+    );
+    fs.writeFileSync(
+      path.join(root, "src", "index.astro"),
+      '<div class="scroll-smooth"></div>\n',
+    );
+    fs.writeFileSync(
+      path.join(root, "app", "index.astro"),
+      '<div class="min-h-screen"></div>\n',
+    );
+    return root;
+  }
+
+  it("scans only the given sourceDir", async function () {
+    const root = makeTwoDirSite();
+    try {
+      const result = await runPrepass({
+        root,
+        cssEntry: path.join(root, "app.css"),
+        sourceDir: path.join(root, "app"),
+      });
+      assert.deepStrictEqual(renamedTokens(result), ["min-h-screen"]);
+      assert.ok(!result.sourceTokens.has("scroll-smooth"));
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("scans <root>/src without one", async function () {
+    const root = makeTwoDirSite();
+    try {
+      const result = await runPrepass({
+        root,
+        cssEntry: path.join(root, "app.css"),
+      });
+      assert.deepStrictEqual(renamedTokens(result), ["scroll-smooth"]);
+      assert.ok(!result.sourceTokens.has("min-h-screen"));
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("runPrepass Astro layouts (R8)", function () {
   it("renames html and body classes in a layout with frontmatter", async function () {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "minwind-astro-"));

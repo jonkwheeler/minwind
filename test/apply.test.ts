@@ -1044,6 +1044,59 @@ describe("runApply (apply-site fixture)", function () {
   });
 });
 
+describe("runApply sourceDir (R13)", function () {
+  it("scans sourceDir and compiles <sourceDir>/app.css by default", async function () {
+    // No src/ directory: the sources and the CSS entry live under app/.
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "minwind-source-dir-"));
+    function write(relative: string, text: string): void {
+      const file = path.join(root, relative);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, text);
+    }
+    try {
+      write(
+        path.join("app", "app.css"),
+        "@layer utilities {\n  .flex { display: flex; }\n" +
+          "  .gap-4 { gap: 1rem; }\n}\n",
+      );
+      write(
+        path.join("app", "pages", "index.astro"),
+        '<section class="flex gap-4">a</section>\n',
+      );
+      const compiled = await compileTailwindStylesheet({
+        cssEntry: path.join(root, "app", "app.css"),
+        root,
+      });
+      write(path.join("dist", "_astro", "index.css"), compiled.stylesheet);
+      write(
+        path.join("dist", "index.html"),
+        '<!DOCTYPE html><html><head><link rel="stylesheet"' +
+          ' href="/_astro/index.css"></head><body>' +
+          '<section class="flex gap-4">a</section></body></html>',
+      );
+      const outcome = await runApply({
+        dir: path.join(root, "dist"),
+        root,
+        sourceDir: path.join(root, "app"),
+      });
+      assert.ok(outcome.enabled);
+      assert.strictEqual(outcome.renamed, 2);
+      const html = fs.readFileSync(
+        path.join(root, "dist", "index.html"),
+        "utf8",
+      );
+      assert.ok(
+        html.includes(
+          `<section class="${hashClassName("flex")} ${hashClassName("gap-4")}">`,
+        ),
+        html,
+      );
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
 // Consolidation judges member removability from source class lists, but apply
 // rewrites the built output, whose lists can differ: an Astro component that
 // merges a class prop renders `<Card class="flex gap-4">` as

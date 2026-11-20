@@ -37,10 +37,12 @@ import { compareCodeUnits } from "./util.js";
 export interface RunApplyOptions {
   // Emitted build output, rewritten in place.
   dir: string;
-  // Site root: the pre-pass scans its source, and the report and map land
-  // in <root>/.output/minwind.
+  // Site root: the report and map land in <root>/.output/minwind.
   root: string;
-  // Tailwind CSS entry (default: <root>/src/app.css).
+  // Source directory the pre-pass scans for class names and lists
+  // (default: <root>/src).
+  sourceDir?: string;
+  // Tailwind CSS entry (default: <sourceDir>/app.css).
   cssEntry?: string;
   naming?: NamingConfig;
   // Classes that keep their names everywhere (runtime-injected or
@@ -148,11 +150,13 @@ export async function runApply(
         : options.prominence;
     naming = { ...naming, prominence: manifest.tokens };
   }
+  const sourceDir = options.sourceDir ?? path.join(options.root, "src");
   const prepass = isModulesOnly(flags.engines)
     ? emptyPrepassResult()
     : await runPrepass({
         root: options.root,
-        cssEntry: options.cssEntry ?? path.join(options.root, "src", "app.css"),
+        sourceDir,
+        cssEntry: options.cssEntry ?? path.join(sourceDir, "app.css"),
         naming,
         exclusions: options.exclusions,
       });
