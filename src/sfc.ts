@@ -21,7 +21,9 @@ import {
 // static runs and nested string literals poison the token everywhere,
 // mirroring the template-literal rule. Markup inside Astro content
 // expressions ({items.map((item) => <li class="...">)}) is parsed as TSX and
-// walked with the JSX rules.
+// walked with the JSX rules. An Astro frontmatter const holding a class
+// string reads like a class attribute when every reference to it is a class
+// position (KTD5).
 //
 // Both walks run against whitespace masks of the original file — script
 // contents blanked for the template parse, everything else blanked for the
@@ -56,6 +58,8 @@ interface ContentRegion {
   contentStart: number;
   contentEnd: number;
   lang: string;
+  // The Astro frontmatter, as opposed to a <script> block.
+  frontmatter: boolean;
 }
 
 const SCRIPT_TAG = /<script\b([^>]*)>([\s\S]*?)<\/script\s*>/gi;
@@ -81,6 +85,7 @@ function findScriptRegions(
         contentStart,
         contentEnd: contentStart + content.length,
         lang: "ts",
+        frontmatter: true,
       });
     }
   }
@@ -100,6 +105,7 @@ function findScriptRegions(
           : format === "astro"
             ? "ts"
             : "js",
+      frontmatter: false,
     });
   }
   return regions;
@@ -538,20 +544,22 @@ function walkBindingExpression(
   );
 }
 
-// KTD4: an Astro content run that holds markup is parsed alone as TSX,
-// wrapped as `(` + content + `)`, and walked with the JSX rules: class="..."
-// is a static class attribute, class={expr} poisons what it cannot prove,
-// and class:list gets cn() semantics. The copy closes each unclosed void
-// element (<img ...> becomes <img .../>), and spans map back through the
-// inserted bytes. A run TSX still rejects (an HTML comment, an unquoted
-// attribute value) emits nothing: the output pass on the Astro route reads
-// the built markup either way.
-function walkExpressionMarkup(
+// An Astro brace run parsed alone as TSX. toOriginal maps a position in the
+// parse back into the file.
+interface ParsedRun {
+  sourceFile: ts.SourceFile;
+  toOriginal: (position: number) => number;
+}
+
+// KTD4: a brace run is parsed alone as TSX, wrapped as `(` + content + `)`.
+// The copy closes each unclosed void element (<img ...> becomes <img .../>),
+// and spans map back through the inserted bytes. A run TSX still rejects (an
+// HTML comment, an unquoted attribute value) parses to null.
+function parseBraceRun(
   filePath: string,
   templateText: string,
   run: BraceRun,
-  visitor: ClassContextVisitor,
-): void {
+): ParsedRun | null {
   const contentStart = run.start + 1;
   // Ascending offsets in the copy where a `/` was inserted.
   const inserted: Array<number> = [];
@@ -569,18 +577,199 @@ function walkExpressionMarkup(
   const parsed = sourceFile as unknown as {
     parseDiagnostics: ReadonlyArray<ts.Diagnostic>;
   };
-  if (parsed.parseDiagnostics.length > 0) return;
-  walkClassContexts(
+  if (parsed.parseDiagnostics.length > 0) return null;
+  return {
     sourceFile,
-    offsetVisitor(visitor, function (position) {
+    toOriginal: function (position) {
       let before = 1;
       for (const at of inserted) {
         if (at >= position) break;
         before += 1;
       }
       return contentStart + position - before;
-    }),
+    },
+  };
+}
+
+// KTD4: a content run that holds markup is walked with the JSX rules:
+// class="..." is a static class attribute, class={expr} poisons what it
+// cannot prove, and class:list gets cn() semantics. A run TSX rejects emits
+// nothing: the output pass on the Astro route reads the built markup either
+// way.
+function walkExpressionMarkup(
+  parsed: ParsedRun | null,
+  visitor: ClassContextVisitor,
+): void {
+  if (parsed === null) return;
+  walkClassContexts(
+    parsed.sourceFile,
+    offsetVisitor(visitor, parsed.toOriginal),
     { astroClassList: true },
+  );
+}
+
+// KTD5: a frontmatter const that may hold a class string, with what the
+// reference count has found so far.
+interface ClassConstant {
+  declaration: ts.Identifier;
+  literal: ts.StringLiteral | ts.NoSubstitutionTemplateLiteral;
+  classPositions: number;
+  otherReference: boolean;
+}
+
+// Eligible: a top-level, non-exported const declared inside the
+// frontmatter, initialized with a string literal or a template literal
+// without substitutions. A later declaration of the same name is not the
+// declaration, so the count reads it as an other reference.
+function frontmatterConstants(
+  sourceFile: ts.SourceFile,
+  frontmatter: ContentRegion,
+): Map<string, ClassConstant> {
+  const constants = new Map<string, ClassConstant>();
+  for (const statement of sourceFile.statements) {
+    if (!ts.isVariableStatement(statement)) continue;
+    const at = statement.getStart(sourceFile);
+    if (at < frontmatter.contentStart || at >= frontmatter.contentEnd) {
+      continue;
+    }
+    if ((statement.modifiers?.length ?? 0) > 0) continue;
+    const list = statement.declarationList;
+    if ((list.flags & ts.NodeFlags.BlockScoped) !== ts.NodeFlags.Const) {
+      continue;
+    }
+    for (const declaration of list.declarations) {
+      const name = declaration.name;
+      const literal = declaration.initializer;
+      if (!ts.isIdentifier(name) || constants.has(name.text)) continue;
+      if (
+        literal === undefined ||
+        !(
+          ts.isStringLiteral(literal) ||
+          ts.isNoSubstitutionTemplateLiteral(literal)
+        )
+      ) {
+        continue;
+      }
+      constants.set(name.text, {
+        declaration: name,
+        literal,
+        classPositions: 0,
+        otherReference: false,
+      });
+    }
+  }
+  return constants;
+}
+
+// How a brace run sits in the template: the whole value of a class or a
+// class:list attribute.
+type RunRole = "class" | "class-list";
+
+function isClassListName(name: ts.JsxAttributeName): boolean {
+  return (
+    ts.isJsxNamespacedName(name) &&
+    name.namespace.text === "class" &&
+    name.name.text === "list"
+  );
+}
+
+// KTD5's reference count over one parse. A reference is the name as a whole
+// identifier, not after `.`, other than the declaration. It is a class
+// position when it is the whole value of class={X}, the whole class:list
+// expression or an array element at any depth inside it, or a direct cn()
+// argument, cn named as walkClassContexts names it. role says the parse
+// itself is the value of a class or class:list attribute.
+function countConstantReferences(
+  sourceFile: ts.SourceFile,
+  constants: ReadonlyMap<string, ClassConstant>,
+  role: RunRole | undefined,
+): void {
+  const cnNames = new Set(["cn"]);
+  for (const statement of sourceFile.statements) {
+    if (!ts.isImportDeclaration(statement)) continue;
+    const bindings = statement.importClause?.namedBindings;
+    if (bindings === undefined || !ts.isNamedImports(bindings)) continue;
+    for (const element of bindings.elements) {
+      const imported = element.propertyName?.text ?? element.name.text;
+      if (imported === "cn") cnNames.add(element.name.text);
+    }
+  }
+  const classPositions = new Set<ts.Node>();
+  function addClassList(expression: ts.Expression): void {
+    if (ts.isIdentifier(expression)) {
+      classPositions.add(expression);
+    } else if (ts.isArrayLiteralExpression(expression)) {
+      for (const element of expression.elements) addClassList(element);
+    }
+  }
+  const first = sourceFile.statements[0];
+  if (
+    role !== undefined &&
+    first !== undefined &&
+    ts.isExpressionStatement(first) &&
+    ts.isParenthesizedExpression(first.expression)
+  ) {
+    const value = first.expression.expression;
+    if (role === "class-list") addClassList(value);
+    else if (ts.isIdentifier(value)) classPositions.add(value);
+  }
+  // A parent marks its class positions before the walk reaches them.
+  function visit(node: ts.Node): void {
+    if (ts.isIdentifier(node)) {
+      const constant = constants.get(node.text);
+      if (constant === undefined || node === constant.declaration) return;
+      const parent = node.parent;
+      if (
+        (ts.isPropertyAccessExpression(parent) && parent.name === node) ||
+        (ts.isQualifiedName(parent) && parent.right === node)
+      ) {
+        return;
+      }
+      if (classPositions.has(node)) constant.classPositions += 1;
+      else constant.otherReference = true;
+      return;
+    }
+    if (
+      ts.isCallExpression(node) &&
+      ts.isIdentifier(node.expression) &&
+      cnNames.has(node.expression.text)
+    ) {
+      for (const argument of node.arguments) {
+        if (ts.isIdentifier(argument)) classPositions.add(argument);
+      }
+    } else if (
+      ts.isJsxAttribute(node) &&
+      node.initializer !== undefined &&
+      ts.isJsxExpression(node.initializer) &&
+      node.initializer.expression !== undefined
+    ) {
+      const value = node.initializer.expression;
+      if (isClassListName(node.name)) {
+        addClassList(value);
+      } else if (
+        ts.isIdentifier(node.name) &&
+        node.name.text === "class" &&
+        ts.isIdentifier(value)
+      ) {
+        classPositions.add(value);
+      }
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(sourceFile);
+}
+
+// The names as whole words in a run's text, which picks the runs worth
+// parsing and stands in for a parse TSX rejects. A `.` before a name does
+// not exclude it here: the spread in [...card] is a reference, and only the
+// parse tells it from member access.
+function constantNamePattern(names: Iterable<string>): RegExp {
+  const alternatives = Array.from(names, function (name) {
+    return name.replace(/\$/g, "\\$");
+  });
+  return new RegExp(
+    `(?<![\\w$\\u0080-\\uffff])(?:${alternatives.join("|")})(?![\\w$\\u0080-\\uffff])`,
+    "g",
   );
 }
 
@@ -989,6 +1178,9 @@ export function walkSfcClassContexts(
   const format = sfcFormatFor(filePath);
   if (format === null) return;
   const regions = findScriptRegions(format, text);
+  // KTD5: the frontmatter's class constants, counted across the script
+  // parse here and every template brace run after the element walk.
+  let constants: Map<string, ClassConstant> = new Map();
 
   if (regions.length > 0) {
     const masked = maskOutside(
@@ -1008,6 +1200,15 @@ export function walkSfcClassContexts(
     const kind = langs.has("tsx") ? "tsx" : langs.has("ts") ? "ts" : "jsx";
     const sourceFile = parseSourceModule(`${filePath}::script.${kind}`, masked);
     walkClassContexts(sourceFile, visitor);
+    const frontmatter = regions.find(function (region) {
+      return region.frontmatter;
+    });
+    if (frontmatter !== undefined) {
+      constants = frontmatterConstants(sourceFile, frontmatter);
+      if (constants.size > 0) {
+        countConstantReferences(sourceFile, constants, undefined);
+      }
+    }
   }
 
   const templateMask = regions.map(function (region) {
@@ -1027,10 +1228,12 @@ export function walkSfcClassContexts(
   // Only Svelte and Astro interpolate {} in templates; Vue and plain HTML
   // attribute values are always literal (or always-quoted expressions).
   // Svelte expressions cannot hold markup, so its runs stay JavaScript only.
+  let runs: Array<BraceRun> = [];
   let markupRuns: Array<BraceRun> = [];
   if (format === "astro") {
     const found = findAstroBraceRuns(templateText);
-    markupRuns = found.runs.filter(function (run) {
+    runs = found.runs;
+    markupRuns = runs.filter(function (run) {
       return run.markup;
     });
     templateText = found.masked;
@@ -1061,20 +1264,42 @@ export function walkSfcClassContexts(
       });
     });
   }
+  // One parse per run, shared by the markup walk and the KTD5 count.
+  const parsedRuns = new Map<BraceRun, ParsedRun | null>();
+  function parsedRun(run: BraceRun): ParsedRun | null {
+    let parsed = parsedRuns.get(run);
+    if (parsed === undefined) {
+      parsed = parseBraceRun(filePath, unmaskedTemplate, run);
+      parsedRuns.set(run, parsed);
+    }
+    return parsed;
+  }
   let nextRun = 0;
   function walkContentRunsBefore(offset: number): void {
     while (
       nextRun < contentRuns.length &&
       contentRuns[nextRun].start < offset
     ) {
-      walkExpressionMarkup(
-        filePath,
-        unmaskedTemplate,
-        contentRuns[nextRun],
-        visitor,
-      );
+      walkExpressionMarkup(parsedRun(contentRuns[nextRun]), visitor);
       nextRun += 1;
     }
+  }
+
+  // KTD5: the runs that are the whole unquoted value of a class or
+  // class:list attribute. An unquoted value also takes the `/` of a `/>`
+  // written without a space.
+  const runsByStart = new Map<number, BraceRun>();
+  if (constants.size > 0) {
+    for (const run of runs) runsByStart.set(run.start, run);
+  }
+  const runRoles = new Map<BraceRun, RunRole>();
+  function noteAttributeRun(span: SourceSpan, role: RunRole): void {
+    const run = runsByStart.get(span.start);
+    if (run === undefined) return;
+    const quote = text[span.start - 1];
+    if (quote === '"' || quote === "'") return;
+    if (!/^\/*$/.test(text.slice(run.end, span.end))) return;
+    runRoles.set(run, role);
   }
 
   walkTemplateElements(document, function (element) {
@@ -1095,17 +1320,23 @@ export function walkSfcClassContexts(
           nonTags,
         );
         if (span === null) continue;
-        if (classList) emitClassListAttribute(filePath, text, span, visitor);
-        else emitClassAttribute(format, text, span, visitor);
+        if (classList) {
+          emitClassListAttribute(filePath, text, span, visitor);
+          noteAttributeRun(span, "class-list");
+        } else {
+          emitClassAttribute(format, text, span, visitor);
+          noteAttributeRun(span, "class");
+        }
         continue;
       }
       if (attr.name === "class") {
-        emitClassAttribute(
-          format,
+        const span = attributeValueSpan(
           text,
-          attributeValueSpan(text, location.startOffset, location.endOffset),
-          visitor,
+          location.startOffset,
+          location.endOffset,
         );
+        emitClassAttribute(format, text, span, visitor);
+        noteAttributeRun(span, "class");
         continue;
       }
       if (
@@ -1127,12 +1358,13 @@ export function walkSfcClassContexts(
         continue;
       }
       if (format === "astro" && attr.name === "class:list") {
-        emitClassListAttribute(
-          filePath,
+        const span = attributeValueSpan(
           text,
-          attributeValueSpan(text, location.startOffset, location.endOffset),
-          visitor,
+          location.startOffset,
+          location.endOffset,
         );
+        emitClassListAttribute(filePath, text, span, visitor);
+        noteAttributeRun(span, "class-list");
         continue;
       }
       if (format === "svelte" && attr.name.startsWith("class:")) {
@@ -1163,6 +1395,49 @@ export function walkSfcClassContexts(
     }
   });
   walkContentRunsBefore(Infinity);
+
+  if (constants.size === 0) return;
+  // KTD5: every brace run is code, wherever it sits. A run that names a
+  // constant is counted on its parse; a run TSX rejects has none, so each
+  // occurrence of a name in its text is an other reference.
+  const names = constantNamePattern(constants.keys());
+  for (const run of runs) {
+    const named = new Set<string>();
+    for (const match of unmaskedTemplate
+      .slice(run.start, run.end)
+      .matchAll(names)) {
+      named.add(match[0]);
+    }
+    if (named.size === 0) continue;
+    const parsed = parsedRun(run);
+    if (parsed !== null) {
+      countConstantReferences(parsed.sourceFile, constants, runRoles.get(run));
+      continue;
+    }
+    for (const name of named) {
+      const constant = constants.get(name);
+      if (constant !== undefined) constant.otherReference = true;
+    }
+  }
+  // A constant whose every reference is a class position contributes its
+  // literal once, in a group of its own. The group is dynamic and never a
+  // consolidation list: the constant may be one of several class sources.
+  for (const constant of constants.values()) {
+    if (constant.otherReference || constant.classPositions === 0) continue;
+    const literal = constant.literal;
+    visitor.enterRenameGroup?.("class-attribute");
+    visitor.renameLiteral?.(
+      {
+        text: literal.text,
+        start: literal.getStart() + 1,
+        end: literal.getEnd() - 1,
+        shorthand: false,
+        quoted: true,
+      },
+      "class-attribute",
+    );
+    visitor.exitRenameGroup?.("class-attribute", true, false);
+  }
 }
 
 // One entry point for modules of every supported flavor: SFCs get the

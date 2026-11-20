@@ -606,3 +606,78 @@ const { replies, avatar } = Astro.props;
     }
   });
 });
+
+describe("runPrepass Astro frontmatter class constants (R3)", function () {
+  // Panel.astro's class constants, as the fixture writes them.
+  const PANEL_CONSTANTS = [
+    "rounded-xl border-dashed p-6",
+    "text-lg tracking-wide",
+    "italic leading-snug",
+    "ring-1 ring-sky-300",
+  ];
+
+  it("records the tokens the transform renames in the fixture's Panel.astro (AE3)", async function () {
+    const panel = fs.readFileSync(
+      path.join(
+        HERE,
+        "fixtures",
+        "astro-site",
+        "src",
+        "components",
+        "Panel.astro",
+      ),
+      "utf8",
+    );
+    const tokens = PANEL_CONSTANTS.flatMap(function (literal) {
+      return literal.split(" ");
+    });
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "minwind-astro-"));
+    try {
+      fs.mkdirSync(path.join(root, "src", "components"), { recursive: true });
+      const css = path.join(root, "src", "app.css");
+      fs.writeFileSync(
+        css,
+        tokens
+          .map(function (token) {
+            return `.${token} { color: red; }\n`;
+          })
+          .join(""),
+      );
+      const file = path.join(root, "src", "components", "Panel.astro");
+      fs.writeFileSync(file, panel);
+      const result = await runPrepass({ root, cssEntry: css });
+      const reasons = exclusionReasons(result);
+      for (const token of tokens) {
+        assert.ok(
+          result.renameTokens.has(token),
+          `${token} must be a rename token`,
+        );
+        assert.strictEqual(reasons.get(token), undefined);
+        assert.strictEqual(
+          result.registry.nameFor(token),
+          hashClassName(token),
+        );
+      }
+      const transformed = transformSource({
+        code: panel,
+        id: file,
+        registry: result.registry,
+        consolidationVerdicts: result.consolidationVerdicts,
+      });
+      assert.ok(transformed !== null);
+      let expected = panel;
+      for (const literal of PANEL_CONSTANTS) {
+        const quoted = `"${literal}"`;
+        assert.strictEqual(expected.split(quoted).length, 2, literal);
+        const names = literal.split(" ").map(function (token) {
+          return hashClassName(token);
+        });
+        expected = expected.replace(quoted, `"${names.join(" ")}"`);
+      }
+      assert.strictEqual(transformed.code, expected);
+      assert.deepStrictEqual(transformed.warnings, []);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});

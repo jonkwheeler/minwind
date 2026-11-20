@@ -1309,3 +1309,265 @@ import BaseHead from "../components/BaseHead.astro";
     );
   });
 });
+
+// R3 and KTD5: a top-level, non-exported frontmatter const holding a class
+// string is read like a class attribute when every reference to it is a
+// class position, and is left unread otherwise.
+describe("Astro frontmatter class constants (R3)", function () {
+  const CARD = "rounded-lg p-6";
+  const CONSTANT_TOKENS = ["rounded-lg", "p-6", "px-2"];
+  const CONSTANT_REGISTRY: NameRegistry = createNameRegistry({
+    universe: new Set(CONSTANT_TOKENS),
+    sourceTokens: new Set(CONSTANT_TOKENS),
+    runtimeTokens: new Set(),
+    exclusions: { names: [], prefixes: [] },
+  });
+
+  function constantNameOf(token: string): string {
+    const name = CONSTANT_REGISTRY.nameFor(token);
+    assert.ok(name !== undefined, `${token} must be renamed in the registry`);
+    return name;
+  }
+
+  function transformConstant(code: string): TransformSourceResult {
+    const result = transformSource({
+      code,
+      id: "/site/src/components/Panel.astro",
+      registry: CONSTANT_REGISTRY,
+    });
+    assert.ok(result !== null);
+    return result;
+  }
+
+  function withCard(template: string, frontmatter = ""): string {
+    return `---\nconst card = "${CARD}";\n${frontmatter}---\n${template}\n`;
+  }
+
+  // How often the constant's literal is reported as a rename, and whether
+  // it is ever reported as a runtime literal.
+  function cardReads(code: string): { renamed: number; runtime: boolean } {
+    const result = classContexts(code);
+    return {
+      renamed: result.renamed.filter(function (source) {
+        return source === CARD;
+      }).length,
+      runtime: result.runtime.includes(CARD),
+    };
+  }
+
+  const READ = { renamed: 1, runtime: false };
+  const UNREAD = { renamed: 0, runtime: false };
+
+  it("reports a constant used only as class={card} as one dynamic group (AE3)", function () {
+    assert.deepStrictEqual(classEvents(withCard(`<div class={card}>x</div>`)), [
+      { event: "enter", kind: "class-attribute" },
+      {
+        event: "rename",
+        kind: "class-attribute",
+        source: CARD,
+        text: CARD,
+        quoted: true,
+      },
+      {
+        event: "exit",
+        kind: "class-attribute",
+        fullyLiteral: true,
+        staticList: false,
+      },
+    ]);
+  });
+
+  it("renames the frontmatter literal in place (AE3)", function () {
+    const result = transformConstant(withCard(`<div class={card}>x</div>`));
+    assert.strictEqual(
+      result.code,
+      `---\nconst card = "${constantNameOf("rounded-lg")} ${constantNameOf("p-6")}";\n---\n<div class={card}>x</div>\n`,
+    );
+    assert.deepStrictEqual(result.warnings, []);
+  });
+
+  it("reports the literal once however many class positions use it", function () {
+    assert.deepStrictEqual(
+      cardReads(
+        withCard(
+          `<div class={card}>a</div>\n<p class:list={[card]}>b</p>\n{on && <b class={card}>c</b>}`,
+        ),
+      ),
+      READ,
+    );
+  });
+
+  for (const [label, template] of [
+    ["the whole class:list expression", `<div class:list={card}>x</div>`],
+    [
+      "a class:list array element",
+      `<div class:list={[card, { ring: on }]}>x</div>`,
+    ],
+    [
+      "a class:list element nested in arrays",
+      `<div class:list={["px-2", [[card]]]}>x</div>`,
+    ],
+    ["a component's class prop", `<Comp class={card} />`],
+    ["a self-closed component's class prop", `<Comp class={card}/>`],
+    [
+      "class={card} inside expression markup",
+      `<ul>{items.map((item) => <li class={card}>{item}</li>)}</ul>`,
+    ],
+    [
+      "class:list inside expression markup",
+      `{on && <b class:list={[card, { ring: on }]}>x</b>}`,
+    ],
+    [
+      "a cn() argument inside expression markup",
+      `{on && <b class={cn(card, "px-2")}>x</b>}`,
+    ],
+  ]) {
+    it(`reads a constant used as ${label}`, function () {
+      assert.deepStrictEqual(cardReads(withCard(template)), READ);
+    });
+  }
+
+  it("reads a constant used as an adopted <body>'s class", function () {
+    assert.deepStrictEqual(
+      cardReads(
+        withCard(`<html lang="en">
+  <head>
+    <HeadMeta />
+  </head>
+  <body class={card}>
+    <slot />
+  </body>
+</html>`),
+      ),
+      READ,
+    );
+  });
+
+  it("reads a constant passed to cn() in the frontmatter", function () {
+    const code = withCard(
+      `<div class={merged}>x</div>`,
+      `import { cn } from "../lib/cn";\nconst merged = cn(card, "px-2");\n`,
+    );
+    assert.deepStrictEqual(cardReads(code), READ);
+    const result = transformConstant(code);
+    assert.ok(
+      result.code.includes(
+        `const card = "${constantNameOf("rounded-lg")} ${constantNameOf("p-6")}";`,
+      ),
+      result.code,
+    );
+    assert.ok(
+      result.code.includes(`cn(card, "${constantNameOf("px-2")}")`),
+      result.code,
+    );
+    assert.deepStrictEqual(result.warnings, []);
+  });
+
+  it("reads a constant held in a template literal without substitutions", function () {
+    assert.deepStrictEqual(
+      cardReads(
+        `---\nconst card = \`${CARD}\`;\n---\n<div class={card}>x</div>\n`,
+      ),
+      READ,
+    );
+  });
+
+  for (const [label, template, frontmatter] of [
+    ["title={card}", `<div class={card} title={card}>x</div>`, ""],
+    [
+      "<meta content={card}>",
+      `<meta content={card} /><div class={card}>x</div>`,
+      "",
+    ],
+    ["a text expression", `<p>{card}</p><div class={card}>x</div>`, ""],
+    [
+      "part of a class expression",
+      `<div class={on ? card : "px-2"}>x</div><p class={card}>y</p>`,
+      "",
+    ],
+    [
+      "a quoted class value",
+      `<div class="{card}">x</div><p class={card}>y</p>`,
+      "",
+    ],
+    [
+      "a non-class attribute inside expression markup",
+      `{on && <b class={card} title={card}>x</b>}`,
+      "",
+    ],
+    [
+      "a shadowing parameter",
+      `{items.map((card) => <li class={card}>{card}</li>)}`,
+      "",
+    ],
+    [
+      "a run TSX rejects",
+      `<div class={card}>x</div>{on && <div><!-- note --><b title={card}>y</b></div>}`,
+      "",
+    ],
+    [
+      "console.log(card) in the frontmatter",
+      `<div class={card}>x</div>`,
+      "console.log(card);\n",
+    ],
+    [
+      "concatenation in the frontmatter",
+      `<div class={card}>x</div>`,
+      `const x = card + " y";\n`,
+    ],
+    [
+      "an identifier in a <script> block",
+      `<div class={card}>x</div>\n<script>\n  console.log(card);\n</script>`,
+      "",
+    ],
+    ["a spread", `<div class={card}>x</div><p>{[...card].length}</p>`, ""],
+  ]) {
+    it(`leaves a constant also used in ${label} unread`, function () {
+      assert.deepStrictEqual(
+        cardReads(withCard(template, frontmatter)),
+        UNREAD,
+      );
+    });
+  }
+
+  it("keeps the literal's bytes when the constant is unread", function () {
+    const code = withCard(`<div class={card} title={card}>x</div>`);
+    assert.strictEqual(transformConstant(code).code, code);
+  });
+
+  for (const [label, frontmatter] of [
+    ["an exported const", `export const card = "${CARD}";`],
+    ["a let", `let card = "${CARD}";`],
+    [
+      "a template literal with a substitution",
+      "const size = 6;\nconst card = `rounded-lg p-${size}`;",
+    ],
+    ["a const inside a block", `{\n  const card = "${CARD}";\n}`],
+  ]) {
+    it(`leaves ${label} unread`, function () {
+      const result = classContexts(
+        `---\n${frontmatter}\n---\n<div class={card}>x</div>\n`,
+      );
+      assert.deepStrictEqual(result, { renamed: [], runtime: [] });
+    });
+  }
+
+  it("leaves an unreferenced constant unread", function () {
+    assert.deepStrictEqual(
+      classContexts(withCard(`<div class="px-2">x</div>`)),
+      { renamed: ["px-2"], runtime: [] },
+    );
+  });
+
+  it("never counts the name in template text, static values, or after a dot", function () {
+    assert.deepStrictEqual(
+      cardReads(
+        withCard(
+          `<p title="card" class="card">A card, {item.card}</p>\n<div class={card}>x</div>`,
+          `const label = Astro.props.card;\n// card\n`,
+        ),
+      ),
+      READ,
+    );
+  });
+});

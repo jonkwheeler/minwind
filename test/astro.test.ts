@@ -1256,6 +1256,111 @@ describe(
         assert.strictEqual(map.names[entry.name], entry.token, entry.name);
       }
     });
+
+    describe("frontmatter class constants (R3)", function () {
+      const ABOUT = "about/index.html";
+      // Panel.astro's class constants, as the fixture writes them.
+      const PANEL_CONSTANTS = [
+        "rounded-xl border-dashed p-6",
+        "text-lg tracking-wide",
+        "italic leading-snug",
+        "ring-1 ring-sky-300",
+      ];
+
+      interface ClassedTag {
+        tag: string;
+        classes: Array<string>;
+      }
+
+      // Panel's <section> and the class-bearing start tags inside it, in
+      // order.
+      function panelTags(html: string): Array<ClassedTag> {
+        const section =
+          /<section\b[^>]*\sdata-panel\b[^>]*>[\s\S]*?<\/section>/.exec(html);
+        assert.ok(section !== null, html);
+        const tags: Array<ClassedTag> = [];
+        for (const tag of section[0].matchAll(/<([a-z0-9]+)\b[^>]*>/g)) {
+          const value = /\sclass="([^"]*)"/.exec(tag[0]);
+          if (value !== null) {
+            tags.push({ tag: tag[1], classes: splitClasses(value[1]) });
+          }
+        }
+        return tags;
+      }
+
+      function originalsOf(names: Array<string>): Array<string> {
+        return names.flatMap(function (name) {
+          if (Object.hasOwn(map.consolidated, name)) {
+            return map.consolidated[name];
+          }
+          return Object.hasOwn(map.names, name) ? [map.names[name]] : [name];
+        });
+      }
+
+      it("renames the classes Panel holds in frontmatter constants (AE3)", function () {
+        const source = panelTags(builds.baseline[ABOUT]);
+        assert.deepStrictEqual(source, [
+          { tag: "section", classes: ["rounded-xl", "border-dashed", "p-6"] },
+          { tag: "h2", classes: ["text-lg", "tracking-wide", "uppercase"] },
+          { tag: "p", classes: ["italic", "leading-snug"] },
+          { tag: "p", classes: ["italic", "leading-snug"] },
+          { tag: "div", classes: ["rounded-lg", "ring-1", "ring-sky-300"] },
+        ]);
+        const renamed = new Set(
+          report.renames.map(function (entry) {
+            return entry.token;
+          }),
+        );
+        const built = panelTags(builds.on[ABOUT]);
+        assert.deepStrictEqual(
+          built.map(function (entry) {
+            return entry.tag;
+          }),
+          source.map(function (entry) {
+            return entry.tag;
+          }),
+        );
+        for (let i = 0; i < built.length; i += 1) {
+          const { tag, classes } = built[i];
+          for (const name of classes) {
+            assert.ok(isRenamed(name), `<${tag}> kept ${name}`);
+          }
+          assert.deepStrictEqual(
+            sorted(originalsOf(classes)),
+            sorted(source[i].classes),
+            tag,
+          );
+        }
+        for (const literal of PANEL_CONSTANTS) {
+          for (const token of literal.split(" ")) {
+            assert.ok(renamed.has(token), `${token} is not a rename`);
+          }
+        }
+      });
+
+      it("reaches those classes only through Panel's constants", function () {
+        const sources = readTree(path.join(FIXTURE, "src"));
+        for (const literal of PANEL_CONSTANTS) {
+          for (const token of literal.split(" ")) {
+            const word = `(?<![\\w-])${token}(?![\\w-])`;
+            const uses = Object.keys(sources).filter(function (file) {
+              return new RegExp(word).test(sources[file]);
+            });
+            assert.deepStrictEqual(uses, ["components/Panel.astro"], token);
+            assert.strictEqual(
+              sources["components/Panel.astro"].match(new RegExp(word, "g"))
+                ?.length,
+              1,
+              token,
+            );
+          }
+        }
+        const panel = sources["components/Panel.astro"];
+        for (const literal of PANEL_CONSTANTS) {
+          assert.match(panel, new RegExp(`\\nconst \\w+ = "${literal}";\\n`));
+        }
+      });
+    });
   },
 );
 
