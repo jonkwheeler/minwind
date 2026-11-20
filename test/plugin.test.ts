@@ -1330,6 +1330,105 @@ export const Shown = <p class="hidden">y</p>;
   });
 });
 
+// R17 (KTD16) on the Vite route: a class a script selects with a `.token`
+// string keeps its original name in the module, the markup, and the
+// stylesheet, while a class only property access names still renames.
+describe("minwind:source on selector strings (R17, AE12)", function () {
+  const CSS = ".hidden{display:none}\n";
+
+  // The transformed module, the warnings, and the emitted stylesheet of a
+  // site holding the one module.
+  interface Built {
+    code: string | null;
+    warnings: Array<string>;
+    css: string;
+  }
+
+  async function buildModule(code: string): Promise<Built> {
+    let built: Built | undefined;
+    await withFlags({}, async function () {
+      const site = await mkdtemp(path.join(tmpdir(), "minwind-selectors-"));
+      try {
+        await mkdir(path.join(site, "src"), { recursive: true });
+        // Plain CSS: the pre-pass compiles it without resolving tailwindcss.
+        await writeFile(path.join(site, "src", "app.css"), CSS);
+        const id = path.join(site, "src", "Disclosure.tsx");
+        await writeFile(id, code);
+        const plugins = minwind({
+          root: site,
+          cssEntry: path.join(site, "src", "app.css"),
+        });
+        const source = findHook(plugins, "minwind:source");
+        const mock = mockContext();
+        const buildStart = source.buildStart as (
+          this: unknown,
+          options: unknown,
+        ) => Promise<void>;
+        await buildStart.call(mock.context, {});
+        const transform = source.transform as (
+          this: unknown,
+          code: string,
+          id: string,
+        ) => unknown;
+        const result = (await transform.call(mock.context, code, id)) as {
+          code: string;
+        } | null;
+        const cssPlugin = findHook(plugins, "minwind:css");
+        const generateBundle = cssPlugin.generateBundle as (
+          this: unknown,
+          options: unknown,
+          bundle: Record<string, unknown>,
+        ) => unknown;
+        const bundle: Record<string, unknown> = {
+          "assets/app.css": {
+            type: "asset",
+            fileName: "assets/app.css",
+            source: `@layer utilities{${CSS.trim()}}`,
+          },
+        };
+        await generateBundle.call(mock.context, {}, bundle);
+        built = {
+          code: result === null ? null : result.code,
+          warnings: mock.warnings,
+          css: (bundle["assets/app.css"] as { source: string }).source,
+        };
+      } finally {
+        await rm(site, { recursive: true, force: true });
+      }
+    });
+    assert.ok(built !== undefined);
+    return built;
+  }
+
+  it("keeps a class querySelector selects original in the module, the markup, and the CSS (AE12)", async function () {
+    const code = `export const Panel = <p class="hidden">a</p>;
+export function reveal(root) {
+  root.querySelector("div > .hidden").dataset.open = "yes";
+}
+`;
+    const built = await buildModule(code);
+    assert.strictEqual(built.code, null);
+    assert.deepStrictEqual(built.warnings, []);
+    assert.ok(built.css.includes(".hidden{display:none}"), built.css);
+  });
+
+  it("renames a class only el.hidden names (AE12)", async function () {
+    const code = `export const Panel = <p class="hidden">a</p>;
+export function reveal(el) {
+  el.hidden = true;
+}
+`;
+    const hidden = hashClassName("hidden");
+    const built = await buildModule(code);
+    assert.strictEqual(
+      built.code,
+      code.replace('class="hidden"', `class="${hidden}"`),
+    );
+    assert.deepStrictEqual(built.warnings, []);
+    assert.ok(built.css.includes(`.${hidden}{display:none}`), built.css);
+  });
+});
+
 describe("writeArtifacts (R11, KTD9)", function () {
   function makeReport(warningCount: number): TransformReport {
     return {

@@ -874,3 +874,149 @@ export function Toggle(props) {
     );
   });
 });
+
+// R17 (KTD16): a class a script selects with a `.token` string keeps its
+// original name, wherever the string sits in the module. Property access,
+// comments, and regular expressions never count.
+describe("runPrepass selector strings (R17, KTD16)", function () {
+  const SELECTOR_TOKENS = [
+    "hidden",
+    "block",
+    "flex",
+    "grid",
+    "ring",
+    "border",
+    "italic",
+    "md:flex",
+  ];
+
+  async function withSelectorSite<T>(
+    files: Record<string, string>,
+    run: (root: string) => Promise<T>,
+  ): Promise<T> {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "minwind-selectors-"));
+    try {
+      fs.mkdirSync(path.join(root, "src"), { recursive: true });
+      fs.writeFileSync(
+        path.join(root, "src", "app.css"),
+        SELECTOR_TOKENS.map(function (token) {
+          return `.${token.replace(":", "\\:")} { color: red; }\n`;
+        }).join(""),
+      );
+      for (const [name, text] of Object.entries(files)) {
+        fs.writeFileSync(path.join(root, "src", name), text);
+      }
+      return await run(root);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }
+
+  const DISCLOSURE = `export function Disclosure() {
+  return <div class="hidden block flex grid md:flex">x</div>;
+}
+export function reveal(root) {
+  const panel = root.querySelector("div > .hidden:not(.md\\\\:flex)");
+  // .grid
+  panel.flex = /\\.grid/.test(panel.id);
+}
+`;
+
+  it("keeps a selected class original, escapes decoded, and renames classes only property access, comments, and regular expressions name (AE12)", async function () {
+    await withSelectorSite(
+      { "Disclosure.tsx": DISCLOSURE },
+      async function (root) {
+        const result = await runPrepass({
+          root,
+          cssEntry: path.join(root, "src", "app.css"),
+        });
+        const reasons = exclusionReasons(result);
+        assert.strictEqual(reasons.get("hidden"), "runtime-context");
+        assert.strictEqual(reasons.get("md:flex"), "runtime-context");
+        for (const token of ["block", "flex", "grid"]) {
+          assert.strictEqual(
+            result.registry.nameFor(token),
+            hashClassName(token),
+            token,
+          );
+        }
+      },
+    );
+  });
+
+  it("counts selector strings in Vue and Svelte scripts and template expressions", async function () {
+    await withSelectorSite(
+      {
+        "Card.vue": `<template>
+  <button @click="$el.querySelector('.ring').focus()">x</button>
+  <div class="ring italic border">y</div>
+</template>
+<script setup>
+const first = () => document.querySelector(".italic");
+</script>
+`,
+        "Row.svelte": `<script>
+  let open = false;
+</script>
+<button on:click={() => document.querySelector(".border").remove()}>z</button>
+<div class="border">w</div>
+`,
+      },
+      async function (root) {
+        const result = await runPrepass({
+          root,
+          cssEntry: path.join(root, "src", "app.css"),
+        });
+        const reasons = exclusionReasons(result);
+        for (const token of ["ring", "italic", "border"]) {
+          assert.strictEqual(reasons.get(token), "runtime-context", token);
+        }
+      },
+    );
+  });
+
+  it("leaves selector strings to the output scan on the apply and Astro routes", async function () {
+    await withSelectorSite(
+      { "Disclosure.tsx": DISCLOSURE },
+      async function (root) {
+        const result = await runPrepass({
+          root,
+          cssEntry: path.join(root, "src", "app.css"),
+          scansBuiltOutput: true,
+        });
+        assert.strictEqual(
+          result.registry.nameFor("hidden"),
+          hashClassName("hidden"),
+        );
+      },
+    );
+  });
+
+  it("agrees with the transform: the selected class stays and nothing warns", async function () {
+    await withSelectorSite(
+      { "Disclosure.tsx": DISCLOSURE },
+      async function (root) {
+        const result = await runPrepass({
+          root,
+          cssEntry: path.join(root, "src", "app.css"),
+        });
+        const transformed = transformSource({
+          code: DISCLOSURE,
+          id: path.join(root, "src", "Disclosure.tsx"),
+          registry: result.registry,
+        });
+        assert.ok(transformed !== null);
+        const names = ["block", "flex", "grid"]
+          .map(function (token) {
+            return hashClassName(token);
+          })
+          .join(" ");
+        assert.ok(
+          transformed.code.includes(`class="hidden ${names} md:flex"`),
+          transformed.code,
+        );
+        assert.deepStrictEqual(transformed.warnings, []);
+      },
+    );
+  });
+});

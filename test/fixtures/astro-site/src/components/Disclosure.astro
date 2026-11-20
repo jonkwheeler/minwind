@@ -1,0 +1,27 @@
+---
+// A panel its script selects by class. No other file spells hidden, so in
+// 1.1.0 the class renamed in the markup and the stylesheet while the script
+// still selected ".hidden" (R17).
+---
+
+<div data-disclosure>
+  <button type="button" aria-expanded="false">Show notes</button>
+  <p class="hidden">Parking is behind the venue.</p>
+</div>
+
+<script>
+  const panel = document.querySelector<HTMLElement>(
+    "[data-disclosure] > .hidden",
+  );
+  const button = document.querySelector<HTMLButtonElement>(
+    "[data-disclosure] > button",
+  );
+  if (panel === null || button === null) {
+    throw new Error("disclosure: no panel");
+  }
+  button.addEventListener("click", function () {
+    const open = button.getAttribute("aria-expanded") !== "true";
+    button.setAttribute("aria-expanded", String(open));
+    panel.style.display = open ? "revert" : "";
+  });
+</script>

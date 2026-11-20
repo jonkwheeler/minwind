@@ -420,12 +420,21 @@ export function transformModule(
   // leak mask instead.
   const builtHtml = sfcFormatFor(id) === "html";
   const objectKeys: Array<LiteralOccurrence> = [];
+  // KTD16: class selectors inside strings, which the whole-word scan misses
+  // because `.` is a class-name character. Built HTML gathers those of its
+  // executable scripts in its leak mask instead.
+  const selectorReferences: Array<LiteralOccurrence> = [];
 
   const visitor: ClassContextVisitor = {
     objectLiteralKey: builtHtml
       ? undefined
       : function (key: LiteralOccurrence): void {
           objectKeys.push(key);
+        },
+    selectorReference: builtHtml
+      ? undefined
+      : function (reference: LiteralOccurrence): void {
+          selectorReferences.push(reference);
         },
     enterRenameGroup: function (kind: RenameContextKind): void {
       groupStack.push({ kind, literals: [], tokens: [], editKeys: [] });
@@ -502,12 +511,13 @@ export function transformModule(
   }
 
   // Reverse-leak check (KTD7): whole-word occurrences of registry tokens in
-  // the original source that no edit consumed are class names the stylesheet
-  // renames but this module keeps — warn with locations, never fail. SFCs
-  // scan with <style> contents blanked: a utility word used as a CSS value
-  // (display: flex) is not a class reference. Built HTML also blanks the
-  // positions that never hold one (KTD8), then is scanned decoded as well
-  // (KTD6); an occurrence both scans find warns once.
+  // the original source that no edit consumed, identifier object keys
+  // (KTD15), and class selectors inside strings (KTD16) are class names the
+  // stylesheet renames but this module keeps — warn with locations, never
+  // fail. SFCs scan with <style> contents blanked: a utility word used as a
+  // CSS value (display: flex) is not a class reference. Built HTML also
+  // blanks the positions that never hold one (KTD8), then is scanned decoded
+  // as well (KTD6); an occurrence both scans find warns once.
   const entries = registry.entries();
   let views: Array<LeakView> = [];
   if (entries.length > 0) {
@@ -521,6 +531,7 @@ export function transformModule(
       );
       leakText = masked.text;
       objectKeys.push(...masked.objectKeys);
+      selectorReferences.push(...masked.selectorReferences);
     }
     views = leakViews(leakText, builtHtml);
   }
@@ -529,6 +540,12 @@ export function transformModule(
     const list = keysByToken.get(key.text);
     if (list === undefined) keysByToken.set(key.text, [key]);
     else list.push(key);
+  }
+  const selectorsByToken = new Map<string, Array<LiteralOccurrence>>();
+  for (const reference of selectorReferences) {
+    const list = selectorsByToken.get(reference.text);
+    if (list === undefined) selectorsByToken.set(reference.text, [reference]);
+    else list.push(reference);
   }
   for (const entry of entries) {
     const reported = new Set<number>();
@@ -561,6 +578,9 @@ export function transformModule(
       }
     }
     for (const key of keysByToken.get(entry.token) ?? []) report(key);
+    for (const reference of selectorsByToken.get(entry.token) ?? []) {
+      report(reference);
+    }
   }
 
   // Unchanged means no edits AND nothing to report; a warnings-only module

@@ -996,3 +996,72 @@ describe("transformSource class-composition object keys (R16, KTD15)", function 
     assert.strictEqual(transformKeys(code), null);
   });
 });
+
+// R17 (KTD16): a `.token` class selector inside a string names its class,
+// so the leak scan warns when the registry still renames it (a module the
+// pre-pass never scanned). JSX attribute strings carry no JavaScript
+// escapes, and property access never counts.
+describe("transformSource selector strings (R17, KTD16)", function () {
+  const SELECTOR_TOKENS = ["hidden", "block", "md:flex", "p-4"];
+  const SELECTOR_REGISTRY = createNameRegistry({
+    universe: new Set(SELECTOR_TOKENS),
+    sourceTokens: new Set(SELECTOR_TOKENS),
+  });
+
+  function sorted(leaks: Array<[string, number]>): Array<[string, number]> {
+    return [...leaks].sort(function (a, b) {
+      return a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0;
+    });
+  }
+
+  function leakColumns(code: string, id: string): Array<[string, number]> {
+    const result = transformSource({ code, id, registry: SELECTOR_REGISTRY });
+    if (result === null) return [];
+    assert.strictEqual(result.code, code);
+    return result.warnings.map(function (warning) {
+      assert.strictEqual(warning.kind, "reverse-leak");
+      return [warning.token ?? "", warning.column];
+    });
+  }
+
+  it("warns on a selector string in a module, at the class name (AE12)", function () {
+    const code = `document.querySelector("ul > .hidden").hidden = true;\n`;
+    assert.deepStrictEqual(leakColumns(code, "/site/src/menu.ts"), [
+      ["hidden", code.indexOf("hidden") + 1],
+    ]);
+  });
+
+  it("reads a JSX attribute string without JavaScript escapes", function () {
+    const code = `export const B = <button data-target=".md\\:flex">x</button>;\n`;
+    assert.deepStrictEqual(leakColumns(code, "/site/src/menu.tsx"), [
+      ["md:flex", code.indexOf("md") + 1],
+    ]);
+  });
+
+  it("warns on a selector string in a Vue script and template expression", function () {
+    const code = `<template>
+  <button @click="$el.querySelector('.block')">x</button>
+</template>
+<script setup>
+const panel = document.querySelector(".hidden");
+</script>
+`;
+    const lines = code.split("\n");
+    assert.deepStrictEqual(sorted(leakColumns(code, "/site/src/Card.vue")), [
+      ["block", lines[1].indexOf("block") + 1],
+      ["hidden", lines[4].indexOf("hidden") + 1],
+    ]);
+  });
+
+  it("returns null when only property access and comments name a class", function () {
+    const code = `el.hidden = true;\n// .block\nx.block();\n`;
+    assert.strictEqual(
+      transformSource({
+        code,
+        id: "/site/src/menu.ts",
+        registry: SELECTOR_REGISTRY,
+      }),
+      null,
+    );
+  });
+});

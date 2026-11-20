@@ -60,8 +60,9 @@ export interface PrepassOptions {
   // Directory the source scan walks. Defaults to <root>/src.
   sourceDir?: string;
   // True when the caller scans the built output for leaks, as the apply
-  // and Astro routes do: that scan counts the object keys that ship, so the
-  // source scan leaves keys outside a composition alone (KTD15).
+  // and Astro routes do: that scan counts the object keys and selector
+  // strings that ship, so the source scan leaves keys outside a composition
+  // (KTD15) and selector strings (KTD16) alone.
   scansBuiltOutput?: boolean;
 }
 
@@ -97,6 +98,10 @@ interface SourceScan {
   // (KTD15). Most name no class (size, onClick), so only the stylesheet's
   // classes among them join the runtime tokens.
   keyTokens: Set<string>;
+  // On source routes, the class names selector strings name, such as
+  // hidden in querySelector(".hidden") (KTD16). Many name no class (a.png),
+  // so only the stylesheet's classes among them join the runtime tokens.
+  selectorTokens: Set<string>;
 }
 
 async function sourceModulePaths(sourceDir: string): Promise<Array<string>> {
@@ -129,7 +134,7 @@ function scanModule(
   filePath: string,
   text: string,
   scan: SourceScan,
-  countObjectKeys: boolean,
+  sourceRoute: boolean,
 ): void {
   function recordList(tokens: Array<string>): void {
     const key = canonicalListKey(tokens);
@@ -190,9 +195,14 @@ function scanModule(
   const consumed = new Set<number>();
 
   walkModuleContexts(filePath, text, {
-    objectLiteralKey: countObjectKeys
+    objectLiteralKey: sourceRoute
       ? function (key: LiteralOccurrence): void {
           objectKeys.push(key);
+        }
+      : undefined,
+    selectorReference: sourceRoute
+      ? function (reference: LiteralOccurrence): void {
+          scan.selectorTokens.add(reference.text);
         }
       : undefined,
     enterRenameGroup: function (): void {
@@ -244,7 +254,7 @@ interface SourceInventory {
 
 async function scanSources(
   sourceDir: string,
-  countObjectKeys: boolean,
+  sourceRoute: boolean,
 ): Promise<SourceInventory> {
   const scan: SourceScan = {
     renameTokens: new Set<string>(),
@@ -253,6 +263,7 @@ async function scanSources(
     listCounts: new Map<string, ListFrequency>(),
     literalCounts: new Map<string, ListFrequency>(),
     keyTokens: new Set<string>(),
+    selectorTokens: new Set<string>(),
   };
   const paths = await sourceModulePaths(sourceDir);
   // Reads batch in parallel; the CPU-bound scans stay sequential in path
@@ -263,7 +274,7 @@ async function scanSources(
     }),
   );
   for (let index = 0; index < paths.length; index += 1) {
-    scanModule(paths[index], texts[index], scan, countObjectKeys);
+    scanModule(paths[index], texts[index], scan, sourceRoute);
   }
   return { scan, paths, texts };
 }
@@ -283,8 +294,10 @@ export async function runPrepass(
     options.scansBuiltOutput !== true,
   );
   const scan = sourceInventory.scan;
-  for (const token of scan.keyTokens) {
-    if (stylesheetModel.universe.has(token)) scan.runtimeTokens.add(token);
+  for (const names of [scan.keyTokens, scan.selectorTokens]) {
+    for (const token of names) {
+      if (stylesheetModel.universe.has(token)) scan.runtimeTokens.add(token);
+    }
   }
 
   const hasher = createHasher(hashLengthOf(options.naming));

@@ -1,4 +1,5 @@
 import * as ts from "typescript";
+import { selectorClassReferences } from "./js-mask.js";
 
 // Shared KTD4 class-context detection. One AST walk classifies every
 // class-position node so the U2 pre-pass scan (which tokens exist) and the U3
@@ -82,6 +83,10 @@ export interface ClassContextVisitor {
   // not a class position consumed it (KTD15). Walks that leave it unset skip
   // the collection.
   objectLiteralKey?: (key: LiteralOccurrence) => void;
+  // Every class selector inside a string or template part of the parse,
+  // such as ".hidden" in querySelector(".hidden") (KTD16). Walks that leave
+  // it unset skip the scan.
+  selectorReference?: (reference: LiteralOccurrence) => void;
 }
 
 // HTML5 ASCII whitespace only — exactly the set the DOM classList splits on
@@ -671,6 +676,11 @@ export function walkClassContexts(
   if (visitor.objectLiteralKey !== undefined) {
     for (const key of objectLiteralKeys(sourceFile)) {
       visitor.objectLiteralKey(key);
+    }
+  }
+  if (visitor.selectorReference !== undefined) {
+    for (const reference of selectorClassReferences(sourceFile)) {
+      visitor.selectorReference(reference);
     }
   }
   if (options.unprovable === true) {

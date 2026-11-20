@@ -331,6 +331,83 @@ export const Shown = <p class="hidden">y</p>;
   });
 });
 
+// R17 (KTD16) on the webpack route: the loader with a pre-pass the plugin
+// published in beforeCompile keeps a class querySelector selects original,
+// and renames a class only property access names.
+describe("minwindLoader on selector strings (R17, AE12)", function () {
+  // The loader's output for a site holding the one module, and whether the
+  // published registry renames hidden.
+  async function loadModule(
+    code: string,
+  ): Promise<{ content?: string; renamesHidden: boolean }> {
+    const site = mkdtempSync(path.join(tmpdir(), "minwind-selectors-"));
+    try {
+      mkdirSync(path.join(site, "src"));
+      writeFileSync(
+        path.join(site, "src", "app.css"),
+        ".hidden{display:none}\n",
+      );
+      const id = path.join(site, "src", "Disclosure.tsx");
+      writeFileSync(id, code);
+      const plugin = new MinwindWebpackPlugin({ root: site });
+      let beforeCompile: (() => Promise<void>) | undefined;
+      plugin.apply({
+        context: site,
+        options: { plugins: [] },
+        webpack: {
+          Compilation: { PROCESS_ASSETS_STAGE_SUMMARIZE: 1000 },
+          sources: { RawSource: class {} },
+        },
+        hooks: {
+          beforeCompile: {
+            tapPromise(_name: string, fn: () => Promise<void>) {
+              beforeCompile = fn;
+            },
+          },
+          thisCompilation: { tap() {} },
+          afterEmit: { tapPromise() {} },
+        },
+      } as unknown as WebpackCompilerLike);
+      assert.ok(beforeCompile !== undefined);
+      await beforeCompile();
+      assert.ok(plugin.prepass !== undefined);
+      const result = runLoader(plugin, id, code);
+      assert.strictEqual(result.error, null);
+      return {
+        content: result.content,
+        renamesHidden: plugin.prepass.registry.nameFor("hidden") !== undefined,
+      };
+    } finally {
+      rmSync(site, { recursive: true, force: true });
+    }
+  }
+
+  it("keeps a class querySelector selects original (AE12)", async function () {
+    const code = `export const Panel = <p class="hidden">a</p>;
+export function reveal(root) {
+  root.querySelector("div > .hidden").dataset.open = "yes";
+}
+`;
+    const loaded = await loadModule(code);
+    assert.strictEqual(loaded.content, code);
+    assert.strictEqual(loaded.renamesHidden, false);
+  });
+
+  it("renames a class only el.hidden names (AE12)", async function () {
+    const code = `export const Panel = <p class="hidden">a</p>;
+export function reveal(el) {
+  el.hidden = true;
+}
+`;
+    const loaded = await loadModule(code);
+    assert.strictEqual(
+      loaded.content,
+      code.replace('class="hidden"', `class="${hashClassName("hidden")}"`),
+    );
+    assert.strictEqual(loaded.renamesHidden, true);
+  });
+});
+
 describe("MinwindWebpackPlugin hooks", function () {
   function fakeCompiler(): {
     compiler: WebpackCompilerLike;

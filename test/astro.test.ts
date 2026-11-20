@@ -1486,6 +1486,65 @@ describe(
         );
       });
     });
+
+    // R17 (KTD16): Disclosure's script selects its panel with a ".hidden"
+    // selector string, and no other file spells hidden.
+    describe("selector strings (R17, AE12)", function () {
+      const ABOUT = "about/index.html";
+      const SELECTOR = "[data-disclosure] > .hidden";
+
+      function panelClasses(html: string): Array<string> {
+        const disclosure =
+          /<div\b[^>]*\sdata-disclosure\b[^>]*>([\s\S]*?)<\/div>/.exec(html);
+        assert.ok(disclosure !== null, "no <div data-disclosure>");
+        return classesOf(disclosure[1], "p");
+      }
+
+      it("keeps Disclosure's class original in the markup, the stylesheet, and the script (AE12)", function () {
+        assert.deepStrictEqual(panelClasses(builds.baseline[ABOUT]), [
+          "hidden",
+        ]);
+        assert.deepStrictEqual(panelClasses(builds.on[ABOUT]), ["hidden"]);
+        assert.ok(selectorClasses(stylesheetOf(builds.on)).has("hidden"));
+        const scripts = Array.from(
+          builds.on[ABOUT].matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/g),
+          function (match) {
+            return match[1];
+          },
+        );
+        for (const file of Object.keys(builds.on)) {
+          if (file.endsWith(".js")) scripts.push(builds.on[file]);
+        }
+        assert.ok(
+          scripts.some(function (script) {
+            return script.includes(SELECTOR);
+          }),
+          `no script selects ${SELECTOR}`,
+        );
+        assert.ok(
+          !report.renames.some(function (entry) {
+            return entry.token === "hidden";
+          }),
+        );
+        assert.deepStrictEqual(
+          report.exclusions.filter(function (entry) {
+            return entry.token === "hidden";
+          }),
+          [{ token: "hidden", reason: "runtime-context" }],
+        );
+      });
+
+      it("reaches hidden only through Disclosure's markup and selector string", function () {
+        const sources = readTree(path.join(FIXTURE, "src"));
+        const uses = Object.keys(sources).filter(function (file) {
+          return /\bhidden\b/.test(sources[file]);
+        });
+        assert.deepStrictEqual(uses, ["components/Disclosure.astro"]);
+        const disclosure = sources["components/Disclosure.astro"];
+        assert.ok(disclosure.includes('<p class="hidden">'), disclosure);
+        assert.ok(disclosure.includes(`"${SELECTOR}"`), disclosure);
+      });
+    });
   },
 );
 

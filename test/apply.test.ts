@@ -2556,3 +2556,161 @@ describe("object keys in built output (R16, KTD15)", function () {
     }
   });
 });
+
+// R17 (KTD16) on the apply route: a class selector inside a string of a
+// bundle or an executable inline script looks its class up by the original
+// name, so the class keeps that name everywhere. The whole-word scan misses
+// these because `.` is a class-name character.
+describe("selector strings in built output (R17, KTD16)", function () {
+  const registry = registryOf([
+    "hidden",
+    "block",
+    "flex",
+    "group",
+    "grid",
+    "md:flex",
+    "p-4",
+  ]);
+  const CSS =
+    "@layer utilities{.hidden{display:none}.block{display:block}" +
+    ".flex{display:flex}.grid{display:grid}.group{color:red}" +
+    ".p-4{padding:1rem}@media (width>=48rem){.md\\:flex{display:flex}}}";
+
+  function leaks(result: TransformSourceResult | null): Array<string> {
+    if (result === null) return [];
+    return result.warnings
+      .filter(function (warning) {
+        return warning.kind === "reverse-leak";
+      })
+      .map(function (warning) {
+        return warning.token ?? "";
+      })
+      .sort();
+  }
+
+  function bundleLeaks(code: string): Array<string> {
+    return leaks(transformBundle({ code, id: "/out/assets/app.js", registry }));
+  }
+
+  function pageLeaks(code: string): Array<string> {
+    return leaks(transformModule({ code, id: "/out/index.html", registry }));
+  }
+
+  it("counts a class selector in a bundle string (AE12)", function () {
+    for (const [code, tokens] of [
+      ['document.querySelector(".hidden");\n', ["hidden"]],
+      ['document.querySelectorAll("ul > .flex");\n', ["flex"]],
+      ['e.closest(".group");\n', ["group"]],
+      ['e.matches(".hidden, .block");\n', ["block", "hidden"]],
+      ["document.querySelector(`.${a} .flex`);\n", ["flex"]],
+      ['e.querySelector(":not(.hidden)");\n', ["hidden"]],
+      [
+        "e.querySelector('div.hidden > .flex:first-child');\n",
+        ["flex", "hidden"],
+      ],
+      ['e.querySelector(".hidden.block[data-x]");\n', ["block", "hidden"]],
+    ] as const) {
+      assert.deepStrictEqual(bundleLeaks(code), tokens, code);
+    }
+  });
+
+  it("decodes the string's JavaScript and CSS escapes", function () {
+    for (const [code, tokens] of [
+      ['e.querySelector(".md\\\\:flex");\n', ["md:flex"]],
+      ['e.querySelector("\\x2ehidden");\n', ["hidden"]],
+      ['e.querySelector(".\\\\68 idden");\n', ["hidden"]],
+      ['e.querySelector(".grid\\\\:x");\n', []],
+      ['e.querySelector("a\\\\.hidden");\n', []],
+    ] as const) {
+      assert.deepStrictEqual(bundleLeaks(code), tokens, code);
+    }
+  });
+
+  it("reports the selector's position in the bundle", function () {
+    const code = 'x();\ne.querySelector("ul > .md\\\\:flex");\n';
+    const result = transformBundle({
+      code,
+      id: "/out/assets/app.js",
+      registry,
+    });
+    assert.ok(result !== null);
+    assert.deepStrictEqual(
+      result.warnings.map(function (warning) {
+        return [warning.token, warning.line, warning.column];
+      }),
+      [["md:flex", 2, code.indexOf("md\\\\:flex") - code.indexOf("\n")]],
+    );
+  });
+
+  it("never counts property access, comments, or a regular expression (AE12)", function () {
+    for (const code of [
+      "el.hidden=!0;\n",
+      "a.flex();\n",
+      "// .grid\nx();\n",
+      "/* .grid */x();\n",
+      "const r=/\\.hidden/;\n",
+      'x("1.5rem");\n',
+    ]) {
+      assert.deepStrictEqual(bundleLeaks(code), [], code);
+    }
+  });
+
+  it("counts a class selector in an executable inline script", function () {
+    assert.deepStrictEqual(
+      pageLeaks(
+        '<!doctype html><html><body><p class="block">x</p>' +
+          '<script>document.querySelector(".block")</script></body></html>',
+      ),
+      ["block"],
+    );
+    assert.deepStrictEqual(
+      pageLeaks(
+        "<!doctype html><html><body>" +
+          '<script type="application/ld+json">{"a":".block"}</script>' +
+          "</body></html>",
+      ),
+      [],
+    );
+  });
+
+  it("keeps a selected class original everywhere, and still renames a class only property access names (AE12)", function () {
+    const dir = writeOutput({
+      "index.html":
+        "<!doctype html><html><body>" +
+        '<div class="hidden p-4">x</div><p class="block grid">y</p>' +
+        '<script>document.querySelector(".block").dataset.on=1</script>' +
+        "</body></html>",
+      "app.css": CSS,
+      "app.js": 'const e=document.querySelector(".hidden");e.grid=!0;\n',
+    });
+    try {
+      const result = applyBuildOutput({
+        dir,
+        registry,
+        consolidationVerdicts: [],
+        consolidate: false,
+      });
+      assert.deepStrictEqual(result.keptOriginal, ["block", "hidden"]);
+      const html = fs.readFileSync(path.join(dir, "index.html"), "utf8");
+      assert.ok(
+        html.includes(`class="hidden ${registry.nameFor("p-4")}"`),
+        html,
+      );
+      assert.ok(
+        html.includes(`class="block ${registry.nameFor("grid")}"`),
+        html,
+      );
+      assert.ok(html.includes('querySelector(".block")'), html);
+      const css = fs.readFileSync(path.join(dir, "app.css"), "utf8");
+      assert.ok(css.includes(".hidden{display:none}"), css);
+      assert.ok(css.includes(".block{display:block}"), css);
+      assert.ok(css.includes(`.${registry.nameFor("grid")}{`), css);
+      assert.strictEqual(
+        fs.readFileSync(path.join(dir, "app.js"), "utf8"),
+        'const e=document.querySelector(".hidden");e.grid=!0;\n',
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

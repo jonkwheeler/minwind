@@ -10,7 +10,10 @@ import {
   type LiteralOccurrence,
 } from "./class-contexts.js";
 import { leakViews } from "./html-entities.js";
-import { maskCommentsAndReservedWords } from "./js-mask.js";
+import {
+  maskCommentsAndReservedWords,
+  selectorClassReferences,
+} from "./js-mask.js";
 
 // Single-file-component support (Vue, Svelte, Astro). One walker feeds both
 // the U2 pre-pass scan and the U3 transform so classification can never
@@ -490,12 +493,19 @@ function offsetVisitor(
     return shifted;
   }
   const objectLiteralKey = visitor.objectLiteralKey;
+  const selectorReference = visitor.selectorReference;
   return {
     objectLiteralKey:
       objectLiteralKey === undefined
         ? undefined
         : function (key) {
             objectLiteralKey(shift(key));
+          },
+    selectorReference:
+      selectorReference === undefined
+        ? undefined
+        : function (reference) {
+            selectorReference(shift(reference));
           },
     enterRenameGroup: function (kind) {
       visitor.enterRenameGroup?.(kind);
@@ -1571,18 +1581,31 @@ export function walkSfcClassContexts(
   });
   walkContentRunsBefore(Infinity);
 
-  // KTD15: the identifier keys of every object in the template's other
-  // expressions, which the class walk above never parses.
+  // KTD15, KTD16: the identifier keys of every object and the class
+  // selectors of every string in the template's other expressions, which
+  // the class walk above never parses.
   const objectLiteralKey = visitor.objectLiteralKey;
-  if (objectLiteralKey !== undefined) {
-    const reportKeys = function (parsed: ParsedRun | null): void {
+  const selectorReference = visitor.selectorReference;
+  if (objectLiteralKey !== undefined || selectorReference !== undefined) {
+    const reportReferences = function (parsed: ParsedRun | null): void {
       if (parsed === null) return;
-      for (const key of objectLiteralKeys(parsed.sourceFile)) {
-        objectLiteralKey({
-          ...key,
-          start: parsed.toOriginal(key.start),
-          end: parsed.toOriginal(key.end),
-        });
+      const toOriginal = parsed.toOriginal;
+      function shift(occurrence: LiteralOccurrence): LiteralOccurrence {
+        return {
+          ...occurrence,
+          start: toOriginal(occurrence.start),
+          end: toOriginal(occurrence.end),
+        };
+      }
+      if (objectLiteralKey !== undefined) {
+        for (const key of objectLiteralKeys(parsed.sourceFile)) {
+          objectLiteralKey(shift(key));
+        }
+      }
+      if (selectorReference !== undefined) {
+        for (const reference of selectorClassReferences(parsed.sourceFile)) {
+          selectorReference(shift(reference));
+        }
       }
     };
     for (const directive of vueDirectives) {
@@ -1590,13 +1613,13 @@ export function walkSfcClassContexts(
       if (span.end <= span.start) continue;
       const value = text.slice(span.start, span.end);
       if (!directive.handler) {
-        reportKeys(parseExpression(filePath, value, span.start, "ts"));
+        reportReferences(parseExpression(filePath, value, span.start, "ts"));
         continue;
       }
       // A handler is an expression or statements.
       const sourceFile = parseSourceModule(`${filePath}::handler.ts`, value);
       if (!parsesCleanly(sourceFile)) continue;
-      reportKeys({
+      reportReferences({
         sourceFile,
         toOriginal: function (position) {
           return position + span.start;
@@ -1616,7 +1639,7 @@ export function walkSfcClassContexts(
       if (tag === null) continue;
       const contentStart = run.start + 1;
       if (!tag.declaration) {
-        reportKeys(
+        reportReferences(
           parseExpression(
             filePath,
             content.slice(tag.from, tag.to),
@@ -1631,7 +1654,7 @@ export function walkSfcClassContexts(
         `const${content.slice(tag.from)}`,
       );
       if (!parsesCleanly(declaration)) continue;
-      reportKeys({
+      reportReferences({
         sourceFile: declaration,
         toOriginal: function (position) {
           return position + contentStart + tag.from - "const".length;
@@ -1641,7 +1664,7 @@ export function walkSfcClassContexts(
     const walked = new Set(contentRuns);
     for (const run of runs) {
       if (walked.has(run) || !isExpression(run)) continue;
-      reportKeys(parsedRun(run));
+      reportReferences(parsedRun(run));
     }
   }
 
@@ -1754,10 +1777,12 @@ function scriptContent(element: TreeElement): ScriptContent {
   return essence === "application/ld+json" ? "json-ld" : "other";
 }
 
-// The leak text of a built page, and the object keys it holds.
+// The leak text of a built page, and the object keys and selector strings
+// it holds.
 export interface HtmlLeakText {
   text: string;
   objectKeys: Array<LiteralOccurrence>;
+  selectorReferences: Array<LiteralOccurrence>;
 }
 
 // KTD8: the leak text of a built page, with the positions that never hold a
@@ -1770,7 +1795,8 @@ export interface HtmlLeakText {
 // `text`. KTD15: objectKeys are the identifier object keys of executable
 // scripts and of scanned attribute values that parse as a JavaScript
 // expression once decoded (Alpine :class and x-data), less the objects
-// `skipObject` drops.
+// `skipObject` drops. KTD16: selectorReferences are the class selectors
+// inside the strings of executable scripts.
 export function maskHtmlLeakText(
   filePath: string,
   text: string,
@@ -1780,6 +1806,7 @@ export function maskHtmlLeakText(
   const blank: Array<SourceSpan> = [];
   const scripts: Array<SourceSpan> = [];
   const objectKeys: Array<LiteralOccurrence> = [];
+  const selectorReferences: Array<LiteralOccurrence> = [];
 
   function readAttributeKeys(span: SourceSpan): void {
     const raw = text.slice(span.start, span.end);
@@ -1864,8 +1891,15 @@ export function maskHtmlLeakText(
         end: span.start + key.end,
       });
     }
+    for (const reference of selectorClassReferences(script)) {
+      selectorReferences.push({
+        ...reference,
+        start: span.start + reference.start,
+        end: span.start + reference.end,
+      });
+    }
   }
-  return { text: chars.join(""), objectKeys };
+  return { text: chars.join(""), objectKeys, selectorReferences };
 }
 
 // One entry point for modules of every supported flavor: SFCs get the

@@ -7,7 +7,10 @@ import {
   leakViews,
   type EncodedClassToken,
 } from "./html-entities.js";
-import { maskCommentsAndReservedWords } from "./js-mask.js";
+import {
+  maskCommentsAndReservedWords,
+  selectorClassReferences,
+} from "./js-mask.js";
 import type { NameRegistry } from "./names.js";
 import {
   applySourceEdits,
@@ -27,10 +30,10 @@ import {
 //     (React/Vue jsx-runtime props).
 //
 // Everything else keeps its bytes. Consolidation collapses full-list spans
-// exactly as in the source transform; whole-word registry-token occurrences
-// and identifier object keys no edit consumed warn (the KTD7 leak posture)
-// rather than failing. Markup is HTML, so its class values decode as built
-// HTML does (KTD6).
+// exactly as in the source transform; whole-word registry-token occurrences,
+// identifier object keys, and class selectors inside strings no edit
+// consumed warn (the KTD7 leak posture) rather than failing. Markup is HTML,
+// so its class values decode as built HTML does (KTD6).
 
 export interface TransformBundleOptions {
   code: string;
@@ -256,6 +259,20 @@ export function transformBundle(
       else list.push(key);
     }
   }
+  // KTD16: a class selector inside a string counts too (querySelector
+  // (".hidden")), which the whole-word scan misses because `.` is a
+  // class-name character.
+  const selectorsByToken = new Map<
+    string,
+    Array<{ start: number; end: number }>
+  >();
+  if (entries.length > 0) {
+    for (const reference of selectorClassReferences(sourceFile)) {
+      const list = selectorsByToken.get(reference.text);
+      if (list === undefined) selectorsByToken.set(reference.text, [reference]);
+      else list.push(reference);
+    }
+  }
   for (const entry of entries) {
     const reported = new Set<number>();
     function report(span: { start: number; end: number }): void {
@@ -287,6 +304,9 @@ export function transformBundle(
       }
     }
     for (const key of keysByToken.get(entry.token) ?? []) report(key);
+    for (const reference of selectorsByToken.get(entry.token) ?? []) {
+      report(reference);
+    }
   }
 
   if (edits.size === 0 && warnings.length === 0) return null;
