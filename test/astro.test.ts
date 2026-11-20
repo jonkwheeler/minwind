@@ -8,6 +8,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { isDeepStrictEqual, promisify } from "node:util";
 import { ident, parse, type CssNode } from "css-tree";
 import MagicString, { Bundle } from "magic-string";
+import { build as viteBuild, type Plugin, type Rollup } from "vite";
 import minwind, {
   type AstroConfigLike,
   type MinwindAstroIntegration,
@@ -1624,6 +1625,12 @@ describe(
             );
           }
         }
+        // The vendor-provenance plugin runs in the on build only, so the
+        // same file names show it changed no chunk's hash.
+        assert.deepStrictEqual(
+          Object.keys(builds.on).sort(),
+          Object.keys(builds.off).sort(),
+        );
       });
 
       it("renames block and absolute, which only fake-motion mentions, and keeps relative (AE9)", function () {
@@ -1788,7 +1795,7 @@ describe("trustVendorModules hooks (R10, KTD10, KTD11)", function () {
           fileName: `${chunk.fileName}.map`,
         },
       };
-      plugin.generateBundle({}, bundle);
+      plugin.generateBundle({ sourcemap: "hidden" }, bundle);
       plugin.writeBundle({ dir: dist }, bundle);
     }
     return buildDone(integration, root);
@@ -1880,7 +1887,7 @@ describe("trustVendorModules hooks (R10, KTD10, KTD11)", function () {
       },
       "_astro/index.css": { type: "asset", fileName: "_astro/index.css" },
     };
-    plugin.generateBundle({}, bundle);
+    plugin.generateBundle({ sourcemap: "hidden" }, bundle);
     assert.deepStrictEqual(Object.keys(bundle), [
       "_astro/motion.js",
       "_astro/index.css",
@@ -1906,7 +1913,7 @@ describe("trustVendorModules hooks (R10, KTD10, KTD11)", function () {
           fileName: "_astro/motion.js.map",
         },
       };
-      plugin.generateBundle({}, bundle);
+      plugin.generateBundle({ sourcemap }, bundle);
       assert.deepStrictEqual(
         Object.keys(bundle),
         ["_astro/motion.js", "_astro/motion.js.map"],
@@ -1970,6 +1977,109 @@ describe("trustVendorModules hooks (R10, KTD10, KTD11)", function () {
       );
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+// Review #9: the vendor-provenance plugin removes only the hidden maps it
+// asked for, so maps the site asks for itself, from its config or a later
+// plugin, ship as Vite emits them. A build that renames nothing gets no
+// plugin.
+describe("trustVendorModules sourcemap ownership", function () {
+  function provenancePlugin(): Plugin {
+    const updates = setup(minwind({ trustVendorModules: true }), "build");
+    const plugins = updates.flatMap(function (update) {
+      const vite = (update as { vite?: { plugins: Array<unknown> } }).vite;
+      return vite === undefined ? [] : vite.plugins;
+    });
+    assert.strictEqual(plugins.length, 1, JSON.stringify(updates));
+    return plugins[0] as Plugin;
+  }
+
+  // A plugin listed after minwind's that turns maps on, as another
+  // integration can.
+  const LATER_MAPS: Plugin = {
+    name: "later-maps",
+    configEnvironment: function () {
+      return { build: { sourcemap: true } };
+    },
+  };
+
+  // Vite client builds of one module from one root, a build per plugin
+  // list, kept in memory: each emitted file's text by name.
+  async function viteOutputs(
+    pluginLists: Array<Array<Plugin>>,
+  ): Promise<Array<Record<string, string>>> {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "minwind-astro-maps-"));
+    try {
+      writeFile(root, "main.js", 'document.body.style.display = "block";\n');
+      const trees: Array<Record<string, string>> = [];
+      for (const plugins of pluginLists) {
+        const result = await viteBuild({
+          root,
+          configFile: false,
+          logLevel: "silent",
+          plugins,
+          build: {
+            write: false,
+            rollupOptions: { input: path.join(root, "main.js") },
+          },
+        });
+        const files: Record<string, string> = {};
+        const outputs = (
+          Array.isArray(result) ? result : [result]
+        ) as Array<Rollup.RollupOutput>;
+        for (const { output } of outputs) {
+          for (const file of output) {
+            files[file.fileName] =
+              file.type === "chunk"
+                ? file.code
+                : Buffer.from(file.source).toString("utf8");
+          }
+        }
+        trees.push(files);
+      }
+      return trees;
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }
+
+  it("leaves a later plugin's maps and their sourceMappingURL comments", async function () {
+    const [site, withMinwind] = await viteOutputs([
+      [LATER_MAPS],
+      [provenancePlugin(), LATER_MAPS],
+    ]);
+    const maps = Object.keys(site).filter(function (file) {
+      return file.endsWith(".js.map");
+    });
+    assert.strictEqual(maps.length, 1, Object.keys(site).join(", "));
+    const chunk = maps[0].slice(0, -".map".length);
+    assert.ok(site[chunk].includes("//# sourceMappingURL="), site[chunk]);
+    assert.deepStrictEqual(withMinwind, site);
+  });
+
+  it("removes the hidden maps it asked for, matching a build without it", async function () {
+    const [plain, withMinwind] = await viteOutputs([[], [provenancePlugin()]]);
+    assert.ok(
+      !Object.keys(plain).some(function (file) {
+        return file.endsWith(".map");
+      }),
+      Object.keys(plain).join(", "),
+    );
+    assert.deepStrictEqual(withMinwind, plain);
+  });
+
+  it("adds no plugin under MINWIND=off or MINWIND_RENAME=off", async function () {
+    for (const name of ["MINWIND", "MINWIND_RENAME"]) {
+      const updates = await withEnv(name, "off", function () {
+        return setup(minwind({ trustVendorModules: true }), "build");
+      });
+      assert.deepStrictEqual(
+        updates,
+        [{ build: { inlineStylesheets: "never" } }],
+        name,
+      );
     }
   });
 });

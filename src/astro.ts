@@ -1,8 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
+import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { keptUnrewritable } from "./apply.js";
-import type { MinwindEngineId, MinwindMode } from "./flags.js";
+import {
+  resolveFlags,
+  type MinwindEngineId,
+  type MinwindMode,
+} from "./flags.js";
 import type { ExclusionConfig } from "./names.js";
 import {
   isThemedNaming,
@@ -268,9 +273,15 @@ export default function minwind(
         // Overrides the user's value. A later integration can change it
         // again, so astro:config:done checks the final value.
         params.updateConfig({ build: { inlineStylesheets: "never" } });
-        if (trust !== undefined) {
-          // Under MINWIND=off too: the plugin changes no emitted file, so
-          // the off build still matches a build without minwind.
+        // Not under MINWIND=off or MINWIND_RENAME=off: nothing reads the
+        // chunks there, so the off build stays a build without minwind.
+        if (
+          trust !== undefined &&
+          resolveFlags(process.env, {
+            mode: options.mode,
+            engines: options.engines,
+          }).enabled
+        ) {
           vendorChunks = [];
           params.updateConfig({
             vite: { plugins: [vendorProvenancePlugin(vendorChunks)] },

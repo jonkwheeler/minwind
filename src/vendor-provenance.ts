@@ -238,7 +238,10 @@ export interface VendorProvenancePlugin {
     name: string,
     config: { build?: { sourcemap?: unknown } },
   ): { build: { sourcemap: "hidden" } } | undefined;
-  generateBundle(options: unknown, bundle: OutputBundleLike): void;
+  generateBundle(
+    options: { sourcemap?: unknown },
+    bundle: OutputBundleLike,
+  ): void;
   writeBundle(options: { dir?: string }, bundle: OutputBundleLike): void;
 }
 
@@ -268,8 +271,11 @@ export function vendorProvenancePlugin(
       ownsMaps = true;
       return { build: { sourcemap: "hidden" } };
     },
-    generateBundle: function (_options, bundle) {
-      if (!ownsMaps) return;
+    // A later hook can still set a mode of its own, and its maps are the
+    // site's: true also links each one from its chunk. So the maps go only
+    // when the output's mode is still the "hidden" the plugin asked for.
+    generateBundle: function (options, bundle) {
+      if (!ownsMaps || options.sourcemap !== "hidden") return;
       for (const output of Object.values(bundle)) {
         if (output.type !== "chunk") continue;
         const mapFile = output.sourcemapFileName ?? `${output.fileName}.map`;
