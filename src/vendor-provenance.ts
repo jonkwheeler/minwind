@@ -50,6 +50,11 @@ const QUOTES = "\"'`";
 // name different text on either side.
 const IRREGULAR_LINE_BREAK = /\r(?!\n)|[\u2028\u2029]/;
 
+// Base64 VLQ digits and the segment and line separators. decode reads any
+// other character as a digit without throwing, so mappings holding one
+// would decode to segments the bundler never wrote.
+const MAPPINGS = /^[A-Za-z0-9+/,;]*$/;
+
 // KTD10: a source is vendor code when its path, without a \0 prefix or a
 // query and with / separators, has a node_modules directory. With an array,
 // the package after the last node_modules must be listed; a scoped name
@@ -131,13 +136,14 @@ function attributeChunk(
   trust: VendorTrust,
 ): VendorOccurrenceTest | null {
   const map = record.map;
-  if (map === null || IRREGULAR_LINE_BREAK.test(record.code)) return null;
-  let lines: Array<Array<SourceMapSegment>>;
-  try {
-    lines = decode(map.mappings);
-  } catch {
+  if (
+    map === null ||
+    IRREGULAR_LINE_BREAK.test(record.code) ||
+    !MAPPINGS.test(map.mappings)
+  ) {
     return null;
   }
+  const lines = decode(map.mappings);
   if (lines.length === 0) return null;
   for (const segments of lines) {
     segments.sort(function (a, b) {

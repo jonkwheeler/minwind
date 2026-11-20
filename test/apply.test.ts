@@ -2893,6 +2893,11 @@ describe("trusted vendor occurrences (R10, KTD10)", function () {
       { ...chunk, map: { ...map, sourcesContent: undefined } },
       { ...chunk, written: `${chunk.code}\n` },
       { ...chunk, map: { ...map, mappings: "" } },
+      { ...chunk, map: { ...map, mappings: "!!!" } },
+      // Line breaks a parser and a map generator can count differently,
+      // in the chunk or in a source.
+      chunkOf([{ source: MOTION, code: SHOW }], { append: "/* */" }),
+      { ...chunk, map: { ...map, sourcesContent: [`${SHOW}\r`] } },
     ]) {
       assert.deepStrictEqual(
         applyChunks({ "motion.js": unusable }, true).result.keptOriginal,
