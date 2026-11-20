@@ -3022,3 +3022,85 @@ describe("trusted vendor occurrences (R10, KTD10)", function () {
     );
   });
 });
+
+// KTD15 with both engines: the object-key leak scan skips only an object the
+// Modules remap claims in full, every value a name the module emitted. Any
+// other object whose keys happen to be one module's locals is a runtime class
+// list as far as the scan can tell, so its keys keep their classes original.
+describe("Module export maps the remap does not claim (KTD15)", function () {
+  const registry = registryOf(["hidden", "p-4"]);
+  const HIDDEN = "Panel-module__abc__hidden";
+  const PANEL = "Panel-module__abc__panel";
+
+  function applyBoth(js: string): { result: ApplyResult; dir: string } {
+    const site = fs.mkdtempSync(path.join(os.tmpdir(), "minwind-dual-root-"));
+    try {
+      fs.mkdirSync(path.join(site, "src"));
+      fs.writeFileSync(
+        path.join(site, "src", "Panel.module.css"),
+        ".hidden { opacity: 0 }\n.panel { color: red }",
+      );
+      const inventory = collectModuleInventory(site);
+      const dir = writeOutput({
+        "index.html": `<!doctype html><div class="hidden p-4 ${PANEL}">x</div>`,
+        "app.css": "@layer utilities{.hidden{display:none}.p-4{padding:1rem}}",
+        "panel.css": `.${HIDDEN}{opacity:0}.${PANEL}{color:red}`,
+        "app.js": js,
+      });
+      const result = applyBuildOutput({
+        dir,
+        registry,
+        consolidationVerdicts: [],
+        consolidate: false,
+        modules: {
+          root: site,
+          inventory,
+          registry: createModuleNameRegistry(inventory),
+        },
+      });
+      return { result, dir };
+    } finally {
+      fs.rmSync(site, { recursive: true, force: true });
+    }
+  }
+
+  it("keeps a key original when the remap claims none or only some of the object's values", function () {
+    for (const states of [
+      '{hidden:""}',
+      '{hidden:" "}',
+      '{hidden:"0"}',
+      `{hidden:"",panel:"${PANEL}"}`,
+    ]) {
+      const js = `const states=${states};target.classList.add(...Object.keys(states));\n`;
+      const { result, dir } = applyBoth(js);
+      try {
+        assert.deepStrictEqual(result.keptOriginal, ["hidden"], states);
+        const html = fs.readFileSync(path.join(dir, "index.html"), "utf8");
+        assert.ok(
+          html.includes(`class="hidden ${registry.nameFor("p-4")} `),
+          html,
+        );
+        const css = fs.readFileSync(path.join(dir, "app.css"), "utf8");
+        assert.ok(css.includes(".hidden{display:none}"), css);
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it("still skips a map whose every value the remap claims", function () {
+    const { result, dir } = applyBoth(
+      `const styles={hidden:"${HIDDEN}",panel:"${PANEL}"};\n`,
+    );
+    try {
+      assert.deepStrictEqual(result.keptOriginal, []);
+      const css = fs.readFileSync(path.join(dir, "app.css"), "utf8");
+      assert.ok(
+        css.includes(`.${registry.nameFor("hidden")}{display:none}`),
+        css,
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
