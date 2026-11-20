@@ -11,6 +11,12 @@ import {
   type NamingConfig,
 } from "./naming.js";
 import { runApply, type RunApplyResult } from "./run-apply.js";
+import {
+  vendorProvenancePlugin,
+  type ChunkProvenance,
+  type VendorProvenancePlugin,
+  type VendorTrust,
+} from "./vendor-provenance.js";
 
 // Astro integration (KTD1). Astro compiles and renders the site itself;
 // astro:build:done then runs the apply engine in-process on the finished
@@ -41,6 +47,13 @@ export interface MinwindAstroOptions {
   // <body>, then the first class-bearing elements). false deals by length
   // alone. Hash, dialect, and maps naming never rank.
   prominence?: boolean;
+  // Off by default. true, or the names of the node_modules packages to
+  // trust: a class name that only trusted vendor JavaScript mentions, such
+  // as a motion library's el.style.display = "block", no longer keeps the
+  // class original. A trusted script that adds such a class by its
+  // original name breaks, so the build log names each renamed class
+  // trusted code mentions. Project code always counts.
+  trustVendorModules?: boolean | ReadonlyArray<string>;
 }
 
 export interface AstroLoggerLike {
@@ -56,13 +69,17 @@ export interface AstroConfigLike {
   security?: { csp?: unknown };
 }
 
+export type AstroConfigUpdate =
+  | { build: { inlineStylesheets: "never" } }
+  | { vite: { plugins: Array<VendorProvenancePlugin> } };
+
 export interface MinwindAstroIntegration {
   name: string;
   hooks: {
     "astro:config:setup": (params: {
       // "dev", "build", "preview", or "sync".
       command: string;
-      updateConfig(config: { build: { inlineStylesheets: "never" } }): unknown;
+      updateConfig(config: AstroConfigUpdate): unknown;
     }) => void;
     "astro:config:done": (params: {
       config: AstroConfigLike;
@@ -89,6 +106,28 @@ const CUSTOM_PROPERTIES_ERROR =
 function assertNaming(naming: NamingConfig | undefined): void {
   resolveHasher(naming);
   if (isThemedNaming(naming)) resolveVocabulary(naming);
+}
+
+// A package name as it appears after node_modules/: one segment, or two
+// for a scoped package.
+const PACKAGE_NAME = /^(?:@[^@/\s]+\/)?[^@/\s]+$/;
+
+function resolveVendorTrust(value: unknown): VendorTrust | undefined {
+  if (value === undefined || value === false) return undefined;
+  if (value === true) return true;
+  if (
+    Array.isArray(value) &&
+    value.every(function (name) {
+      return typeof name === "string" && PACKAGE_NAME.test(name);
+    })
+  ) {
+    return value.slice();
+  }
+  throw new Error(
+    "minwind/astro: trustVendorModules must be true, false, or an array of" +
+      ' package names such as ["gsap", "@scope/name"], but got' +
+      ` ${JSON.stringify(value) ?? String(value)}`,
+  );
 }
 
 function assertRenameableConfig(
@@ -184,6 +223,14 @@ function logSummary(
         ` ${result.keptDependent.join(", ")}`,
     );
   }
+  if (result.vendorMentions.length > 0) {
+    logger.info(
+      `renamed ${result.vendorMentions.length} class(es) that trusted` +
+        " vendor code mentions (trustVendorModules); if a vendor script" +
+        " adds one by its original name, list it in exclusions:" +
+        ` ${result.vendorMentions.join(", ")}`,
+    );
+  }
   if (result.warnings.length > 0) {
     logger.warn(
       `${result.warnings.length} warning(s); inspect` +
@@ -201,6 +248,8 @@ export default function minwind(
   let root: string | undefined;
   let sourceDir: string | undefined;
   let cssEntry: string | undefined;
+  let trust: VendorTrust | undefined;
+  let vendorChunks: Array<ChunkProvenance> = [];
 
   return {
     name: "minwind",
@@ -215,9 +264,18 @@ export default function minwind(
           throw new Error(CUSTOM_PROPERTIES_ERROR);
         }
         assertNaming(options.naming);
+        trust = resolveVendorTrust(passed.trustVendorModules);
         // Overrides the user's value. A later integration can change it
         // again, so astro:config:done checks the final value.
         params.updateConfig({ build: { inlineStylesheets: "never" } });
+        if (trust !== undefined) {
+          // Under MINWIND=off too: the plugin changes no emitted file, so
+          // the off build still matches a build without minwind.
+          vendorChunks = [];
+          params.updateConfig({
+            vite: { plugins: [vendorProvenancePlugin(vendorChunks)] },
+          });
+        }
       },
 
       "astro:config:done": function (params) {
@@ -251,6 +309,8 @@ export default function minwind(
           mode: options.mode,
           engines: options.engines,
           prominence: ranked ? "auto" : undefined,
+          vendorProvenance:
+            trust === undefined ? undefined : { trust, chunks: vendorChunks },
         });
         logSummary(params.logger, outcome, ranked);
       },

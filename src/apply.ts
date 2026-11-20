@@ -19,6 +19,11 @@ import {
   selectorArmTokens,
   type CssTransformWarning,
 } from "./transform-css.js";
+import {
+  vendorAttribution,
+  type VendorOccurrenceTest,
+  type VendorProvenance,
+} from "./vendor-provenance.js";
 import { rewriteCssAssets } from "./webpack.js";
 
 // The post-build rewriter behind `minwind apply` — the path for bundlers
@@ -38,6 +43,10 @@ export interface ApplyOptions {
   consolidate: boolean;
   dryRun?: boolean;
   modules?: ModuleRemapContext;
+  // trustVendorModules (R10): the recorded client chunks. A leak occurrence
+  // a chunk's map attributes to a trusted node_modules package stops
+  // counting; every other occurrence counts as before.
+  vendorProvenance?: VendorProvenance;
 }
 
 export interface ApplyResult {
@@ -57,6 +66,10 @@ export interface ApplyResult {
   // appears in compounds a class kept original (KTD7), such as a
   // `group-hover:*` utility whose `group` marker leaked.
   keptDependent: Array<string>;
+  // Renamed tokens that trusted vendor code mentions at an occurrence that
+  // stopped counting (R10): a page a class-toggling library breaks points
+  // here.
+  vendorMentions: Array<string>;
 }
 
 // The tokens kept original for an occurrence in an unrewritable position:
@@ -114,6 +127,21 @@ export function filterRegistry(
       registry.assertBijection();
     },
   };
+}
+
+// KTD10: a reverse-leak warning at an occurrence copied from trusted vendor
+// code. Filtering found occurrences by position covers every kind the scans
+// report.
+function atVendorOccurrence(
+  warning: TransformWarning,
+  isVendor: VendorOccurrenceTest | null,
+): boolean {
+  return (
+    isVendor !== null &&
+    warning.kind === "reverse-leak" &&
+    warning.token !== undefined &&
+    isVendor(warning.line, warning.column, warning.token)
+  );
 }
 
 // HTML through the SFC walker, JS bundles through the bundle pass.
@@ -209,10 +237,14 @@ export function applyBuildOutput(options: ApplyOptions): ApplyResult {
   // in the stylesheet while the DOM keeps the original would break the
   // page, so the token drops out of the rename set entirely. With the
   // Modules engine, a proven export map's keys are module locals and never
-  // leak (KTD15); the remap that renames its values runs last.
+  // leak (KTD15); the remap that renames its values runs last. With
+  // trustVendorModules, an occurrence from trusted vendor code does not leak
+  // (KTD10), and renaming still runs on the whole chunk.
   const isExportMap =
     options.modules === undefined ? undefined : exportMapProof(options.modules);
+  const vendorTest = vendorAttribution(options.vendorProvenance);
   const leaked = new Set<string>();
+  const vendorMentioned = new Set<string>();
   for (const file of classFiles) {
     const code = fs.readFileSync(file, "utf8");
     const detected = transformOutput(
@@ -223,8 +255,14 @@ export function applyBuildOutput(options: ApplyOptions): ApplyResult {
       isExportMap,
     );
     if (detected === null) continue;
+    const isVendor = vendorTest(file, code);
     for (const warning of detected.warnings) {
-      if (warning.kind === "reverse-leak" && warning.token !== undefined) {
+      if (warning.kind !== "reverse-leak" || warning.token === undefined) {
+        continue;
+      }
+      if (atVendorOccurrence(warning, isVendor)) {
+        vendorMentioned.add(warning.token);
+      } else {
         leaked.add(warning.token);
       }
     }
@@ -288,6 +326,11 @@ export function applyBuildOutput(options: ApplyOptions): ApplyResult {
     consolidated: 0,
     keptOriginal: Array.from(leaked).sort(),
     keptDependent,
+    vendorMentions: Array.from(vendorMentioned)
+      .filter(function (token) {
+        return !leaked.has(token);
+      })
+      .sort(),
   };
 
   const css = rewriteCssAssets(
@@ -322,7 +365,10 @@ export function applyBuildOutput(options: ApplyOptions): ApplyResult {
     if (isHtml) result.htmlFiles += 1;
     else result.jsFiles += 1;
     if (transformed === null) continue;
-    result.warnings.push(...transformed.warnings);
+    const isVendor = vendorTest(file, code);
+    for (const warning of transformed.warnings) {
+      if (!atVendorOccurrence(warning, isVendor)) result.warnings.push(warning);
+    }
     if (transformed.code === code) continue;
     result.rewrittenFiles += 1;
     if (options.dryRun !== true) fs.writeFileSync(file, transformed.code);

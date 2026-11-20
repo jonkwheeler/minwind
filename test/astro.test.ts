@@ -5,8 +5,9 @@ import os from "node:os";
 import path from "node:path";
 import { before, describe, it } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { promisify } from "node:util";
+import { isDeepStrictEqual, promisify } from "node:util";
 import { ident, parse, type CssNode } from "css-tree";
+import MagicString, { Bundle } from "magic-string";
 import minwind, {
   type AstroConfigLike,
   type MinwindAstroIntegration,
@@ -15,6 +16,12 @@ import minwind, {
 import { compileTailwindStylesheet } from "../src/engines/tailwind.js";
 import { hashClassName } from "../src/names.js";
 import type { RenameMap, TransformReport } from "../src/report.js";
+import type {
+  OutputBundleLike,
+  OutputChunkLike,
+  SourceMapLike,
+  VendorProvenancePlugin,
+} from "../src/vendor-provenance.js";
 
 // minwind/astro driven through its hooks with fake hook arguments, in the
 // order `astro build` calls them; the end-to-end section at the bottom runs
@@ -665,16 +672,17 @@ function endToEndSkip(): string | false {
 }
 
 // process.execPath runs Astro on the Node this suite was gated on, whatever
-// node comes first on PATH.
+// node comes first on PATH. Resolves to the build's log.
 async function astroBuild(
   outDir: string,
   env: Record<string, string>,
-): Promise<void> {
-  await execFileAsync(
+): Promise<string> {
+  const { stdout, stderr } = await execFileAsync(
     process.execPath,
     [ASTRO_CLI, "build", "--outDir", outDir],
     { cwd: FIXTURE, env: { ...process.env, ...env } },
   );
+  return `${stdout}${stderr}`;
 }
 
 interface Builds {
@@ -682,15 +690,38 @@ interface Builds {
   off: Record<string, string>;
   baseline: Record<string, string>;
   offWroteArtifacts: boolean;
+  onLog: string;
+}
+
+const VENDOR = path.join(FIXTURE, "vendor", "fake-motion");
+const INSTALLED_VENDOR = path.join(FIXTURE, "node_modules", "fake-motion");
+
+// pnpm installs the file: dependency as a copy, so an edit under vendor/
+// reaches the build only through a reinstall (KTD14).
+function vendorInstalled(): boolean {
+  return (
+    fs.existsSync(INSTALLED_VENDOR) &&
+    isDeepStrictEqual(readTree(INSTALLED_VENDOR), readTree(VENDOR))
+  );
 }
 
 async function ensureBuilt(): Promise<Builds> {
   // The fixture's minwind/astro is this package's dist, so build it first.
   await execFileAsync("pnpm", ["run", "build"], { cwd: REPO });
-  if (!fs.existsSync(path.join(FIXTURE, "node_modules", "astro"))) {
-    await execFileAsync("pnpm", ["install", "--ignore-workspace"], {
+  if (
+    !fs.existsSync(path.join(FIXTURE, "node_modules", "astro")) ||
+    !vendorInstalled()
+  ) {
+    // CI mode and a closed stdin keep pnpm from waiting on a prompt, and the
+    // timeout turns any other stall into a failure instead of a hung suite.
+    const install = execFileAsync("pnpm", ["install", "--ignore-workspace"], {
       cwd: FIXTURE,
+      env: { ...process.env, CI: "true" },
+      timeout: 300_000,
     });
+    install.child.stdin?.end();
+    await install;
+    assert.ok(vendorInstalled(), "the install left a stale fake-motion");
   }
   for (const dir of Object.values(OUT_DIRS)) {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -699,12 +730,13 @@ async function ensureBuilt(): Promise<Builds> {
   await astroBuild(OUT_DIRS.baseline, { MINWIND_FIXTURE_NO_INTEGRATION: "1" });
   await astroBuild(OUT_DIRS.off, { MINWIND: "off" });
   const offWroteArtifacts = fs.existsSync(ARTIFACTS);
-  await astroBuild(OUT_DIRS.on, {});
+  const onLog = await astroBuild(OUT_DIRS.on, {});
   return {
     on: readTree(OUT_DIRS.on),
     off: readTree(OUT_DIRS.off),
     baseline: readTree(OUT_DIRS.baseline),
     offWroteArtifacts,
+    onLog,
   };
 }
 
@@ -1545,6 +1577,89 @@ describe(
         assert.ok(disclosure.includes(`"${SELECTOR}"`), disclosure);
       });
     });
+
+    // R10 (KTD10): both pages import src/scripts/motion.ts, so Rolldown
+    // emits one shared chunk holding it and fake-motion, which Astro never
+    // inlines. trustVendorModules is on for the minwind builds.
+    describe("trusted vendor modules (R10)", function () {
+      function motionChunk(tree: Record<string, string>): string {
+        const files = Object.keys(tree).filter(function (file) {
+          return (
+            path.dirname(file) === "_astro" &&
+            file.endsWith(".js") &&
+            tree[file].includes("[data-motion]")
+          );
+        });
+        assert.strictEqual(files.length, 1, files.join(", "));
+        return files[0];
+      }
+
+      it("ships fake-motion and motion.ts in one external chunk, with no sourcemap (probe)", function () {
+        const chunk = motionChunk(builds.on);
+        const code = builds.on[chunk];
+        assert.match(code, /\.style\.display=[`"']block[`"']/);
+        assert.match(code, /\{position:[`"']absolute[`"']\}/);
+        assert.match(code, /static mark=[`"']\u2726[`"']/);
+        assert.match(code, /\.position===[`"']relative[`"']/);
+        const entries = Object.keys(builds.on).filter(function (file) {
+          return builds.on[file].includes(`"./${path.basename(chunk)}"`);
+        });
+        for (const page of pagesOf(builds.on)) {
+          assert.ok(
+            entries.some(function (entry) {
+              return builds.on[page].includes(`src="/${entry}"`);
+            }),
+            `${page} loads no entry that imports ${chunk}`,
+          );
+        }
+        for (const [name, tree] of Object.entries({
+          on: builds.on,
+          off: builds.off,
+        })) {
+          for (const file of Object.keys(tree)) {
+            assert.ok(!file.endsWith(".map"), `${name}: ${file}`);
+            assert.ok(
+              !tree[file].includes("sourceMappingURL"),
+              `${name}: ${file}`,
+            );
+          }
+        }
+      });
+
+      it("renames block and absolute, which only fake-motion mentions, and keeps relative (AE9)", function () {
+        const renamed = new Set(
+          report.renames.map(function (entry) {
+            return entry.token;
+          }),
+        );
+        assert.ok(renamed.has("block") && renamed.has("absolute"));
+        assert.ok(!renamed.has("relative"));
+        const motion =
+          /<p class="([^"]*)">\s*Motion <span class="([^"]*)">/.exec(
+            builds.on["index.html"],
+          );
+        assert.ok(motion !== null, builds.on["index.html"]);
+        assert.ok(splitClasses(motion[1]).includes("relative"), motion[1]);
+        const span = splitClasses(motion[2]);
+        assert.deepStrictEqual(sorted(span.map(decode)), ["absolute", "block"]);
+        const selectors = selectorClasses(stylesheetOf(builds.on));
+        assert.ok(selectors.has("relative"));
+        for (const name of span) assert.ok(selectors.has(name), name);
+        assert.ok(!selectors.has("block") && !selectors.has("absolute"));
+        // fake-motion's inline-style values keep their bytes.
+        const chunk = motionChunk(builds.on);
+        assert.strictEqual(builds.on[chunk], builds.off[chunk]);
+      });
+
+      it("logs the renamed classes trusted vendor code mentions", function () {
+        const lines = builds.onLog.split("\n").filter(function (line) {
+          return line.includes("trusted vendor code");
+        });
+        assert.strictEqual(lines.length, 1, builds.onLog);
+        assert.match(lines[0], /renamed 2 class\(es\)/);
+        assert.match(lines[0], /: absolute, block\s*$/);
+      });
+    });
   },
 );
 
@@ -1606,6 +1721,253 @@ describe("astro:build:done dependent variants (R7, KTD7)", function () {
         page,
       );
       assert.ok(page.includes(`<nav class="${hashClassName("flex")}">`), page);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("trustVendorModules hooks (R10, KTD10, KTD11)", function () {
+  const MOTION =
+    "/site/node_modules/.pnpm/fake-motion@1.0.0/node_modules/fake-motion/index.js";
+  const PROJECT = "/site/src/scripts/motion.ts";
+
+  function pluginOf(updates: Array<unknown>): VendorProvenancePlugin {
+    const plugins = updates.flatMap(function (update) {
+      const vite = (update as { vite?: { plugins: Array<unknown> } }).vite;
+      return vite === undefined ? [] : vite.plugins;
+    });
+    assert.strictEqual(plugins.length, 1, JSON.stringify(updates));
+    return plugins[0] as VendorProvenancePlugin;
+  }
+
+  // A client chunk of the two modules, mapped as Rolldown maps a chunk.
+  function motionChunk(
+    vendor: string,
+    project: string,
+  ): OutputChunkLike & { map: SourceMapLike } {
+    const bundle = new Bundle({ separator: "" });
+    bundle.addSource({ filename: MOTION, content: new MagicString(vendor) });
+    bundle.addSource({ filename: PROJECT, content: new MagicString(project) });
+    const map = bundle.generateMap({ hires: "boundary", includeContent: true });
+    return {
+      type: "chunk",
+      fileName: "_astro/motion.js",
+      code: bundle.toString(),
+      map: {
+        sources: map.sources,
+        sourcesContent: map.sourcesContent,
+        mappings: map.mappings,
+      },
+      sourcemapFileName: "_astro/motion.js.map",
+    };
+  }
+
+  // The hooks of `astro build` around the client build: the plugin asks
+  // for maps, sees the bundle, and records the chunk Astro then writes.
+  async function buildWithChunk(
+    options: MinwindAstroOptions,
+    root: string,
+    chunk: OutputChunkLike,
+  ): Promise<Logs> {
+    const integration = minwind(options);
+    const updates = setup(integration, "build");
+    integration.hooks["astro:config:done"]({
+      config: configFor(root),
+      buildOutput: "static",
+    });
+    const dist = path.join(root, "dist");
+    writeFile(dist, chunk.fileName, chunk.code);
+    if (options.trustVendorModules) {
+      const plugin = pluginOf(updates);
+      plugin.configEnvironment("client", { build: {} });
+      const bundle: OutputBundleLike = {
+        [chunk.fileName]: chunk,
+        [`${chunk.fileName}.map`]: {
+          type: "asset",
+          fileName: `${chunk.fileName}.map`,
+        },
+      };
+      plugin.generateBundle({}, bundle);
+      plugin.writeBundle({ dir: dist }, bundle);
+    }
+    return buildDone(integration, root);
+  }
+
+  it("adds the vendor-provenance plugin on a build, for true or package names", function () {
+    for (const trustVendorModules of [true, ["fake-motion", "@scope/tween"]]) {
+      const updates = setup(minwind({ trustVendorModules }), "build");
+      assert.strictEqual(pluginOf(updates).name, "minwind:vendor-provenance");
+      assert.deepStrictEqual(updates[0], {
+        build: { inlineStylesheets: "never" },
+      });
+    }
+  });
+
+  it("adds no plugin in dev, or when the option is false or absent", function () {
+    assert.deepStrictEqual(
+      setup(minwind({ trustVendorModules: true }), "dev"),
+      [],
+    );
+    for (const options of [{ trustVendorModules: false }, {}]) {
+      assert.deepStrictEqual(setup(minwind(options), "build"), [
+        { build: { inlineStylesheets: "never" } },
+      ]);
+    }
+  });
+
+  it("rejects a value other than a boolean or an array of package names", function () {
+    for (const value of [
+      "gsap",
+      1,
+      null,
+      {},
+      [1],
+      [""],
+      ["node_modules/gsap"],
+      ["gsap/dist"],
+      [" gsap"],
+    ]) {
+      const options = {
+        trustVendorModules: value,
+      } as unknown as MinwindAstroOptions;
+      assert.throws(
+        function () {
+          setup(minwind(options), "build");
+        },
+        /trustVendorModules must be true, false, or an array of package names/,
+        JSON.stringify(value),
+      );
+    }
+  });
+
+  it("runs only in the client environment", function () {
+    const plugin = pluginOf(
+      setup(minwind({ trustVendorModules: true }), "build"),
+    );
+    assert.strictEqual(plugin.applyToEnvironment({ name: "client" }), true);
+    for (const name of ["ssr", "prerender", "astro"]) {
+      assert.strictEqual(plugin.applyToEnvironment({ name }), false, name);
+      assert.strictEqual(
+        plugin.configEnvironment(name, { build: {} }),
+        undefined,
+      );
+    }
+  });
+
+  it("asks for hidden maps and keeps them out of the written bundle", function () {
+    const plugin = pluginOf(
+      setup(minwind({ trustVendorModules: true }), "build"),
+    );
+    // Astro resolves the client config in rounds, and the last ones see
+    // the "hidden" the first asked for.
+    for (const sourcemap of [undefined, false]) {
+      assert.deepStrictEqual(
+        plugin.configEnvironment("client", { build: { sourcemap } }),
+        { build: { sourcemap: "hidden" } },
+      );
+    }
+    assert.strictEqual(
+      plugin.configEnvironment("client", { build: { sourcemap: "hidden" } }),
+      undefined,
+    );
+    const chunk = motionChunk('e.style.display="flex";', "go();");
+    const bundle: OutputBundleLike = {
+      [chunk.fileName]: chunk,
+      "_astro/motion.js.map": {
+        type: "asset",
+        fileName: "_astro/motion.js.map",
+      },
+      "_astro/index.css": { type: "asset", fileName: "_astro/index.css" },
+    };
+    plugin.generateBundle({}, bundle);
+    assert.deepStrictEqual(Object.keys(bundle), [
+      "_astro/motion.js",
+      "_astro/index.css",
+    ]);
+  });
+
+  it("keeps the maps a site asks for itself", function () {
+    for (const sourcemap of [true, "hidden", "inline"]) {
+      const plugin = pluginOf(
+        setup(minwind({ trustVendorModules: true }), "build"),
+      );
+      for (let round = 0; round < 2; round += 1) {
+        assert.strictEqual(
+          plugin.configEnvironment("client", { build: { sourcemap } }),
+          undefined,
+        );
+      }
+      const chunk = motionChunk('e.style.display="flex";', "go();");
+      const bundle: OutputBundleLike = {
+        [chunk.fileName]: chunk,
+        "_astro/motion.js.map": {
+          type: "asset",
+          fileName: "_astro/motion.js.map",
+        },
+      };
+      plugin.generateBundle({}, bundle);
+      assert.deepStrictEqual(
+        Object.keys(bundle),
+        ["_astro/motion.js", "_astro/motion.js.map"],
+        String(sourcemap),
+      );
+    }
+  });
+
+  it("renames a class only vendor code mentions and logs it in one info line (AE9)", async function () {
+    const chunk = motionChunk(
+      'function s(e){e.style.display="flex"}',
+      'if(getComputedStyle(t).alignItems==="items-center")s(t);',
+    );
+    const trusted = await makeSite();
+    const untrusted = await makeSite();
+    try {
+      const logs = await buildWithChunk(
+        { trustVendorModules: ["fake-motion"] },
+        trusted,
+        chunk,
+      );
+      const page = builtPage(trusted);
+      assert.ok(page.includes(`<li class="${hashClassName("flex")} `), page);
+      assert.ok(page.includes(' items-center">'), page);
+      const vendor = logs.info.filter(function (line) {
+        return line.includes("trusted vendor code");
+      });
+      assert.strictEqual(vendor.length, 1, logs.info.join("\n"));
+      assert.match(vendor[0], /^renamed 1 class\(es\) that trusted vendor/);
+      assert.match(vendor[0], /trustVendorModules/);
+      assert.match(vendor[0], /: flex$/);
+      const without = await buildWithChunk({}, untrusted, chunk);
+      assert.ok(
+        builtPage(untrusted).includes('<li class="flex items-center">'),
+      );
+      assert.ok(
+        !without.info.some(function (line) {
+          return line.includes("trusted vendor code");
+        }),
+        without.info.join("\n"),
+      );
+    } finally {
+      fs.rmSync(trusted, { recursive: true, force: true });
+      fs.rmSync(untrusted, { recursive: true, force: true });
+    }
+  });
+
+  it("logs no vendor line when trusted code mentions no renamed class", async function () {
+    const root = await makeSite();
+    try {
+      const logs = await buildWithChunk(
+        { trustVendorModules: true },
+        root,
+        motionChunk("e.style.opacity=1;", "go();"),
+      );
+      assert.ok(
+        !logs.info.some(function (line) {
+          return line.includes("trusted vendor code");
+        }),
+        logs.info.join("\n"),
+      );
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }

@@ -28,6 +28,7 @@ import {
 } from "./prominence.js";
 import { buildRenameMap, buildReport, writeArtifacts } from "./report.js";
 import { compareCodeUnits } from "./util.js";
+import type { VendorProvenance } from "./vendor-provenance.js";
 
 // The post-build engine run behind `minwind apply`, callable in-process:
 // runs the same pre-pass the plugins run against the site source, rewrites
@@ -59,6 +60,10 @@ export interface RunApplyOptions {
   prominence?: "auto" | ProminenceManifest;
   // Report what would change without writing files or artifacts.
   dryRun?: boolean;
+  // trustVendorModules (R10), for in-process callers that recorded the
+  // emitted client chunks with their sourcemaps: a leak occurrence the map
+  // attributes to a trusted node_modules package stops counting.
+  vendorProvenance?: VendorProvenance;
 }
 
 export type RunApplyResult =
@@ -224,6 +229,7 @@ export async function runApply(
     consolidate: flags.consolidate,
     dryRun,
     modules,
+    vendorProvenance: options.vendorProvenance,
   });
   const effective = filterRegistry(
     prepass.registry,

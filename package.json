@@ -81,6 +81,7 @@
     }
   },
   "dependencies": {
+    "@jridgewell/sourcemap-codec": "^1",
     "@tailwindcss/node": "^4.1.18",
     "@tailwindcss/oxide": "^4.1.18",
     "css-tree": "^3.2.1",

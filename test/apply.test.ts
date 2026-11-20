@@ -6,6 +6,7 @@ import path from "node:path";
 import { describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import MagicString, { Bundle } from "magic-string";
 import * as parse5 from "parse5";
 import { applyBuildOutput, type ApplyResult } from "../src/apply.js";
 import { parseArgs, runApplyCli } from "../src/apply-cli.js";
@@ -32,6 +33,7 @@ import {
   type TransformSourceResult,
 } from "../src/transform-source.js";
 import type { ConsolidationVerdict } from "../src/consolidate.js";
+import type { SourceMapLike, VendorTrust } from "../src/vendor-provenance.js";
 
 // The post-build path (`minwind apply`): emitted HTML rewrites through the
 // same walker as the SFC formats, stylesheets through the shared CSS core,
@@ -2712,5 +2714,311 @@ describe("selector strings in built output (R17, KTD16)", function () {
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("trusted vendor occurrences (R10, KTD10)", function () {
+  const registry = registryOf(["block", "absolute", "relative", "hidden"]);
+  const CSS =
+    "@layer utilities{.block{display:block}.absolute{position:absolute}" +
+    ".relative{position:relative}.hidden{display:none}}";
+  const PAGE =
+    '<!doctype html><div class="relative">' +
+    '<span class="absolute block hidden">x</span></div>';
+  const MOTION =
+    "/site/node_modules/.pnpm/fake-motion@1.0.0/node_modules/fake-motion/index.js";
+  const PROJECT = "/site/src/scripts/motion.ts";
+  const SHOW = 'function s(e){e.style.display="block"}';
+
+  interface Part {
+    source: string;
+    code: string;
+    // Rewrites the part the way a minifier does: [original, replacement].
+    edit?: [string, string];
+  }
+
+  interface Chunk {
+    code: string;
+    map: SourceMapLike | null;
+    // The bytes on disk, when a later hook changed them after recording.
+    written?: string;
+  }
+
+  // Module code concatenated as a bundler does, with a map at word
+  // boundaries, the resolution Rolldown's minified chunks have. Appended
+  // and prepended text has no mapping, as text a render hook adds.
+  function chunkOf(
+    parts: Array<Part>,
+    added: { prepend?: string; append?: string } = {},
+  ): Chunk {
+    const bundle = new Bundle({ separator: "" });
+    for (const part of parts) {
+      const content = new MagicString(part.code);
+      if (part.edit !== undefined) {
+        const at = part.code.indexOf(part.edit[0]);
+        assert.ok(at !== -1, part.edit[0]);
+        content.overwrite(at, at + part.edit[0].length, part.edit[1]);
+      }
+      bundle.addSource({ filename: part.source, content });
+    }
+    if (added.prepend !== undefined) bundle.prepend(added.prepend);
+    if (added.append !== undefined) bundle.append(added.append);
+    const map = bundle.generateMap({ hires: "boundary", includeContent: true });
+    return {
+      code: bundle.toString(),
+      map: {
+        sources: map.sources,
+        sourcesContent: map.sourcesContent,
+        mappings: map.mappings,
+      },
+    };
+  }
+
+  function vendorChunk(source: string, code: string = SHOW): Chunk {
+    return chunkOf([{ source, code }]);
+  }
+
+  // Applies the output with each chunk recorded, unless trust is undefined.
+  function applyChunks(
+    chunks: Record<string, Chunk>,
+    trust: VendorTrust | undefined,
+    extra: Record<string, string> = {},
+  ): { result: ApplyResult; files: Record<string, string> } {
+    const files: Record<string, string> = {
+      "index.html": PAGE,
+      "app.css": CSS,
+      ...extra,
+    };
+    for (const [name, chunk] of Object.entries(chunks)) {
+      files[name] = chunk.written ?? chunk.code;
+    }
+    const dir = writeOutput(files);
+    try {
+      const result = applyBuildOutput({
+        dir,
+        registry,
+        consolidationVerdicts: [],
+        consolidate: false,
+        vendorProvenance:
+          trust === undefined
+            ? undefined
+            : {
+                trust,
+                chunks: Object.entries(chunks).map(function ([name, chunk]) {
+                  return {
+                    file: path.join(dir, name),
+                    code: chunk.code,
+                    map: chunk.map,
+                  };
+                }),
+              },
+      });
+      return { result, files: readTree(dir) };
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  function renamed(token: string): string {
+    const name = registry.nameFor(token);
+    assert.ok(name !== undefined, token);
+    return name;
+  }
+
+  it("renames block when its one JS occurrence maps to a trusted vendor (AE9)", function () {
+    // Rolldown's minifier requotes string literals with backticks.
+    const chunk = chunkOf([
+      { source: MOTION, code: SHOW, edit: ['"block"', "`block`"] },
+      { source: PROJECT, code: "s(document.body);" },
+    ]);
+    const trusted = applyChunks({ "motion.js": chunk }, true);
+    assert.deepStrictEqual(trusted.result.keptOriginal, []);
+    const page = trusted.files["index.html"];
+    assert.ok(page.includes(renamed("block")), page);
+    const css = trusted.files["app.css"];
+    assert.ok(css.includes(`.${renamed("block")}{display:block}`), css);
+    // The inline style value keeps its bytes.
+    assert.strictEqual(trusted.files["motion.js"], chunk.code);
+    const untrusted = applyChunks({ "motion.js": chunk }, undefined);
+    assert.deepStrictEqual(untrusted.result.keptOriginal, ["block"]);
+    assert.ok(untrusted.files["app.css"].includes(".block{display:block}"));
+  });
+
+  it("keeps relative original when a project module in the chunk mentions it (AE9)", function () {
+    const chunk = chunkOf([
+      { source: MOTION, code: SHOW },
+      {
+        source: PROJECT,
+        code: 'if(getComputedStyle(t).position==="relative")s(t);',
+      },
+    ]);
+    assert.deepStrictEqual(
+      applyChunks({ "motion.js": chunk }, true).result.keptOriginal,
+      ["relative"],
+    );
+  });
+
+  it("counts an occurrence the attribution does not cover", function () {
+    const folded = chunkOf([
+      { source: MOTION, code: SHOW },
+      {
+        source: PROJECT,
+        code: 't.classList.add("hid"+"den");',
+        edit: ['"hid"+"den"', '"hidden"'],
+      },
+    ]);
+    // Render-hook text after vendor code on the same line has no mapping
+    // of its own, so the last vendor segment would otherwise cover it.
+    const appended = chunkOf([{ source: MOTION, code: SHOW }], {
+      append: ';document.body.classList.add("hidden");',
+    });
+    const banner = chunkOf([{ source: MOTION, code: SHOW }], {
+      prepend: 'const c="hidden";\n',
+    });
+    for (const chunk of [folded, appended, banner]) {
+      assert.deepStrictEqual(
+        applyChunks({ "motion.js": chunk }, true).result.keptOriginal,
+        ["hidden"],
+        chunk.code,
+      );
+    }
+  });
+
+  it("scans a chunk without usable attribution whole", function () {
+    const chunk = vendorChunk(MOTION);
+    const map = chunk.map;
+    assert.ok(map !== null);
+    for (const unusable of [
+      { ...chunk, map: null },
+      { ...chunk, map: { ...map, sourcesContent: undefined } },
+      { ...chunk, written: `${chunk.code}\n` },
+      { ...chunk, map: { ...map, mappings: "" } },
+    ]) {
+      assert.deepStrictEqual(
+        applyChunks({ "motion.js": unusable }, true).result.keptOriginal,
+        ["block"],
+        JSON.stringify(unusable),
+      );
+    }
+  });
+
+  it("adds no leaks for a vendor-only chunk and renames its class markup", function () {
+    const chunk = vendorChunk(
+      MOTION,
+      `e.innerHTML='<i class="block"></i>';${SHOW}`,
+    );
+    const { result, files } = applyChunks({ "motion.js": chunk }, true);
+    assert.deepStrictEqual(result.keptOriginal, []);
+    assert.strictEqual(
+      files["motion.js"],
+      `e.innerHTML='<i class="${renamed("block")}"></i>';${SHOW}`,
+    );
+  });
+
+  it("scans an unrecorded JS file and an inline script as today", function () {
+    const recorded = { "motion.js": vendorChunk(MOTION) };
+    assert.deepStrictEqual(
+      applyChunks(recorded, true, { "copied.js": SHOW }).result.keptOriginal,
+      ["block"],
+    );
+    assert.deepStrictEqual(
+      applyChunks(recorded, true, {
+        "index.html": `${PAGE}<script>${SHOW}</script>`,
+      }).result.keptOriginal,
+      ["block"],
+    );
+  });
+
+  it("classifies sources by path", function () {
+    for (const [source, vendor] of [
+      [MOTION, true],
+      ["\0vite/preload-helper.js", false],
+      ["\0/site/node_modules/fake-motion/index.js", true],
+      ["/site/node_modules/fake-motion/index.js?v=1a2b", true],
+      ["C:\\site\\node_modules\\fake-motion\\index.js", true],
+      ["../../node_modules/fake-motion/index.js", true],
+      ["node_modules/fake-motion/index.js", true],
+      [PROJECT, false],
+      ["/site/src/node_modules.js", false],
+      ["/site/src/vendor.js?node_modules/x", false],
+    ] as const) {
+      assert.deepStrictEqual(
+        applyChunks({ "motion.js": vendorChunk(source) }, true).result
+          .keptOriginal,
+        vendor ? [] : ["block"],
+        JSON.stringify(source),
+      );
+    }
+  });
+
+  it("trusts only the listed packages, scoped names by two segments", function () {
+    const trust = ["fake-motion", "@scope/tween"];
+    for (const [source, trusted] of [
+      ["/site/node_modules/fake-motion/index.js", true],
+      ["/site/node_modules/other-lib/index.js", false],
+      ["/site/node_modules/fake-motion-extra/index.js", false],
+      ["/site/node_modules/other-lib/node_modules/fake-motion/a.js", true],
+      ["/site/node_modules/fake-motion/node_modules/other-lib/a.js", false],
+      ["/site/node_modules/@scope/tween/dist/index.js", true],
+      ["/site/node_modules/@scope/other/index.js", false],
+      ["/site/node_modules/@scope/index.js", false],
+    ] as const) {
+      assert.deepStrictEqual(
+        applyChunks({ "motion.js": vendorChunk(source) }, trust).result
+          .keptOriginal,
+        trusted ? [] : ["block"],
+        source,
+      );
+    }
+  });
+
+  it("exempts a trusted vendor's identifier key and counts a project key (KTD15)", function () {
+    const vendorKey = { source: MOTION, code: "const o={hidden:!0};" };
+    assert.deepStrictEqual(
+      applyChunks({ "motion.js": chunkOf([vendorKey]) }, true).result
+        .keptOriginal,
+      [],
+    );
+    assert.deepStrictEqual(
+      applyChunks(
+        {
+          "motion.js": chunkOf([
+            vendorKey,
+            { source: PROJECT, code: "f({hidden:!0});" },
+          ]),
+        },
+        true,
+      ).result.keptOriginal,
+      ["hidden"],
+    );
+  });
+
+  it("reports no reverse-leak warnings at vendor occurrences", function () {
+    const { result } = applyChunks({ "motion.js": vendorChunk(MOTION) }, true);
+    assert.deepStrictEqual(result.keptOriginal, []);
+    assert.deepStrictEqual(
+      result.warnings.filter(function (warning) {
+        return warning.kind === "reverse-leak";
+      }),
+      [],
+    );
+  });
+
+  it("lists the renamed classes that trusted vendor code mentions", function () {
+    const chunk = chunkOf([
+      {
+        source: MOTION,
+        code: 'e.style.display="block";e.style.position="absolute";e.dataset.p="relative";',
+      },
+      { source: PROJECT, code: 'if(p==="relative")g();' },
+    ]);
+    const { result } = applyChunks({ "motion.js": chunk }, true);
+    assert.deepStrictEqual(result.keptOriginal, ["relative"]);
+    assert.deepStrictEqual(result.vendorMentions, ["absolute", "block"]);
+    const quiet = chunkOf([{ source: MOTION, code: "e.style.opacity=1;" }]);
+    assert.deepStrictEqual(
+      applyChunks({ "motion.js": quiet }, true).result.vendorMentions,
+      [],
+    );
   });
 });
