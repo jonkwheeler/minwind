@@ -472,11 +472,9 @@ function offsetVisitor(
 ): ClassContextVisitor {
   function shift(literal: LiteralOccurrence): LiteralOccurrence {
     return {
-      text: literal.text,
+      ...literal,
       start: toOriginal(literal.start),
       end: toOriginal(literal.end),
-      shorthand: literal.shorthand,
-      quoted: literal.quoted,
     };
   }
   return {
@@ -877,6 +875,7 @@ function emitStaticClassAttribute(
   value: string,
   contentStart: number,
   contentEnd: number,
+  htmlEncoded: boolean,
   visitor: ClassContextVisitor,
 ): void {
   visitor.enterRenameGroup?.("class-attribute");
@@ -887,6 +886,7 @@ function emitStaticClassAttribute(
       end: contentEnd,
       shorthand: false,
       quoted: true,
+      htmlEncoded,
     },
     "class-attribute",
   );
@@ -900,7 +900,8 @@ interface SourceSpan {
 
 // Vue 3 forbids mustache interpolation in attributes and plain HTML has no
 // expression syntax, so their class attributes are always static; Svelte
-// and Astro interpolate {}.
+// and Astro interpolate {}. Only plain HTML is built output, whose values
+// the transform decodes (KTD6).
 function emitClassAttribute(
   format: SfcFormat,
   text: string,
@@ -911,7 +912,13 @@ function emitClassAttribute(
   if ((format === "svelte" || format === "astro") && value.includes("{")) {
     emitMixedTemplate(value, span.start, visitor);
   } else {
-    emitStaticClassAttribute(value, span.start, span.end, visitor);
+    emitStaticClassAttribute(
+      value,
+      span.start,
+      span.end,
+      format === "html",
+      visitor,
+    );
   }
 }
 

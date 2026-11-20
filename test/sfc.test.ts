@@ -1571,3 +1571,35 @@ describe("Astro frontmatter class constants (R3)", function () {
     );
   });
 });
+
+// R6 (KTD6): only built HTML is decoded. A source class attribute holds a
+// raw `&`, which is how the token reached the registry, so it matches as in
+// 1.1.0, and an encoded spelling there stays as written.
+describe("source formats read class text without decoding (R6, KTD6)", function () {
+  it("renames a raw & in .astro, .vue, and .svelte and leaves &amp; alone", function () {
+    const token = "[&_a]:underline";
+    const registry = createNameRegistry({
+      universe: new Set([token]),
+      sourceTokens: new Set([token]),
+    });
+    const name = registry.nameFor(token);
+    assert.ok(name !== undefined);
+    for (const [id, open, close] of [
+      ["/site/src/components/Prose.astro", "", ""],
+      ["/site/src/components/Prose.vue", "<template>", "</template>"],
+      ["/site/src/components/Prose.svelte", "", ""],
+    ]) {
+      const result = transformSource({
+        code: `${open}<div class="${token} [&amp;_a]:underline">x</div>${close}\n`,
+        id,
+        registry,
+      });
+      assert.ok(result !== null, id);
+      assert.strictEqual(
+        result.code,
+        `${open}<div class="${name} [&amp;_a]:underline">x</div>${close}\n`,
+        id,
+      );
+    }
+  });
+});

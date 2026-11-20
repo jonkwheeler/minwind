@@ -1,0 +1,14 @@
+---
+// Arbitrary variants spelled with `&` and `>`. Astro writes those characters
+// as entities in the built class attribute ([&amp;_a]:underline), which 1.1.0
+// compared with the registry byte for byte, so the page kept the original
+// name while the stylesheet renamed its selector (R6).
+---
+
+<div data-prose class="[&_a]:underline">
+  <p>Read the <a href="/">inbox</a> before the call.</p>
+  <ul class:list={["[&>li]:mt-2"]}>
+    <li>Confirm the venue.</li>
+    <li>Send the agenda.</li>
+  </ul>
+</div>

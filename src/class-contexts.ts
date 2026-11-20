@@ -35,13 +35,15 @@ export type ClassContextKind = RenameContextKind | RuntimeContextKind;
 // must verify it matches the raw bytes. shorthand marks a classList key like
 // `{ flex }`, where the identifier is both the class name and the value
 // binding. quoted is false exactly for those identifier keys, whose span
-// carries no surrounding quote bytes.
+// carries no surrounding quote bytes. htmlEncoded marks a class attribute of
+// built HTML, whose character references the DOM decodes (KTD6).
 export interface LiteralOccurrence {
   text: string;
   start: number;
   end: number;
   shorthand: boolean;
   quoted: boolean;
+  htmlEncoded?: boolean;
 }
 
 // Rename groups bracket the literals that form one logical class list: one

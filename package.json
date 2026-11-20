@@ -84,6 +84,7 @@
     "@tailwindcss/node": "^4.1.18",
     "@tailwindcss/oxide": "^4.1.18",
     "css-tree": "^3.2.1",
+    "entities": "^8",
     "magic-string": "^1.1.0",
     "parse5": "^8.0.1",
     "typescript": "^5.9.3"

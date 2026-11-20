@@ -1361,6 +1361,37 @@ describe(
         }
       });
     });
+
+    describe("entity-encoded classes (R6)", function () {
+      const ABOUT = "about/index.html";
+
+      // The raw class values of Prose's wrapper and list, in order.
+      function proseClassValues(html: string): Array<string> {
+        const prose =
+          /<div data-prose class="([^"]*)">[\s\S]*?<ul class="([^"]*)">/.exec(
+            html,
+          );
+        assert.ok(prose !== null, html);
+        return [prose[1], prose[2]];
+      }
+
+      it("renames Prose's encoded classes, each with a selector (AE6)", function () {
+        // Astro writes `&` as an entity, statically and through class:list.
+        assert.deepStrictEqual(proseClassValues(builds.baseline[ABOUT]), [
+          "[&amp;_a]:underline",
+          "[&amp;>li]:mt-2",
+        ]);
+        const built = proseClassValues(builds.on[ABOUT]);
+        assert.deepStrictEqual(built.map(decode), [
+          "[&_a]:underline",
+          "[&>li]:mt-2",
+        ]);
+        const selectors = selectorClasses(stylesheetOf(builds.on));
+        for (const name of built) {
+          assert.ok(selectors.has(name), `no .${name} selector`);
+        }
+      });
+    });
   },
 );
 

@@ -6,8 +6,10 @@ import path from "node:path";
 import { describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { applyBuildOutput } from "../src/apply.js";
+import * as parse5 from "parse5";
+import { applyBuildOutput, type ApplyResult } from "../src/apply.js";
 import { parseArgs, runApplyCli } from "../src/apply-cli.js";
+import { createDialectHasher } from "../src/dialect.js";
 import { compileTailwindStylesheet } from "../src/engines/tailwind.js";
 import { MODULES_COMPRESS_WARNING } from "../src/flags.js";
 import { runProminenceCli } from "../src/prominence-cli.js";
@@ -25,7 +27,10 @@ import {
   type NameRegistry,
 } from "../src/names.js";
 import { transformBundle } from "../src/transform-bundle.js";
-import { transformModule } from "../src/transform-source.js";
+import {
+  transformModule,
+  type TransformSourceResult,
+} from "../src/transform-source.js";
 import type { ConsolidationVerdict } from "../src/consolidate.js";
 
 // The post-build path (`minwind apply`): emitted HTML rewrites through the
@@ -1881,5 +1886,237 @@ describe("dependent variants keep their markers (R7, KTD7)", function () {
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+// R6 (KTD6): emitters write `&`, `>`, and quotes in a class attribute as
+// character references, and the DOM decodes them, so the decoded token is the
+// class. It renames when the registry holds it, written back escaped.
+const ENCODED_TOKENS = [
+  "[&_a]:underline",
+  "has-[>img]:p-2",
+  "content-['x']",
+  "[&>li]:mt-2",
+  "p-4",
+  "flex",
+  "items-center",
+];
+
+const ENCODED_CSS =
+  "@layer utilities{" +
+  ".\\[\\&_a\\]\\:underline a{text-decoration-line:underline}" +
+  ".has-\\[\\>img\\]\\:p-2:has(>img){padding:.5rem}" +
+  ".content-\\[\\'x\\'\\]{content:'x'}" +
+  ".\\[\\&\\>li\\]\\:mt-2>li{margin-top:.5rem}" +
+  ".p-4{padding:1rem}" +
+  ".flex{display:flex}" +
+  ".items-center{align-items:center}" +
+  "}";
+
+describe("entity-encoded classes in built output (R6, KTD6)", function () {
+  const registry = registryOf(ENCODED_TOKENS);
+
+  function encodedName(token: string): string {
+    const name = registry.nameFor(token);
+    assert.ok(name !== undefined, `${token} must be renamed`);
+    return name;
+  }
+
+  function transformPage(
+    code: string,
+    consolidationVerdicts?: ReadonlyArray<ConsolidationVerdict>,
+  ): TransformSourceResult {
+    const result = transformModule({
+      code,
+      id: "/out/index.html",
+      registry,
+      consolidationVerdicts,
+    });
+    assert.ok(result !== null, code);
+    return result;
+  }
+
+  function leakedTokens(result: TransformSourceResult): Array<string> {
+    return result.warnings
+      .filter(function (warning) {
+        return warning.kind === "reverse-leak";
+      })
+      .map(function (warning) {
+        return warning.token ?? "";
+      })
+      .sort();
+  }
+
+  function applyTo(files: Record<string, string>): {
+    dir: string;
+    result: ApplyResult;
+  } {
+    const dir = writeOutput(files);
+    try {
+      const result = applyBuildOutput({
+        dir,
+        registry,
+        consolidationVerdicts: [],
+        consolidate: false,
+      });
+      return { dir, result };
+    } catch (error) {
+      fs.rmSync(dir, { recursive: true, force: true });
+      throw error;
+    }
+  }
+
+  it("renames an encoded token and a plain one in one built attribute (AE6)", function () {
+    const result = transformPage(
+      '<div class="[&amp;_a]:underline p-4"><a href="/">x</a></div>',
+    );
+    assert.ok(
+      result.code.includes(
+        `<div class="${encodedName("[&_a]:underline")} ${encodedName("p-4")}">`,
+      ),
+      result.code,
+    );
+    assert.deepStrictEqual(leakedTokens(result), []);
+  });
+
+  it("renames tokens written with &gt;, &#39;, and Astro's class:list spelling", function () {
+    for (const [written, token] of [
+      ["has-[&gt;img]:p-2", "has-[>img]:p-2"],
+      ["content-[&#39;x&#39;]", "content-['x']"],
+      ["[&amp;&gt;li]:mt-2", "[&>li]:mt-2"],
+      ["[&amp;>li]:mt-2", "[&>li]:mt-2"],
+    ]) {
+      const result = transformPage(`<ul class="${written}"><li>x</li></ul>`);
+      assert.strictEqual(
+        result.code,
+        `<ul class="${encodedName(token)}"><li>x</li></ul>`,
+        written,
+      );
+      assert.deepStrictEqual(leakedTokens(result), [], written);
+    }
+  });
+
+  it('writes a dialect name holding & or " escaped, so the attribute decodes to it', function () {
+    const tokens = ["[&_a]:underline", 'content-["x"]'];
+    const dialect = createNameRegistry({
+      universe: new Set(tokens),
+      sourceTokens: new Set(tokens),
+      hash: createDialectHasher("boston"),
+    });
+    const names = tokens.map(function (token) {
+      const name = dialect.nameFor(token);
+      assert.ok(name !== undefined, token);
+      return name;
+    });
+    assert.ok(names[0].includes("&"), names[0]);
+    assert.ok(names[1].includes('"'), names[1]);
+    const result = transformModule({
+      code: '<div class="[&amp;_a]:underline content-[&quot;x&quot;]">x</div>',
+      id: "/out/index.html",
+      registry: dialect,
+    });
+    assert.ok(result !== null);
+    const div = parse5.parseFragment(result.code).childNodes[0];
+    assert.ok("attrs" in div, result.code);
+    assert.deepStrictEqual(div.attrs, [
+      { name: "class", value: names.join(" ") },
+    ]);
+  });
+
+  it("gives a value with encoded whitespace no edit and keeps its tokens original", function () {
+    const html =
+      '<!doctype html><div class="flex&#32;p-4 items-center">x</div>';
+    const { dir, result } = applyTo({
+      "index.html": html,
+      "app.css": ENCODED_CSS,
+    });
+    try {
+      assert.deepStrictEqual(result.keptOriginal, [
+        "flex",
+        "items-center",
+        "p-4",
+      ]);
+      assert.strictEqual(
+        fs.readFileSync(path.join(dir, "index.html"), "utf8"),
+        html,
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a token original when an encoded copy sits in a data-* value", function () {
+    const html =
+      '<!doctype html><div class="[&amp;_a]:underline"><a href="/">x</a></div>' +
+      '<div data-x="[&amp;_a]:underline"></div>';
+    const { dir, result } = applyTo({
+      "index.html": html,
+      "app.css": ENCODED_CSS,
+    });
+    try {
+      assert.deepStrictEqual(result.keptOriginal, ["[&_a]:underline"]);
+      assert.strictEqual(
+        fs.readFileSync(path.join(dir, "index.html"), "utf8"),
+        html,
+      );
+      assert.ok(
+        fs
+          .readFileSync(path.join(dir, "app.css"), "utf8")
+          .includes(".\\[\\&_a\\]\\:underline a{"),
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("collapses a built list whose decoded key matches a safe verdict", function () {
+    const result = transformPage(
+      '<div class="[&amp;_a]:underline p-4"><a href="/">x</a></div>',
+      [
+        {
+          tokens: ["p-4", "[&_a]:underline"],
+          frequency: 2,
+          safe: true,
+          name: "combo",
+        },
+      ],
+    );
+    assert.strictEqual(
+      result.code,
+      '<div class="combo"><a href="/">x</a></div>',
+    );
+  });
+
+  it("renames a bundle's encoded markup string and keeps a bare encoded string original", function () {
+    const markup = transformBundle({
+      code: `const tpl = '<div class="[&amp;_a]:underline">x</div>';\n`,
+      id: "/out/assets/app.js",
+      registry,
+    });
+    assert.ok(markup !== null);
+    assert.strictEqual(
+      markup.code,
+      `const tpl = '<div class="${encodedName("[&_a]:underline")}">x</div>';\n`,
+    );
+    assert.deepStrictEqual(leakedTokens(markup), []);
+    const bare = transformBundle({
+      code: 'const raw = "[&amp;_a]:underline";\n',
+      id: "/out/assets/app.js",
+      registry,
+    });
+    assert.ok(bare !== null);
+    assert.strictEqual(bare.code, 'const raw = "[&amp;_a]:underline";\n');
+    assert.deepStrictEqual(leakedTokens(bare), ["[&_a]:underline"]);
+  });
+
+  it("still scans a bundle's raw text, where &copy; is literal", function () {
+    const token = "content-['&copy;']";
+    const result = transformBundle({
+      code: `el.classList.add("${token}");\n`,
+      id: "/out/assets/app.js",
+      registry: registryOf([token]),
+    });
+    assert.ok(result !== null);
+    assert.deepStrictEqual(leakedTokens(result), [token]);
   });
 });

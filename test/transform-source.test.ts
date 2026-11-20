@@ -11,6 +11,7 @@ import { createNameRegistry, type NameRegistry } from "../src/names.js";
 import {
   applySourceEdits,
   shouldTransformModule,
+  transformModule,
   transformSource,
   type TransformSourceResult,
 } from "../src/transform-source.js";
@@ -696,5 +697,49 @@ describe("transformSource sourcemaps (KTD1)", function () {
     assert.deepStrictEqual(parsed.sources, ["/site/src/routes/test.tsx"]);
     assert.strictEqual(typeof parsed.mappings, "string");
     assert.ok(parsed.mappings.length > 0);
+  });
+});
+
+// R6 (KTD6): built HTML is also scanned decoded, so a token written with
+// character references outside a class attribute still counts as a leak.
+// The raw and decoded scans see an entity-free occurrence alike, and it
+// warns once.
+describe("transformModule leak scan over decoded built HTML (R6, KTD6)", function () {
+  it("reports an encoded occurrence at its raw position, and each leak once", function () {
+    const tokens = ["[&_a]:underline", "flex"];
+    const registry = createNameRegistry({
+      universe: new Set(tokens),
+      sourceTokens: new Set(tokens),
+    });
+    const line = '<div data-x="[&amp;_a]:underline" data-y="flex"></div>';
+    const result = transformModule({
+      code: `<p>x</p>\n${line}\n`,
+      id: "/out/index.html",
+      registry,
+    });
+    assert.ok(result !== null);
+    assert.deepStrictEqual(
+      result.warnings
+        .map(function (warning) {
+          return [warning.kind, warning.token, warning.line, warning.column];
+        })
+        .sort(),
+      [
+        ["reverse-leak", "[&_a]:underline", 2, line.indexOf("[&amp;") + 1],
+        ["reverse-leak", "flex", 2, line.indexOf("flex") + 1],
+      ],
+    );
+  });
+
+  it("leaves source modules' entity text undecoded", function () {
+    const result = transformModule({
+      code: 'export const note = "[&amp;_a]:underline";\n',
+      id: "/site/src/data/note.ts",
+      registry: createNameRegistry({
+        universe: new Set(["[&_a]:underline"]),
+        sourceTokens: new Set(["[&_a]:underline"]),
+      }),
+    });
+    assert.strictEqual(result, null);
   });
 });

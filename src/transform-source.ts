@@ -12,11 +12,17 @@ import {
   type RuntimeContextKind,
 } from "./class-contexts.js";
 import { canonicalListKey, type ConsolidationVerdict } from "./consolidate.js";
+import {
+  decodeClassTokens,
+  escapeClassName,
+  leakViews,
+} from "./html-entities.js";
 import type { NameRegistry } from "./names.js";
 import {
   isSfcModule,
   maskSfcStyleContent,
   SFC_PATTERN,
+  sfcFormatFor,
   walkSfcClassContexts,
 } from "./sfc.js";
 import {
@@ -252,6 +258,9 @@ export function transformModule(
   interface OpenGroup {
     kind: RenameContextKind;
     literals: Array<LiteralOccurrence>;
+    // The class tokens the literals hold, decoded in built HTML (KTD6);
+    // null once a literal's tokens cannot be told apart.
+    tokens: Array<string> | null;
     editKeys: Array<string>;
   }
   const groupStack: Array<OpenGroup> = [];
@@ -283,26 +292,26 @@ export function transformModule(
     for (const literal of group.literals) {
       if (!literal.quoted) return false;
     }
+    if (group.tokens === null) return false;
     const first = group.literals[0];
     const last = group.literals[group.literals.length - 1];
-    const name = collapseByKey.get(
-      canonicalListKey(
-        group.literals.flatMap(function (literal) {
-          return tokenize(literal.text);
-        }),
-      ),
-    );
+    const name = collapseByKey.get(canonicalListKey(group.tokens));
     if (name === undefined) return false;
     for (const key of group.editKeys) edits.delete(key);
     const start = single ? first.start : first.start - 1;
     const end = single ? last.end : last.end + 1;
-    const replacement = single ? name : `'${name}'`;
+    let replacement = `'${name}'`;
+    if (single) {
+      replacement = first.htmlEncoded === true ? escapeClassName(name) : name;
+    }
     const expected = code.slice(start, end);
     edits.set(`${start}:${end}`, { start, end, expected, replacement });
     return true;
   }
 
-  function handleLiteral(literal: LiteralOccurrence): void {
+  // Renames the literal's tokens and returns them, or null for a built-HTML
+  // value whose tokens cannot be told apart, which gets no edits (KTD6).
+  function handleLiteral(literal: LiteralOccurrence): Array<string> | null {
     const raw = code.slice(literal.start, literal.end);
     if (raw !== literal.text) {
       // An escape sequence desynchronizes the AST's cooked text from the raw
@@ -312,6 +321,25 @@ export function transformModule(
         `minwind: ${id}: class literal at offset ${literal.start} contains` +
           ` escape sequences; refusing to span-edit`,
       );
+    }
+    if (literal.htmlEncoded === true) {
+      // The decoded token is looked up; the edit covers its raw bytes.
+      const tokens = decodeClassTokens(raw);
+      if (tokens === null) return null;
+      for (const token of tokens) {
+        const name = registry.nameFor(token.token);
+        if (name === undefined) continue;
+        const start = literal.start + token.offset;
+        addEdit(
+          start,
+          start + token.raw.length,
+          token.raw,
+          escapeClassName(name),
+        );
+      }
+      return tokens.map(function (token) {
+        return token.token;
+      });
     }
     for (const match of raw.matchAll(/[^ \t\n\f\r]+/g)) {
       const token = match[0];
@@ -325,17 +353,22 @@ export function transformModule(
       const replacement = literal.shorthand ? `${name}: ${token}` : name;
       addEdit(start, start + token.length, token, replacement);
     }
+    return tokenize(raw);
   }
 
   const visitor: ClassContextVisitor = {
     enterRenameGroup: function (kind: RenameContextKind): void {
-      groupStack.push({ kind, literals: [], editKeys: [] });
+      groupStack.push({ kind, literals: [], tokens: [], editKeys: [] });
     },
     renameLiteral: function (literal: LiteralOccurrence): void {
       const open = groupStack[groupStack.length - 1];
-      handleLiteral(literal);
+      const tokens = handleLiteral(literal);
       if (open !== undefined) {
         open.literals.push(literal);
+        open.tokens =
+          open.tokens === null || tokens === null
+            ? null
+            : open.tokens.concat(tokens);
       }
     },
     exitRenameGroup: function (
@@ -398,34 +431,42 @@ export function transformModule(
   // the original source that no edit consumed are class names the stylesheet
   // renames but this module keeps — warn with locations, never fail. SFCs
   // scan with <style> contents blanked: a utility word used as a CSS value
-  // (display: flex) is not a class reference.
+  // (display: flex) is not a class reference. Built HTML is also scanned
+  // decoded (KTD6); an occurrence both scans find warns once.
   const leakText = sfc ? maskSfcStyleContent(id, code) : code;
+  const views = leakViews(leakText, sfcFormatFor(id) === "html");
   for (const entry of registry.entries()) {
-    let from = 0;
-    for (;;) {
-      const at = leakText.indexOf(entry.token, from);
-      if (at === -1) break;
-      from = at + entry.token.length;
-      if (!isWholeWord(leakText, at, entry.token.length)) continue;
-      let consumed = false;
-      for (const edit of edits.values()) {
-        if (edit.start <= at && edit.end >= at + entry.token.length) {
-          consumed = true;
-          break;
+    const reported = new Set<number>();
+    for (const view of views) {
+      let from = 0;
+      for (;;) {
+        const at = view.text.indexOf(entry.token, from);
+        if (at === -1) break;
+        from = at + entry.token.length;
+        if (!isWholeWord(view.text, at, entry.token.length)) continue;
+        const span = view.rawSpan(at, at + entry.token.length);
+        if (reported.has(span.start)) continue;
+        let consumed = false;
+        for (const edit of edits.values()) {
+          if (edit.start <= span.start && edit.end >= span.end) {
+            consumed = true;
+            break;
+          }
         }
+        if (consumed) continue;
+        reported.add(span.start);
+        const atLocation = location(span.start);
+        warnings.push({
+          kind: "reverse-leak",
+          id,
+          line: atLocation.line,
+          column: atLocation.column,
+          token: entry.token,
+          message:
+            `minwind: ${id}:${atLocation.line}:${atLocation.column} registry` +
+            ` token "${entry.token}" remains outside a rename context`,
+        });
       }
-      if (consumed) continue;
-      const atLocation = location(at);
-      warnings.push({
-        kind: "reverse-leak",
-        id,
-        line: atLocation.line,
-        column: atLocation.column,
-        token: entry.token,
-        message:
-          `minwind: ${id}:${atLocation.line}:${atLocation.column} registry` +
-          ` token "${entry.token}" remains outside a rename context`,
-      });
     }
   }
 

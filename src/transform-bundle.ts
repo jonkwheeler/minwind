@@ -1,6 +1,12 @@
 import * as ts from "typescript";
-import { parseSourceModule, tokenize } from "./class-contexts.js";
+import { parseSourceModule } from "./class-contexts.js";
 import { canonicalListKey, type ConsolidationVerdict } from "./consolidate.js";
+import {
+  decodeClassTokens,
+  escapeClassName,
+  leakViews,
+  type EncodedClassToken,
+} from "./html-entities.js";
 import type { NameRegistry } from "./names.js";
 import {
   applySourceEdits,
@@ -21,7 +27,8 @@ import {
 //
 // Everything else keeps its bytes. Consolidation collapses full-list spans
 // exactly as in the source transform; whole-word registry-token occurrences
-// no edit consumed warn (the KTD7 leak posture) rather than failing.
+// no edit consumed warn (the KTD7 leak posture) rather than failing. Markup
+// is HTML, so its class values decode as built HTML does (KTD6).
 
 export interface TransformBundleOptions {
   code: string;
@@ -30,10 +37,13 @@ export interface TransformBundleOptions {
   consolidationVerdicts?: ReadonlyArray<ConsolidationVerdict>;
 }
 
+// htmlEncoded marks a class="..." span of markup, whose character
+// references the DOM decodes; a property literal's `&` is literal.
 interface ClassListSpan {
   start: number;
   end: number;
   text: string;
+  htmlEncoded: boolean;
 }
 
 // class="..." spans inside a string literal's raw bytes. Three shapes:
@@ -60,7 +70,12 @@ function markupClassSpans(
     let match: RegExpExecArray | null;
     while ((match = shape.pattern.exec(raw)) !== null) {
       const start = contentStart + match.index + shape.prefix;
-      found.push({ start, end: start + match[1].length, text: match[1] });
+      found.push({
+        start,
+        end: start + match[1].length,
+        text: match[1],
+        htmlEncoded: true,
+      });
     }
   }
   // The shapes can overlap on pathological nesting (class="a 'b' c" sees no
@@ -131,7 +146,7 @@ export function transformBundle(
           // token span exists inside this literal — skip, never guess.
           return;
         }
-        spans.push({ start, end, text });
+        spans.push({ start, end, text, htmlEncoded: false });
         return;
       }
     }
@@ -173,24 +188,40 @@ export function transformBundle(
     edits.set(key, { start, end, expected, replacement });
   }
 
+  // The span's tokens with their offsets; null for markup whose tokens
+  // cannot be told apart, which gets no edits.
+  function spanTokens(span: ClassListSpan): Array<EncodedClassToken> | null {
+    if (span.htmlEncoded) return decodeClassTokens(span.text);
+    return Array.from(span.text.matchAll(/[^ \t\n\f\r]+/g), function (match) {
+      return { raw: match[0], offset: match.index, token: match[0] };
+    });
+  }
+
+  function written(span: ClassListSpan, name: string): string {
+    return span.htmlEncoded ? escapeClassName(name) : name;
+  }
+
   // One span is one class list: collapse when the canonical list matches a
   // safe verdict, else rename token by token — the source transform's
   // class-attribute rules.
   for (const span of spans) {
-    const tokens = tokenize(span.text);
-    if (tokens.length === 0) continue;
-    const key = canonicalListKey(tokens);
+    const tokens = spanTokens(span);
+    if (tokens === null || tokens.length === 0) continue;
+    const key = canonicalListKey(
+      tokens.map(function (token) {
+        return token.token;
+      }),
+    );
     const collapsed = collapseByKey.get(key);
     if (collapsed !== undefined) {
-      addEdit(span.start, span.end, span.text, collapsed);
+      addEdit(span.start, span.end, span.text, written(span, collapsed));
       continue;
     }
-    for (const match of span.text.matchAll(/[^ \t\n\f\r]+/g)) {
-      const token = match[0];
-      const name = registry.nameFor(token);
+    for (const token of tokens) {
+      const name = registry.nameFor(token.token);
       if (name === undefined) continue;
-      const start = span.start + match.index;
-      addEdit(start, start + token.length, token, name);
+      const start = span.start + token.offset;
+      addEdit(start, start + token.raw.length, token.raw, written(span, name));
     }
   }
 
@@ -202,33 +233,41 @@ export function transformBundle(
   }
 
   // KTD7 leak check: whole-word registry tokens no edit consumed — class
-  // names the stylesheet renames but this bundle keeps.
+  // names the stylesheet renames but this bundle keeps. The bundle is also
+  // scanned decoded (KTD6), and an occurrence both scans find warns once.
+  const views = leakViews(code, true);
   for (const entry of registry.entries()) {
-    let from = 0;
-    for (;;) {
-      const at = code.indexOf(entry.token, from);
-      if (at === -1) break;
-      from = at + entry.token.length;
-      if (!isWholeWord(code, at, entry.token.length)) continue;
-      let consumed = false;
-      for (const edit of edits.values()) {
-        if (edit.start <= at && edit.end >= at + entry.token.length) {
-          consumed = true;
-          break;
+    const reported = new Set<number>();
+    for (const view of views) {
+      let from = 0;
+      for (;;) {
+        const at = view.text.indexOf(entry.token, from);
+        if (at === -1) break;
+        from = at + entry.token.length;
+        if (!isWholeWord(view.text, at, entry.token.length)) continue;
+        const span = view.rawSpan(at, at + entry.token.length);
+        if (reported.has(span.start)) continue;
+        let consumed = false;
+        for (const edit of edits.values()) {
+          if (edit.start <= span.start && edit.end >= span.end) {
+            consumed = true;
+            break;
+          }
         }
+        if (consumed) continue;
+        reported.add(span.start);
+        const atLocation = location(span.start);
+        warnings.push({
+          kind: "reverse-leak",
+          id,
+          line: atLocation.line,
+          column: atLocation.column,
+          token: entry.token,
+          message:
+            `minwind: ${id}:${atLocation.line}:${atLocation.column} registry` +
+            ` token "${entry.token}" remains outside a rename context`,
+        });
       }
-      if (consumed) continue;
-      const atLocation = location(at);
-      warnings.push({
-        kind: "reverse-leak",
-        id,
-        line: atLocation.line,
-        column: atLocation.column,
-        token: entry.token,
-        message:
-          `minwind: ${id}:${atLocation.line}:${atLocation.column} registry` +
-          ` token "${entry.token}" remains outside a rename context`,
-      });
     }
   }
 
