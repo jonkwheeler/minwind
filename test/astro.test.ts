@@ -983,6 +983,91 @@ describe(
       });
     });
 
+    describe("expression markup (R1, R2)", function () {
+      interface ClassedTag {
+        tag: string;
+        classes: Array<string>;
+      }
+
+      // The class-bearing start tags inside ReplyList's <section>, in order.
+      function replyListTags(html: string): Array<ClassedTag> {
+        const section = /<section data-replies>([\s\S]*?)<\/section>/.exec(
+          html,
+        );
+        assert.ok(section !== null, html);
+        const tags: Array<ClassedTag> = [];
+        for (const tag of section[1].matchAll(/<([a-z]+)\b[^>]*>/g)) {
+          const value = /\sclass="([^"]*)"/.exec(tag[0]);
+          if (value !== null) {
+            tags.push({ tag: tag[1], classes: splitClasses(value[1]) });
+          }
+        }
+        return tags;
+      }
+
+      // The source classes behind built names, a merged name's members
+      // included.
+      function originalsOf(names: Array<string>): Array<string> {
+        return names.flatMap(function (name) {
+          if (Object.hasOwn(map.consolidated, name)) {
+            return map.consolidated[name];
+          }
+          return Object.hasOwn(map.names, name) ? [map.names[name]] : [name];
+        });
+      }
+
+      it("renames ReplyList's mapped, conditional, and void-element classes (AE1, AE2)", function () {
+        const source = replyListTags(builds.baseline["index.html"]);
+        assert.deepStrictEqual(source, [
+          { tag: "li", classes: ["px-4", "py-2"] },
+          { tag: "li", classes: ["px-4", "py-2"] },
+          { tag: "p", classes: ["mt-3", "text-emerald-700"] },
+          { tag: "p", classes: ["mt-2", "text-stone-500"] },
+          { tag: "img", classes: ["size-8"] },
+        ]);
+        const renamed = new Set(
+          report.renames.map(function (entry) {
+            return entry.token;
+          }),
+        );
+        const built = replyListTags(builds.on["index.html"]);
+        assert.deepStrictEqual(
+          built.map(function (entry) {
+            return entry.tag;
+          }),
+          source.map(function (entry) {
+            return entry.tag;
+          }),
+        );
+        for (let i = 0; i < built.length; i += 1) {
+          const { tag, classes } = built[i];
+          for (const name of classes) {
+            assert.ok(isRenamed(name), `<${tag}> kept ${name}`);
+          }
+          assert.deepStrictEqual(
+            sorted(originalsOf(classes)),
+            sorted(source[i].classes),
+            tag,
+          );
+          for (const token of source[i].classes) {
+            assert.ok(renamed.has(token), `${token} is not a rename`);
+          }
+        }
+      });
+
+      it("reaches size-8 only through the unclosed <img> in an expression", function () {
+        const sources = readTree(path.join(FIXTURE, "src"));
+        const uses = Object.keys(sources).filter(function (file) {
+          return /\bsize-8\b/.test(sources[file]);
+        });
+        assert.deepStrictEqual(uses, ["components/ReplyList.astro"]);
+        assert.strictEqual(
+          sources["components/ReplyList.astro"].match(/\bsize-8\b/g)?.length,
+          1,
+        );
+      });
+    });
+
     it("pins the astro version whose Node floor gates this suite", function () {
       const fixture = readJson<{ dependencies: Record<string, string> }>(
         path.join(FIXTURE, "package.json"),

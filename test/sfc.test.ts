@@ -658,7 +658,13 @@ ${layoutMarkup("")}`);
 
   it("reports min-h-screen on <body> in chef-tony's layout", function () {
     const result = classContexts(CHEF_TONY_LAYOUT);
-    assert.deepStrictEqual(result.renamed, ["min-h-screen"]);
+    // The other two sit on markup inside <body>'s {tile && ...} and
+    // {brand.base && (...)} expressions (R1).
+    assert.deepStrictEqual(result.renamed, [
+      "min-h-screen",
+      "tile-field",
+      "comparison-bar",
+    ]);
   });
 
   it("renames html and body classes in a layout", function () {
@@ -822,7 +828,7 @@ import BaseHead from "../components/BaseHead.astro";
   });
 
   it("leaves elements around a content expression unchanged", function () {
-    // The expression's own markup is masked with it, as on one line.
+    // The expression's own markup is read in place, as on one line.
     const oneLine = classContexts(
       `<ul class="flex flex-col">{items.map((item) => (<li class="p-4">{item}</li>))}</ul>
 <p class="mb-16">after</p>
@@ -838,10 +844,243 @@ import BaseHead from "../components/BaseHead.astro";
 <p class="mb-16">after</p>
 `);
     assert.deepStrictEqual(oneLine, {
-      renamed: ["flex flex-col", "mb-16"],
+      renamed: ["flex flex-col", "p-4", "mb-16"],
       runtime: [],
     });
     assert.deepStrictEqual(multiLine, oneLine);
+  });
+});
+
+// R1 and R2: markup inside Astro content expressions is read with the JSX
+// rules, and its text never moves an expression's end.
+describe("Astro expression markup (R1, R2)", function () {
+  function svelteContexts(code: string): {
+    renamed: Array<string>;
+    runtime: Array<string>;
+  } {
+    const renamed: Array<string> = [];
+    const runtime: Array<string> = [];
+    walkSfcClassContexts("/site/src/Card.svelte", code, {
+      renameLiteral: function (literal) {
+        renamed.push(code.slice(literal.start, literal.end));
+      },
+      runtimeLiteral: function (literal) {
+        runtime.push(code.slice(literal.start, literal.end));
+      },
+    });
+    return { renamed, runtime };
+  }
+
+  const EXPRESSION_TOKENS = ["flex", "p-4", "w-8", "mt-4"];
+  const EXPRESSION_REGISTRY: NameRegistry = createNameRegistry({
+    universe: new Set(EXPRESSION_TOKENS),
+    sourceTokens: new Set(EXPRESSION_TOKENS),
+    runtimeTokens: new Set(),
+    exclusions: { names: [], prefixes: [] },
+  });
+
+  function expressionNameOf(token: string): string {
+    const name = EXPRESSION_REGISTRY.nameFor(token);
+    assert.ok(name !== undefined, `${token} must be renamed in the registry`);
+    return name;
+  }
+
+  function transformExpression(code: string): TransformSourceResult {
+    const result = transformSource({
+      code,
+      id: "/site/src/components/List.astro",
+      registry: EXPRESSION_REGISTRY,
+    });
+    assert.ok(result !== null);
+    return result;
+  }
+
+  it("classifies a mapped element's class like template markup", function () {
+    assert.deepStrictEqual(
+      classEvents(
+        `<ul>{items.map((item) => <li class="p-4">{item}</li>)}</ul>\n`,
+      ),
+      classEvents(`<ul><li class="p-4">x</li></ul>\n`),
+    );
+  });
+
+  it("reports a && conditional's classes", function () {
+    assert.deepStrictEqual(
+      classContexts(
+        `<p>x{cond && <span class="ml-2 text-xs">new</span>}</p>\n`,
+      ),
+      { renamed: ["ml-2 text-xs"], runtime: [] },
+    );
+  });
+
+  it("reports both branches of a ternary", function () {
+    assert.deepStrictEqual(
+      classContexts(
+        `{cond ? <b class="font-bold">a</b> : <i class="italic">b</i>}\n`,
+      ),
+      { renamed: ["font-bold", "italic"], runtime: [] },
+    );
+  });
+
+  it("reports nested maps", function () {
+    assert.deepStrictEqual(
+      classContexts(
+        `{groups.map((g) => <ul>{g.items.map((i) => <li class="py-1">{i}</li>)}</ul>)}\n`,
+      ),
+      { renamed: ["py-1"], runtime: [] },
+    );
+  });
+
+  it("gives class:list cn() semantics, as at top level", function () {
+    const inExpression = classEvents(
+      `{on && <div class:list={["a", { "b": on }]}>x</div>}\n`,
+    );
+    assert.deepStrictEqual(inExpression, [
+      { event: "enter", kind: "cn-argument" },
+      {
+        event: "rename",
+        kind: "cn-argument",
+        source: "a",
+        text: "a",
+        quoted: true,
+      },
+      {
+        event: "rename",
+        kind: "cn-argument",
+        source: "b",
+        text: "b",
+        quoted: true,
+      },
+      {
+        event: "exit",
+        kind: "cn-argument",
+        fullyLiteral: false,
+        staticList: false,
+      },
+    ]);
+    assert.deepStrictEqual(
+      inExpression,
+      classEvents(`<div class:list={["a", { "b": on }]}>x</div>\n`),
+    );
+  });
+
+  it("poisons a class={...} ternary, as at top level", function () {
+    const inExpression = classContexts(
+      `{show && <div class={cond ? "x" : "y"}>z</div>}\n`,
+    );
+    assert.deepStrictEqual(inExpression, { renamed: [], runtime: ["x", "y"] });
+    assert.deepStrictEqual(
+      inExpression,
+      classContexts(`<div class={cond ? "x" : "y"}>z</div>\n`),
+    );
+  });
+
+  it("never lets an apostrophe in expression text hide later elements (AE2)", function () {
+    assert.deepStrictEqual(
+      classContexts(
+        `{cond && <p>Don't</p>}<div class="mt-4">x</div>{more && <p>It's</p>}\n`,
+      ),
+      { renamed: ["mt-4"], runtime: [] },
+    );
+  });
+
+  for (const [label, expression] of [
+    ["a string", `"}"`],
+    ["a template literal", "`${a}}`"],
+    ["a comment", `/* } */ x`],
+  ]) {
+    it(`ends a run holding a brace in ${label} at its own brace`, function () {
+      // Ended early, the run would leave the string's markup to the parser.
+      assert.deepStrictEqual(
+        classContexts(
+          `<p>{${expression} || '<b class="p-4">'}</p>\n<div class="mt-4">x</div>\n`,
+        ),
+        { renamed: ["mt-4"], runtime: [] },
+      );
+    });
+  }
+
+  it("reads an unclosed void element and renames it at its exact span", function () {
+    const code = `{cond && <><br><img class="w-8" src="a.png"><hr><span class="p-4">x</span></>}\n<div class="mt-4">y</div>\n`;
+    assert.deepStrictEqual(classContexts(code), {
+      renamed: ["w-8", "p-4", "mt-4"],
+      runtime: [],
+    });
+    const result = transformExpression(code);
+    assert.strictEqual(
+      result.code,
+      `{cond && <><br><img class="${expressionNameOf("w-8")}" src="a.png"><hr><span class="${expressionNameOf("p-4")}">x</span></>}\n<div class="${expressionNameOf("mt-4")}">y</div>\n`,
+    );
+  });
+
+  it("skips a run TSX rejects and still reads the elements around it", function () {
+    assert.deepStrictEqual(
+      classContexts(
+        `<div class="flex">{cond && <div><!-- note --><span class="p-4">x</span></div>}</div>\n<p class="mt-4">y</p>\n`,
+      ),
+      { renamed: ["flex", "mt-4"], runtime: [] },
+    );
+  });
+
+  for (const expression of ["title", "a < b", "a<b"]) {
+    it(`reads nothing from {${expression}} and still reads the next element`, function () {
+      assert.deepStrictEqual(
+        classContexts(`<p>{${expression}}</p>\n<div class="mt-4">x</div>\n`),
+        { renamed: ["mt-4"], runtime: [] },
+      );
+    });
+  }
+
+  it("reads markup after a type argument", function () {
+    assert.deepStrictEqual(
+      classContexts(
+        `{(xs as Array<Item>).map((x) => <li class="p-4">{x}</li>)}\n`,
+      ),
+      { renamed: ["p-4"], runtime: [] },
+    );
+  });
+
+  it("reads markup after a comparison in the same run", function () {
+    assert.deepStrictEqual(
+      classContexts(
+        `{count<max ? <span class="p-4">x</span> : null}<div class="mt-2">y</div>\n`,
+      ),
+      { renamed: ["p-4", "mt-2"], runtime: [] },
+    );
+  });
+
+  it("keeps {count<max} one masked run in Svelte", function () {
+    assert.deepStrictEqual(
+      svelteContexts(`<p>{count<max}</p>\n<div class="mt-2">y</div>\n`),
+      { renamed: ["mt-2"], runtime: [] },
+    );
+  });
+
+  it("walks no braces inside <style> or <title>", function () {
+    assert.deepStrictEqual(
+      classContexts(`<html>
+  <head>
+    <title>{cond && <b class="p-4">x</b>}</title>
+    <style>
+      .a {(<b class="w-8">x</b>)}
+    </style>
+  </head>
+  <body class="mt-4"></body>
+</html>
+`),
+      { renamed: ["mt-4"], runtime: [] },
+    );
+  });
+
+  it("renames a class inside an expression at its exact span", function () {
+    const result = transformExpression(
+      `<ul class="flex">{items.map((item) => <li class="p-4">{item}</li>)}</ul>\n`,
+    );
+    assert.strictEqual(
+      result.code,
+      `<ul class="${expressionNameOf("flex")}">{items.map((item) => <li class="${expressionNameOf("p-4")}">{item}</li>)}</ul>\n`,
+    );
+    assert.deepStrictEqual(result.warnings, []);
   });
 });
 

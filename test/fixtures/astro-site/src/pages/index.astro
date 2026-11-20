@@ -1,6 +1,7 @@
 ---
 import Badge from "../components/Badge.astro";
 import Card from "../components/Card.astro";
+import ReplyList from "../components/ReplyList.astro";
 import Base from "../layouts/Base.astro";
 ---
 
@@ -28,6 +29,7 @@ import Base from "../layouts/Base.astro";
     <h2>Pinned</h2>
     <p>Follow up with the printer.</p>
   </Card>
+  <ReplyList replies={["Printer quote", "Venue deposit"]} />
 </Base>
 
 <script>

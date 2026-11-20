@@ -1,0 +1,23 @@
+---
+interface Props {
+  replies: Array<string>;
+}
+
+// Markup inside {…} expressions. 1.1.0 masked it from the template parse, so
+// a class used only here kept its Tailwind name (R1), and the apostrophe in
+// "Don't" opened a string that closed at the one in "It's", hiding the <p>
+// between them (R2). The <img> is left unclosed, as Astro allows.
+const { replies } = Astro.props;
+const avatar =
+  "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1 1'%3E%3Crect width='1' height='1' fill='%2378716c'/%3E%3C/svg%3E";
+---
+
+<section data-replies>
+  <ul>
+    {replies.map((reply) => <li class="px-4 py-2">{reply}</li>)}
+  </ul>
+  {replies.length > 1 && <p class="mt-3 text-emerald-700">Don't let these wait.</p>}
+  <p class="mt-2 text-stone-500">Sorted by due date.</p>
+  {replies.length === 0 && <p>It's all caught up.</p>}
+  {replies.length > 0 && <img class="size-8" src={avatar} alt="">}
+</section>

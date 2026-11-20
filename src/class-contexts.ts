@@ -120,9 +120,25 @@ export function parseSourceModule(
   );
 }
 
+export interface WalkClassContextsOptions {
+  // Astro expression markup: a namespaced class:list attribute gets cn()
+  // semantics, as the template walker gives it outside expressions. Off,
+  // namespaced attribute names are never class contexts.
+  astroClassList?: boolean;
+}
+
+function isClassListDirective(name: ts.JsxAttributeName): boolean {
+  return (
+    ts.isJsxNamespacedName(name) &&
+    name.namespace.text === "class" &&
+    name.name.text === "list"
+  );
+}
+
 export function walkClassContexts(
   sourceFile: ts.SourceFile,
   visitor: ClassContextVisitor,
+  options: WalkClassContextsOptions = {},
 ): void {
   // Identify cn by its import-traced binding; fall back to a bare-name match
   // so an unimported global-style helper still counts (KTD4).
@@ -194,10 +210,10 @@ export function walkClassContexts(
     });
   }
 
-  function handleCnCall(node: ts.CallExpression): void {
+  function handleCnArguments(args: ReadonlyArray<ts.Expression>): void {
     visitor.enterRenameGroup?.("cn-argument");
-    let fullyLiteral = node.arguments.length > 0;
-    for (const argument of node.arguments) {
+    let fullyLiteral = args.length > 0;
+    for (const argument of args) {
       if (
         ts.isStringLiteral(argument) ||
         ts.isNoSubstitutionTemplateLiteral(argument)
@@ -245,7 +261,7 @@ export function walkClassContexts(
 
   function handleCall(node: ts.CallExpression): void {
     if (isCnCall(node)) {
-      handleCnCall(node);
+      handleCnArguments(node.arguments);
       return;
     }
     if (isClassListMethodCall(node)) reportClassListMethodArguments(node);
@@ -290,7 +306,7 @@ export function walkClassContexts(
     }
     if (ts.isCallExpression(expression)) {
       if (isCnCall(expression)) {
-        handleCnCall(expression);
+        handleCnArguments(expression.arguments);
         return;
       }
       if (isClassListMethodCall(expression)) {
@@ -353,9 +369,23 @@ export function walkClassContexts(
 
   function visit(node: ts.Node): void {
     if (ts.isJsxAttribute(node)) {
-      // Namespaced attribute names (a:b) are never class contexts.
-      const attribute = ts.isIdentifier(node.name) ? node.name.text : "";
       const initializer = node.initializer;
+      if (
+        options.astroClassList === true &&
+        isClassListDirective(node.name) &&
+        initializer !== undefined &&
+        ts.isJsxExpression(initializer) &&
+        initializer.expression !== undefined
+      ) {
+        // The template walker wraps the expression in cn() and walks the
+        // call: one group for the expression, then a descent that gives
+        // nested cn() calls their own groups.
+        handleCnArguments([initializer.expression]);
+        visit(initializer.expression);
+        return;
+      }
+      // Other namespaced attribute names (a:b) are never class contexts.
+      const attribute = ts.isIdentifier(node.name) ? node.name.text : "";
       if (attribute === "class" && initializer !== undefined) {
         if (ts.isStringLiteral(initializer)) {
           emitLiteralList(initializer, "class-attribute");

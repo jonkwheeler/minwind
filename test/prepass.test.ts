@@ -7,6 +7,7 @@ import { describe, it } from "node:test";
 import { runPrepass } from "../src/prepass.js";
 import { hashClassName } from "../src/names.js";
 import { assertPresence, transformStylesheet } from "../src/transform-css.js";
+import { transformSource } from "../src/transform-source.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SITE = path.join(HERE, "fixtures", "prepass-site");
@@ -532,5 +533,76 @@ describe("runPrepass dependent variants (R7, KTD7)", function () {
       assert.ok(result.registry.nameFor("group-aria-[current=page]:underline"));
       assertStylesheetRenames(result);
     });
+  });
+});
+
+describe("runPrepass Astro expression markup (R1)", function () {
+  it("renames the classes of expression markup, matching the transform (AE1)", async function () {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "minwind-astro-"));
+    try {
+      fs.mkdirSync(path.join(root, "src", "components"), { recursive: true });
+      const css = path.join(root, "src", "app.css");
+      fs.writeFileSync(
+        css,
+        `.px-4 { padding-inline: 1rem; }
+.py-2 { padding-block: 0.5rem; }
+.mt-3 { margin-top: 0.75rem; }
+.size-8 { width: 2rem; height: 2rem; }
+`,
+      );
+      const file = path.join(root, "src", "components", "ReplyList.astro");
+      function replyList(names: Record<string, string>): string {
+        return `---
+const { replies, avatar } = Astro.props;
+---
+<ul>
+  {replies.map((reply) => <li class="${names["px-4"]} ${names["py-2"]}">{reply}</li>)}
+</ul>
+{replies.length > 2 && <p class="${names["mt-3"]}">Don't wait.</p>}
+{avatar && <img class="${names["size-8"]}" src={avatar} alt="">}
+`;
+      }
+      const tokens = ["px-4", "py-2", "mt-3", "size-8"];
+      const source = replyList(
+        Object.fromEntries(
+          tokens.map(function (token) {
+            return [token, token];
+          }),
+        ),
+      );
+      fs.writeFileSync(file, source);
+      const result = await runPrepass({ root, cssEntry: css });
+      const reasons = exclusionReasons(result);
+      for (const token of tokens) {
+        assert.ok(
+          result.renameTokens.has(token),
+          `${token} must be a rename token`,
+        );
+        assert.strictEqual(reasons.get(token), undefined);
+        assert.strictEqual(
+          result.registry.nameFor(token),
+          hashClassName(token),
+        );
+      }
+      const transformed = transformSource({
+        code: source,
+        id: file,
+        registry: result.registry,
+        consolidationVerdicts: result.consolidationVerdicts,
+      });
+      assert.ok(transformed !== null);
+      assert.strictEqual(
+        transformed.code,
+        replyList(
+          Object.fromEntries(
+            tokens.map(function (token) {
+              return [token, hashClassName(token)];
+            }),
+          ),
+        ),
+      );
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 });

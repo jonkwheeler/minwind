@@ -19,7 +19,9 @@ import {
 // directives rename like classList keys. Static text interleaved with
 // template expressions (Svelte/Astro class="a {cond}") is unprovable: its
 // static runs and nested string literals poison the token everywhere,
-// mirroring the template-literal rule.
+// mirroring the template-literal rule. Markup inside Astro content
+// expressions ({items.map((item) => <li class="...">)}) is parsed as TSX and
+// walked with the JSX rules.
 //
 // Both walks run against whitespace masks of the original file — script
 // contents blanked for the template parse, everything else blanked for the
@@ -188,6 +190,251 @@ function maskBraceExpressions(text: string): string {
   return chars.join("");
 }
 
+// An Astro brace run: `start` at its `{`, `end` just past its `}`. markup
+// is true when the run holds expression markup, and voidTagEnds are the
+// offsets of the `>` ending each void element written without `/>` in it.
+interface BraceRun {
+  start: number;
+  end: number;
+  markup: boolean;
+  voidTagEnds: Array<number>;
+}
+
+const VOID_ELEMENTS = new Set([
+  "area",
+  "base",
+  "br",
+  "col",
+  "embed",
+  "hr",
+  "img",
+  "input",
+  "link",
+  "meta",
+  "param",
+  "source",
+  "track",
+  "wbr",
+]);
+
+function isAsciiLetter(ch: string | undefined): boolean {
+  return ch !== undefined && /^[A-Za-z]$/.test(ch);
+}
+
+function isWordCharacter(ch: string): boolean {
+  return /^[\w$]$/.test(ch) || ch >= "\u0080";
+}
+
+// The keywords after which `<` starts an operand, not a comparison.
+const OPERAND_KEYWORDS = new Set(["return", "yield", "await"]);
+
+// KTD3: Astro expressions hold markup, and maskBraceExpressions' quote
+// tracking would read the apostrophe in {cond && <p>Don't</p>} as a string
+// that closes outside the run, masking real elements. This finder is a small
+// state machine. In JavaScript it tracks quotes, template literals with
+// ${...} nesting, and comments, and `<` followed by a letter or `>` starts
+// markup only in operand position (`<` after an operand is a comparison or
+// a type argument: {a<b}, Array<Item>). Markup ignores quotes in text,
+// skips quoted attribute values and comments, counts element depth (void
+// and self-closing tags don't nest), and enters JavaScript at `{`; at depth
+// 0 it returns to JavaScript. Regex literals are not tracked. Runs are
+// masked as maskBraceExpressions masks them.
+function findAstroBraceRuns(text: string): {
+  masked: string;
+  runs: Array<BraceRun>;
+} {
+  let markup = false;
+  let voidTagEnds: Array<number> = [];
+
+  // Each scan starts at an offset and returns the offset just past what it
+  // consumed, or -1 when the text ends first.
+  function skipQuoted(from: number, quote: string): number {
+    let i = from;
+    while (i < text.length) {
+      if (text[i] === "\\") {
+        i += 2;
+        continue;
+      }
+      if (text[i] === quote) return i + 1;
+      i += 1;
+    }
+    return -1;
+  }
+
+  // From just past an opening backtick.
+  function skipTemplateLiteral(from: number): number {
+    let i = from;
+    while (i < text.length) {
+      const ch = text[i];
+      if (ch === "\\") {
+        i += 2;
+      } else if (ch === "`") {
+        return i + 1;
+      } else if (ch === "$" && text[i + 1] === "{") {
+        i = scanScript(i + 2);
+        if (i === -1) return -1;
+      } else {
+        i += 1;
+      }
+    }
+    return -1;
+  }
+
+  // JavaScript from just past a `{` through the `}` that closes it.
+  function scanScript(from: number): number {
+    let i = from;
+    let depth = 0;
+    let operand = true;
+    while (i < text.length) {
+      const ch = text[i];
+      const next = text[i + 1];
+      if (ch === "'" || ch === '"' || ch === "`") {
+        i = ch === "`" ? skipTemplateLiteral(i + 1) : skipQuoted(i + 1, ch);
+        if (i === -1) return -1;
+        operand = false;
+      } else if (ch === "/" && next === "/") {
+        const lineEnd = text.indexOf("\n", i);
+        if (lineEnd === -1) return -1;
+        i = lineEnd + 1;
+      } else if (ch === "/" && next === "*") {
+        const close = text.indexOf("*/", i + 2);
+        if (close === -1) return -1;
+        i = close + 2;
+      } else if (
+        ch === "<" &&
+        operand &&
+        (isAsciiLetter(next) || next === ">")
+      ) {
+        i = scanMarkup(i);
+        if (i === -1) return -1;
+        operand = false;
+      } else if (isWordCharacter(ch)) {
+        let end = i + 1;
+        while (end < text.length && isWordCharacter(text[end])) end += 1;
+        operand = OPERAND_KEYWORDS.has(text.slice(i, end));
+        i = end;
+      } else {
+        if (ch === "}") {
+          if (depth === 0) return i + 1;
+          depth -= 1;
+        } else if (ch === "{") {
+          depth += 1;
+        }
+        if (!isAsciiWhitespace(ch)) {
+          const previous = text[i - 1];
+          operand =
+            "([{,;?:=!".includes(ch) ||
+            ((ch === "&" || ch === "|") && previous === ch) ||
+            (ch === ">" && previous === "=");
+        }
+        i += 1;
+      }
+    }
+    return -1;
+  }
+
+  // A start tag's attributes, from just past its name. selfClosing is
+  // true for `/>`.
+  function scanStartTag(
+    from: number,
+  ): { end: number; selfClosing: boolean } | null {
+    let i = from;
+    while (i < text.length) {
+      const ch = text[i];
+      if (ch === '"' || ch === "'") {
+        const close = text.indexOf(ch, i + 1);
+        if (close === -1) return null;
+        i = close + 1;
+      } else if (ch === "`" || ch === "{") {
+        i = ch === "`" ? skipTemplateLiteral(i + 1) : scanScript(i + 1);
+        if (i === -1) return null;
+      } else if (ch === "/" && text[i + 1] === ">") {
+        return { end: i + 2, selfClosing: true };
+      } else if (ch === ">") {
+        return { end: i + 1, selfClosing: false };
+      } else {
+        i += 1;
+      }
+    }
+    return null;
+  }
+
+  // Markup from its first `<` until its outermost element closes.
+  function scanMarkup(from: number): number {
+    markup = true;
+    let i = from;
+    let depth = 0;
+    while (i < text.length) {
+      const ch = text[i];
+      const next = text[i + 1];
+      if (ch === "{") {
+        i = scanScript(i + 1);
+        if (i === -1) return -1;
+      } else if (text.startsWith("<!--", i)) {
+        const close = text.indexOf("-->", i + 4);
+        if (close === -1) return -1;
+        i = close + 3;
+      } else if (ch === "<" && next === ">") {
+        depth += 1;
+        i += 2;
+      } else if (ch === "<" && next === "/") {
+        const close = text.indexOf(">", i);
+        if (close === -1) return -1;
+        i = close + 1;
+        depth -= 1;
+        if (depth <= 0) return i;
+      } else if (ch !== "<" || !isAsciiLetter(next)) {
+        // Text, quotes included.
+        i += 1;
+      } else {
+        let nameEnd = i + 1;
+        while (
+          nameEnd < text.length &&
+          !isAsciiWhitespace(text[nameEnd]) &&
+          text[nameEnd] !== "/" &&
+          text[nameEnd] !== ">"
+        ) {
+          nameEnd += 1;
+        }
+        const name = text.slice(i + 1, nameEnd);
+        const tag = scanStartTag(nameEnd);
+        if (tag === null) return -1;
+        i = tag.end;
+        if (!tag.selfClosing && VOID_ELEMENTS.has(name)) {
+          voidTagEnds.push(i - 1);
+        } else if (!tag.selfClosing) {
+          depth += 1;
+          continue;
+        }
+        if (depth === 0) return i;
+      }
+    }
+    return -1;
+  }
+
+  const chars = text.split("");
+  const runs: Array<BraceRun> = [];
+  let i = 0;
+  while (i < text.length) {
+    if (text[i] !== "{") {
+      i += 1;
+      continue;
+    }
+    markup = false;
+    voidTagEnds = [];
+    const end = scanScript(i + 1);
+    // An unterminated run (a stray brace in text) is left alone.
+    if (end === -1) {
+      i += 1;
+      continue;
+    }
+    runs.push({ start: i, end, markup, voidTagEnds });
+    for (let k = i + 1; k < end - 1; k += 1) chars[k] = "x";
+    i = end;
+  }
+  return { masked: chars.join(""), runs };
+}
+
 // The KTD7 reverse-leak check scans the whole module for registry tokens;
 // inside <style> content a utility word like `flex` is a CSS value
 // (display: flex), not a class reference, and would warn on every scoped
@@ -208,19 +455,20 @@ export function maskSfcStyleContent(filePath: string, text: string): string {
   return maskSpans(text, spans);
 }
 
-// Forwards callbacks with literal spans shifted into the original file.
-// unprovableTemplate cannot be shifted — the node belongs to a synthetic
-// parse — so its static fragments are re-emitted as runtime literals, which
-// poison (pre-pass) and warn (transform) exactly like the template path.
+// Forwards callbacks with literal spans mapped from a synthetic parse into
+// the original file. unprovableTemplate cannot be mapped — the node belongs
+// to the synthetic parse — so its static fragments are re-emitted as runtime
+// literals, which poison (pre-pass) and warn (transform) exactly like the
+// template path.
 function offsetVisitor(
   visitor: ClassContextVisitor,
-  offset: number,
+  toOriginal: (position: number) => number,
 ): ClassContextVisitor {
   function shift(literal: LiteralOccurrence): LiteralOccurrence {
     return {
       text: literal.text,
-      start: literal.start + offset,
-      end: literal.end + offset,
+      start: toOriginal(literal.start),
+      end: toOriginal(literal.end),
       shorthand: literal.shorthand,
       quoted: literal.quoted,
     };
@@ -281,9 +529,58 @@ function walkBindingExpression(
 ): void {
   const wrapped = `cn(${expression})`;
   const sourceFile = parseSourceModule(`${filePath}::binding.ts`, wrapped);
+  const offset = expressionStart - "cn(".length;
   walkClassContexts(
     sourceFile,
-    offsetVisitor(visitor, expressionStart - "cn(".length),
+    offsetVisitor(visitor, function (position) {
+      return position + offset;
+    }),
+  );
+}
+
+// KTD4: an Astro content run that holds markup is parsed alone as TSX,
+// wrapped as `(` + content + `)`, and walked with the JSX rules: class="..."
+// is a static class attribute, class={expr} poisons what it cannot prove,
+// and class:list gets cn() semantics. The copy closes each unclosed void
+// element (<img ...> becomes <img .../>), and spans map back through the
+// inserted bytes. A run TSX still rejects (an HTML comment, an unquoted
+// attribute value) emits nothing: the output pass on the Astro route reads
+// the built markup either way.
+function walkExpressionMarkup(
+  filePath: string,
+  templateText: string,
+  run: BraceRun,
+  visitor: ClassContextVisitor,
+): void {
+  const contentStart = run.start + 1;
+  // Ascending offsets in the copy where a `/` was inserted.
+  const inserted: Array<number> = [];
+  let copy = "(";
+  let cursor = contentStart;
+  for (const tagEnd of run.voidTagEnds) {
+    copy += templateText.slice(cursor, tagEnd);
+    inserted.push(copy.length);
+    copy += "/";
+    cursor = tagEnd;
+  }
+  copy += `${templateText.slice(cursor, run.end - 1)})`;
+  const sourceFile = parseSourceModule(`${filePath}::expression.tsx`, copy);
+  // parseDiagnostics is internal in the TypeScript typings.
+  const parsed = sourceFile as unknown as {
+    parseDiagnostics: ReadonlyArray<ts.Diagnostic>;
+  };
+  if (parsed.parseDiagnostics.length > 0) return;
+  walkClassContexts(
+    sourceFile,
+    offsetVisitor(visitor, function (position) {
+      let before = 1;
+      for (const at of inserted) {
+        if (at >= position) break;
+        before += 1;
+      }
+      return contentStart + position - before;
+    }),
+    { astroClassList: true },
   );
 }
 
@@ -725,9 +1022,19 @@ export function walkSfcClassContexts(
     }
   }
   let templateText = maskSpans(text, templateMask);
+  // Expression markup is parsed from the template text before run masking.
+  const unmaskedTemplate = templateText;
   // Only Svelte and Astro interpolate {} in templates; Vue and plain HTML
   // attribute values are always literal (or always-quoted expressions).
-  if (format === "svelte" || format === "astro") {
+  // Svelte expressions cannot hold markup, so its runs stay JavaScript only.
+  let markupRuns: Array<BraceRun> = [];
+  if (format === "astro") {
+    const found = findAstroBraceRuns(templateText);
+    markupRuns = found.runs.filter(function (run) {
+      return run.markup;
+    });
+    templateText = found.masked;
+  } else if (format === "svelte") {
     templateText = maskBraceExpressions(templateText);
   }
   templateText = renameParserSpecialTags(format, templateText);
@@ -739,7 +1046,40 @@ export function walkSfcClassContexts(
   });
 
   let nonTags: Array<SourceSpan> | null = null;
+
+  // KTD4: a run inside a start tag is an attribute value, handled below,
+  // and a run in a raw-text element's text (CSS in <style>) or a comment is
+  // not an expression. Every other run that holds markup is a content run,
+  // walked when the element walk passes it so events keep document order.
+  let contentRuns: Array<BraceRun> = [];
+  if (markupRuns.length > 0) {
+    const spans = nonTagSpans(document);
+    nonTags = spans;
+    contentRuns = markupRuns.filter(function (run) {
+      return !spans.some(function (span) {
+        return span.start <= run.start && run.start < span.end;
+      });
+    });
+  }
+  let nextRun = 0;
+  function walkContentRunsBefore(offset: number): void {
+    while (
+      nextRun < contentRuns.length &&
+      contentRuns[nextRun].start < offset
+    ) {
+      walkExpressionMarkup(
+        filePath,
+        unmaskedTemplate,
+        contentRuns[nextRun],
+        visitor,
+      );
+      nextRun += 1;
+    }
+  }
+
   walkTemplateElements(document, function (element) {
+    const elementStart = element.sourceCodeLocation?.startOffset;
+    if (elementStart !== undefined) walkContentRunsBefore(elementStart);
     const locations = element.sourceCodeLocation?.attrs;
     for (const attr of element.attrs) {
       const location = locations?.[attr.name];
@@ -822,6 +1162,7 @@ export function walkSfcClassContexts(
       }
     }
   });
+  walkContentRunsBefore(Infinity);
 }
 
 // One entry point for modules of every supported flavor: SFCs get the
