@@ -5,8 +5,10 @@ import os from "node:os";
 import path from "node:path";
 import { before, describe, it } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { promisify } from "node:util";
+import { isDeepStrictEqual, promisify } from "node:util";
 import { ident, parse, type CssNode } from "css-tree";
+import MagicString, { Bundle } from "magic-string";
+import { build as viteBuild, type Plugin, type Rollup } from "vite";
 import minwind, {
   type AstroConfigLike,
   type MinwindAstroIntegration,
@@ -15,6 +17,12 @@ import minwind, {
 import { compileTailwindStylesheet } from "../src/engines/tailwind.js";
 import { hashClassName } from "../src/names.js";
 import type { RenameMap, TransformReport } from "../src/report.js";
+import type {
+  OutputBundleLike,
+  OutputChunkLike,
+  SourceMapLike,
+  VendorProvenancePlugin,
+} from "../src/vendor-provenance.js";
 
 // minwind/astro driven through its hooks with fake hook arguments, in the
 // order `astro build` calls them; the end-to-end section at the bottom runs
@@ -320,25 +328,15 @@ describe("astro:config:done", function () {
     }, /inlineStylesheets/);
   });
 
-  it("rejects a srcDir other than src/, naming it", function () {
+  it("accepts a srcDir other than src/ (AE10)", function () {
     const integration = minwind();
     setup(integration, "build");
-    const srcDir = path.join(os.tmpdir(), "app");
-    assert.throws(
-      function () {
-        integration.hooks["astro:config:done"]({
-          config: configFor(os.tmpdir(), {
-            srcDir: pathToFileURL(srcDir + path.sep),
-          }),
-          buildOutput: "static",
-        });
-      },
-      function (error: Error) {
-        assert.match(error.message, /default srcDir \(src\/\) only/);
-        assert.ok(error.message.includes(`"${srcDir}"`), error.message);
-        return true;
-      },
-    );
+    integration.hooks["astro:config:done"]({
+      config: configFor(os.tmpdir(), {
+        srcDir: pathToFileURL(path.join(os.tmpdir(), "app") + path.sep),
+      }),
+      buildOutput: "static",
+    });
   });
 
   it("still enforces the config under MINWIND=off (R5)", async function () {
@@ -540,6 +538,92 @@ describe("astro:build:done", function () {
   });
 });
 
+describe("custom srcDir (R13)", function () {
+  // makeSite's site with its sources under app/ and no src/ directory.
+  // cssEntry is relative to app/.
+  async function makeAppSite(
+    cssEntry: string = path.join("styles", "global.css"),
+  ): Promise<string> {
+    const root = await makeSite(path.join("src", cssEntry));
+    fs.renameSync(path.join(root, "src"), path.join(root, "app"));
+    return root;
+  }
+
+  function buildFromApp(
+    options: MinwindAstroOptions,
+    root: string,
+  ): Promise<Logs> {
+    const integration = minwind(options);
+    setup(integration, "build");
+    integration.hooks["astro:config:done"]({
+      config: configFor(root, {
+        srcDir: pathToFileURL(path.join(root, "app") + path.sep),
+      }),
+      buildOutput: "static",
+    });
+    return buildDone(integration, root);
+  }
+
+  it("renames the classes of app/pages/index.astro and its layout (AE10)", async function () {
+    const root = await makeAppSite();
+    try {
+      const logs = await buildFromApp({ mode: "morph" }, root);
+      const html = builtPage(root);
+      assert.ok(
+        html.includes(
+          `<html lang="en" class="${hashClassName("scroll-smooth")}">`,
+        ),
+        html,
+      );
+      assert.ok(
+        html.includes(
+          `<ul class="${hashClassName("flex")} ${hashClassName("flex-col")}">`,
+        ),
+        html,
+      );
+      assert.ok(
+        logs.info.some(function (line) {
+          return /renamed 5 class\(es\)/.test(line);
+        }),
+        logs.info.join("\n"),
+      );
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to app/app.css when app/styles/global.css is absent", async function () {
+    const root = await makeAppSite("app.css");
+    try {
+      await buildFromApp({}, root);
+      assert.ok(
+        builtPage(root).includes(
+          `<html lang="en" class="${hashClassName("scroll-smooth")}">`,
+        ),
+      );
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("still resolves an explicit cssEntry against the Astro root", async function () {
+    const root = await makeAppSite(path.join("styles", "site.css"));
+    try {
+      await buildFromApp(
+        { cssEntry: path.join("app", "styles", "site.css") },
+        root,
+      );
+      assert.ok(
+        builtPage(root).includes(
+          `<html lang="en" class="${hashClassName("scroll-smooth")}">`,
+        ),
+      );
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
 // End-to-end (KTD10): the real `astro build` CLI on test/fixtures/astro-site,
 // a self-contained site with its own lockfile that links this package. Each
 // run builds the same source three times: with the integration, with it
@@ -589,16 +673,17 @@ function endToEndSkip(): string | false {
 }
 
 // process.execPath runs Astro on the Node this suite was gated on, whatever
-// node comes first on PATH.
+// node comes first on PATH. Resolves to the build's log.
 async function astroBuild(
   outDir: string,
   env: Record<string, string>,
-): Promise<void> {
-  await execFileAsync(
+): Promise<string> {
+  const { stdout, stderr } = await execFileAsync(
     process.execPath,
     [ASTRO_CLI, "build", "--outDir", outDir],
     { cwd: FIXTURE, env: { ...process.env, ...env } },
   );
+  return `${stdout}${stderr}`;
 }
 
 interface Builds {
@@ -606,15 +691,38 @@ interface Builds {
   off: Record<string, string>;
   baseline: Record<string, string>;
   offWroteArtifacts: boolean;
+  onLog: string;
+}
+
+const VENDOR = path.join(FIXTURE, "vendor", "fake-motion");
+const INSTALLED_VENDOR = path.join(FIXTURE, "node_modules", "fake-motion");
+
+// pnpm installs the file: dependency as a copy, so an edit under vendor/
+// reaches the build only through a reinstall (KTD14).
+function vendorInstalled(): boolean {
+  return (
+    fs.existsSync(INSTALLED_VENDOR) &&
+    isDeepStrictEqual(readTree(INSTALLED_VENDOR), readTree(VENDOR))
+  );
 }
 
 async function ensureBuilt(): Promise<Builds> {
   // The fixture's minwind/astro is this package's dist, so build it first.
   await execFileAsync("pnpm", ["run", "build"], { cwd: REPO });
-  if (!fs.existsSync(path.join(FIXTURE, "node_modules", "astro"))) {
-    await execFileAsync("pnpm", ["install", "--ignore-workspace"], {
+  if (
+    !fs.existsSync(path.join(FIXTURE, "node_modules", "astro")) ||
+    !vendorInstalled()
+  ) {
+    // CI mode and a closed stdin keep pnpm from waiting on a prompt, and the
+    // timeout turns any other stall into a failure instead of a hung suite.
+    const install = execFileAsync("pnpm", ["install", "--ignore-workspace"], {
       cwd: FIXTURE,
+      env: { ...process.env, CI: "true" },
+      timeout: 300_000,
     });
+    install.child.stdin?.end();
+    await install;
+    assert.ok(vendorInstalled(), "the install left a stale fake-motion");
   }
   for (const dir of Object.values(OUT_DIRS)) {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -623,12 +731,13 @@ async function ensureBuilt(): Promise<Builds> {
   await astroBuild(OUT_DIRS.baseline, { MINWIND_FIXTURE_NO_INTEGRATION: "1" });
   await astroBuild(OUT_DIRS.off, { MINWIND: "off" });
   const offWroteArtifacts = fs.existsSync(ARTIFACTS);
-  await astroBuild(OUT_DIRS.on, {});
+  const onLog = await astroBuild(OUT_DIRS.on, {});
   return {
     on: readTree(OUT_DIRS.on),
     off: readTree(OUT_DIRS.off),
     baseline: readTree(OUT_DIRS.baseline),
     offWroteArtifacts,
+    onLog,
   };
 }
 
@@ -714,6 +823,283 @@ describe(
         Object.hasOwn(map.names, name) || Object.hasOwn(map.consolidated, name)
       );
     }
+
+    describe("table rows, <noscript>, and the stale-class guard (R4, R5)", function () {
+      const ABOUT = "about/index.html";
+
+      function renamedTokens(): Set<string> {
+        return new Set(
+          report.renames.map(function (entry) {
+            return entry.token;
+          }),
+        );
+      }
+
+      // The source classes behind built names, a merged name's members
+      // included.
+      function originalsOf(names: Array<string>): Array<string> {
+        return names.flatMap(function (name) {
+          if (Object.hasOwn(map.consolidated, name)) {
+            return map.consolidated[name];
+          }
+          return Object.hasOwn(map.names, name) ? [map.names[name]] : [name];
+        });
+      }
+
+      function decodeEntities(value: string): string {
+        return value
+          .replace(/&#x([0-9a-f]+);/gi, function (_match, hex: string) {
+            return String.fromCodePoint(parseInt(hex, 16));
+          })
+          .replace(/&#(\d+);/g, function (_match, decimal: string) {
+            return String.fromCodePoint(Number(decimal));
+          })
+          .replace(/&quot;/g, '"')
+          .replace(/&apos;/g, "'")
+          .replace(/&lt;/g, "<")
+          .replace(/&gt;/g, ">")
+          .replace(/&amp;/g, "&");
+      }
+
+      // KTD14's stale-class guard, mirroring GTM Frontier's check 7: the
+      // classes an element still wears under an original name the build
+      // renamed. The CSS selector carries the new name, so such an element
+      // loses its rule. Every start tag counts, including tags a parser
+      // would drop or read as text (<noscript> content).
+      function staleClasses(html: string): Array<string> {
+        const renamed = renamedTokens();
+        const stale = new Set<string>();
+        const markup = html.replace(
+          /<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi,
+          "",
+        );
+        for (const tag of markup.matchAll(
+          /<[a-z][a-z0-9-]*\b(?:"[^"]*"|'[^']*'|[^"'>])*>/gi,
+        )) {
+          const value = /\sclass=(["'])(.*?)\1/is.exec(tag[0])?.[2];
+          if (value === undefined) continue;
+          for (const token of splitClasses(decodeEntities(value))) {
+            if (renamed.has(token) && !isRenamed(token)) stale.add(token);
+          }
+        }
+        return sorted(stale);
+      }
+
+      it("finds no element wearing a renamed class's original name", function () {
+        for (const page of pagesOf(builds.on)) {
+          assert.deepStrictEqual(staleClasses(builds.on[page]), [], page);
+        }
+        // The guard can fire: the no-integration build wears every original.
+        assert.ok(
+          staleClasses(builds.baseline["index.html"]).includes("scroll-smooth"),
+        );
+      });
+
+      it("renames a table-row component's classes (AE4)", function () {
+        const renamed = renamedTokens();
+        for (const tag of ["tr", "th", "td"]) {
+          const source = classesOf(builds.baseline[ABOUT], tag);
+          const built = classesOf(builds.on[ABOUT], tag);
+          for (const name of built) {
+            assert.ok(isRenamed(name), `<${tag}> kept ${name}`);
+          }
+          assert.deepStrictEqual(
+            sorted(originalsOf(built)),
+            sorted(source),
+            tag,
+          );
+          for (const token of source) {
+            assert.ok(renamed.has(token), `${token} is not a rename`);
+          }
+        }
+      });
+
+      it("gives <noscript> markup the name the class has elsewhere (AE5)", function () {
+        const textSm = report.renames.find(function (entry) {
+          return entry.token === "text-sm";
+        });
+        assert.ok(textSm !== undefined, "text-sm kept its original name");
+        const noscript = /<noscript>([\s\S]*?)<\/noscript>/.exec(
+          builds.on[ABOUT],
+        );
+        assert.ok(noscript !== null, builds.on[ABOUT]);
+        assert.deepStrictEqual(classesOf(noscript[1], "p"), [textSm.name]);
+        assert.ok(classesOf(builds.on[ABOUT], "nav").includes(textSm.name));
+      });
+    });
+
+    describe("SiteNav's group marker (R7, KTD7)", function () {
+      interface Arm {
+        classes: Array<string>;
+        text: string;
+      }
+
+      // Every selector arm's source text and class names, at any depth.
+      function armsOf(css: string): Array<Arm> {
+        const arms: Array<Arm> = [];
+        function collect(node: CssNode, arm: Arm): void {
+          if (node.type === "ClassSelector" && node.name !== undefined) {
+            arm.classes.push(ident.decode(node.name));
+          }
+          if (node.children) {
+            node.children.forEach(function (child) {
+              collect(child, arm);
+            });
+          }
+        }
+        function visit(node: CssNode): void {
+          if (node.type === "Rule" && node.prelude?.type === "SelectorList") {
+            node.prelude.children?.forEach(function (selector) {
+              const arm: Arm = {
+                classes: [],
+                text: css.slice(
+                  selector.loc?.start.offset,
+                  selector.loc?.end.offset,
+                ),
+              };
+              collect(selector, arm);
+              arms.push(arm);
+            });
+          }
+          if (node.children) node.children.forEach(visit);
+          if (node.block) visit(node.block);
+        }
+        visit(parse(css, { positions: true }));
+        return arms;
+      }
+
+      function original(name: string): string {
+        return decode(name) ?? name;
+      }
+
+      it("keeps the marker and its variant together, and the variant's selector matches", function () {
+        const arms = armsOf(stylesheetOf(builds.on));
+        const pages = pagesOf(builds.on);
+        assert.ok(pages.length >= 2, pages.join(", "));
+        for (const page of pages) {
+          const html = builds.on[page];
+          assert.match(html, /<div\b[^>]*\srole="group"/, page);
+          const current = Array.from(
+            html.matchAll(
+              /<a\b([^>]*\saria-current="page"[^>]*)>\s*<span class="([^"]*)">/g,
+            ),
+          );
+          assert.strictEqual(current.length, 1, `${page}: one current link`);
+          const anchor = /\sclass="([^"]*)"/.exec(current[0][1]);
+          assert.ok(anchor !== null, current[0][0]);
+          const marker = splitClasses(anchor[1]).find(function (name) {
+            return original(name) === "group";
+          });
+          assert.ok(marker !== undefined, current[0][0]);
+          const variant = current[0][2];
+          assert.strictEqual(
+            original(variant),
+            "group-aria-[current=page]:underline",
+          );
+          // Renamed together or kept together, never split.
+          assert.strictEqual(
+            isRenamed(marker),
+            isRenamed(variant),
+            `${page}: ${marker} and ${variant}`,
+          );
+          assert.ok(
+            arms.some(function (arm) {
+              return (
+                sorted(new Set(arm.classes)).join(" ") ===
+                  sorted([marker, variant]).join(" ") &&
+                /\[aria-current="?page"?\]/.test(arm.text)
+              );
+            }),
+            `${page}: no .${variant} arm compounding .${marker}[aria-current]`,
+          );
+        }
+      });
+    });
+
+    describe("expression markup (R1, R2)", function () {
+      interface ClassedTag {
+        tag: string;
+        classes: Array<string>;
+      }
+
+      // The class-bearing start tags inside ReplyList's <section>, in order.
+      function replyListTags(html: string): Array<ClassedTag> {
+        const section = /<section data-replies>([\s\S]*?)<\/section>/.exec(
+          html,
+        );
+        assert.ok(section !== null, html);
+        const tags: Array<ClassedTag> = [];
+        for (const tag of section[1].matchAll(/<([a-z]+)\b[^>]*>/g)) {
+          const value = /\sclass="([^"]*)"/.exec(tag[0]);
+          if (value !== null) {
+            tags.push({ tag: tag[1], classes: splitClasses(value[1]) });
+          }
+        }
+        return tags;
+      }
+
+      // The source classes behind built names, a merged name's members
+      // included.
+      function originalsOf(names: Array<string>): Array<string> {
+        return names.flatMap(function (name) {
+          if (Object.hasOwn(map.consolidated, name)) {
+            return map.consolidated[name];
+          }
+          return Object.hasOwn(map.names, name) ? [map.names[name]] : [name];
+        });
+      }
+
+      it("renames ReplyList's mapped, conditional, and void-element classes (AE1, AE2)", function () {
+        const source = replyListTags(builds.baseline["index.html"]);
+        assert.deepStrictEqual(source, [
+          { tag: "li", classes: ["px-4", "py-2"] },
+          { tag: "li", classes: ["px-4", "py-2"] },
+          { tag: "p", classes: ["mt-3", "text-emerald-700"] },
+          { tag: "p", classes: ["mt-2", "text-stone-500"] },
+          { tag: "img", classes: ["size-8"] },
+        ]);
+        const renamed = new Set(
+          report.renames.map(function (entry) {
+            return entry.token;
+          }),
+        );
+        const built = replyListTags(builds.on["index.html"]);
+        assert.deepStrictEqual(
+          built.map(function (entry) {
+            return entry.tag;
+          }),
+          source.map(function (entry) {
+            return entry.tag;
+          }),
+        );
+        for (let i = 0; i < built.length; i += 1) {
+          const { tag, classes } = built[i];
+          for (const name of classes) {
+            assert.ok(isRenamed(name), `<${tag}> kept ${name}`);
+          }
+          assert.deepStrictEqual(
+            sorted(originalsOf(classes)),
+            sorted(source[i].classes),
+            tag,
+          );
+          for (const token of source[i].classes) {
+            assert.ok(renamed.has(token), `${token} is not a rename`);
+          }
+        }
+      });
+
+      it("reaches size-8 only through the unclosed <img> in an expression", function () {
+        const sources = readTree(path.join(FIXTURE, "src"));
+        const uses = Object.keys(sources).filter(function (file) {
+          return /\bsize-8\b/.test(sources[file]);
+        });
+        assert.deepStrictEqual(uses, ["components/ReplyList.astro"]);
+        assert.strictEqual(
+          sources["components/ReplyList.astro"].match(/\bsize-8\b/g)?.length,
+          1,
+        );
+      });
+    });
 
     it("pins the astro version whose Node floor gates this suite", function () {
       const fixture = readJson<{ dependencies: Record<string, string> }>(
@@ -903,5 +1289,797 @@ describe(
         assert.strictEqual(map.names[entry.name], entry.token, entry.name);
       }
     });
+
+    describe("frontmatter class constants (R3)", function () {
+      const ABOUT = "about/index.html";
+      // Panel.astro's class constants, as the fixture writes them.
+      const PANEL_CONSTANTS = [
+        "rounded-xl border-dashed p-6",
+        "text-lg tracking-wide",
+        "italic leading-snug",
+        "ring-1 ring-sky-300",
+      ];
+
+      interface ClassedTag {
+        tag: string;
+        classes: Array<string>;
+      }
+
+      // Panel's <section> and the class-bearing start tags inside it, in
+      // order.
+      function panelTags(html: string): Array<ClassedTag> {
+        const section =
+          /<section\b[^>]*\sdata-panel\b[^>]*>[\s\S]*?<\/section>/.exec(html);
+        assert.ok(section !== null, html);
+        const tags: Array<ClassedTag> = [];
+        for (const tag of section[0].matchAll(/<([a-z0-9]+)\b[^>]*>/g)) {
+          const value = /\sclass="([^"]*)"/.exec(tag[0]);
+          if (value !== null) {
+            tags.push({ tag: tag[1], classes: splitClasses(value[1]) });
+          }
+        }
+        return tags;
+      }
+
+      function originalsOf(names: Array<string>): Array<string> {
+        return names.flatMap(function (name) {
+          if (Object.hasOwn(map.consolidated, name)) {
+            return map.consolidated[name];
+          }
+          return Object.hasOwn(map.names, name) ? [map.names[name]] : [name];
+        });
+      }
+
+      it("renames the classes Panel holds in frontmatter constants (AE3)", function () {
+        const source = panelTags(builds.baseline[ABOUT]);
+        assert.deepStrictEqual(source, [
+          { tag: "section", classes: ["rounded-xl", "border-dashed", "p-6"] },
+          { tag: "h2", classes: ["text-lg", "tracking-wide", "uppercase"] },
+          { tag: "p", classes: ["italic", "leading-snug"] },
+          { tag: "p", classes: ["italic", "leading-snug"] },
+          { tag: "div", classes: ["rounded-lg", "ring-1", "ring-sky-300"] },
+        ]);
+        const renamed = new Set(
+          report.renames.map(function (entry) {
+            return entry.token;
+          }),
+        );
+        const built = panelTags(builds.on[ABOUT]);
+        assert.deepStrictEqual(
+          built.map(function (entry) {
+            return entry.tag;
+          }),
+          source.map(function (entry) {
+            return entry.tag;
+          }),
+        );
+        for (let i = 0; i < built.length; i += 1) {
+          const { tag, classes } = built[i];
+          for (const name of classes) {
+            assert.ok(isRenamed(name), `<${tag}> kept ${name}`);
+          }
+          assert.deepStrictEqual(
+            sorted(originalsOf(classes)),
+            sorted(source[i].classes),
+            tag,
+          );
+        }
+        for (const literal of PANEL_CONSTANTS) {
+          for (const token of literal.split(" ")) {
+            assert.ok(renamed.has(token), `${token} is not a rename`);
+          }
+        }
+      });
+
+      it("reaches those classes only through Panel's constants", function () {
+        const sources = readTree(path.join(FIXTURE, "src"));
+        for (const literal of PANEL_CONSTANTS) {
+          for (const token of literal.split(" ")) {
+            const word = `(?<![\\w-])${token}(?![\\w-])`;
+            const uses = Object.keys(sources).filter(function (file) {
+              return new RegExp(word).test(sources[file]);
+            });
+            assert.deepStrictEqual(uses, ["components/Panel.astro"], token);
+            assert.strictEqual(
+              sources["components/Panel.astro"].match(new RegExp(word, "g"))
+                ?.length,
+              1,
+              token,
+            );
+          }
+        }
+        const panel = sources["components/Panel.astro"];
+        for (const literal of PANEL_CONSTANTS) {
+          assert.match(panel, new RegExp(`\\nconst \\w+ = "${literal}";\\n`));
+        }
+      });
+    });
+
+    describe("entity-encoded classes (R6)", function () {
+      const ABOUT = "about/index.html";
+
+      // The raw class values of Prose's wrapper and list, in order.
+      function proseClassValues(html: string): Array<string> {
+        const prose =
+          /<div data-prose class="([^"]*)">[\s\S]*?<ul class="([^"]*)">/.exec(
+            html,
+          );
+        assert.ok(prose !== null, html);
+        return [prose[1], prose[2]];
+      }
+
+      it("renames Prose's encoded classes, each with a selector (AE6)", function () {
+        // Astro writes `&` as an entity, statically and through class:list.
+        assert.deepStrictEqual(proseClassValues(builds.baseline[ABOUT]), [
+          "[&amp;_a]:underline",
+          "[&amp;>li]:mt-2",
+        ]);
+        const built = proseClassValues(builds.on[ABOUT]);
+        assert.deepStrictEqual(built.map(decode), [
+          "[&_a]:underline",
+          "[&>li]:mt-2",
+        ]);
+        const selectors = selectorClasses(stylesheetOf(builds.on));
+        for (const name of built) {
+          assert.ok(selectors.has(name), `no .${name} selector`);
+        }
+      });
+    });
+
+    describe("prose and keyword attributes (R8, AE8)", function () {
+      const SPELLED = ["grid", "flex", "group"];
+      const VARIANT = "group-aria-[current=page]:underline";
+
+      it("renames the utilities that prose and a role value spell", function () {
+        // About's prose spells grid and flex, and SiteNav's wrapper has
+        // role="group" on every page.
+        const prose = builds.baseline["about/index.html"].replace(/\s+/g, " ");
+        assert.match(
+          prose,
+          /<p\b[^>]*>[^<]* a grid, [^<]* a flex row\.\s*<\/p>/,
+        );
+        const renamed = new Set(
+          report.renames.map(function (entry) {
+            return entry.token;
+          }),
+        );
+        for (const token of [...SPELLED, VARIANT]) {
+          assert.ok(renamed.has(token), `${token} kept its original name`);
+        }
+        assert.deepStrictEqual(
+          report.exclusions.filter(function (entry) {
+            return [...SPELLED, VARIANT].includes(entry.token);
+          }),
+          [],
+        );
+      });
+
+      it("renames SiteNav's group marker and its variant together on every page", function () {
+        const pages = pagesOf(builds.on);
+        assert.ok(pages.length >= 2, pages.join(", "));
+        for (const page of pages) {
+          const html = builds.on[page];
+          assert.match(html, /<div\b[^>]*\srole="group"/, page);
+          const current =
+            /<a\b[^>]*\sclass="([^"]*)"[^>]*\saria-current="page"[^>]*>\s*<span class="([^"]*)">/.exec(
+              html,
+            );
+          assert.ok(current !== null, page);
+          assert.ok(
+            splitClasses(current[1]).map(decode).includes("group"),
+            `${page}: ${current[1]}`,
+          );
+          assert.strictEqual(decode(current[2]), VARIANT, page);
+        }
+      });
+    });
+
+    // R16 (KTD15): Toggle reaches lowercase only through an identifier key
+    // in its class:list object, which 1.1.0 never read.
+    describe("class-composition object keys (R16)", function () {
+      function toggleClasses(html: string): Array<string> {
+        const tag = /<button\b[^>]*\sdata-toggle\b[^>]*>/.exec(html);
+        assert.ok(tag !== null, "no <button data-toggle>");
+        const value = /\sclass="([^"]*)"/.exec(tag[0]);
+        assert.ok(value !== null, tag[0]);
+        return splitClasses(value[1]);
+      }
+
+      it("renames Toggle's class:list key, with a selector in _astro/*.css", function () {
+        assert.deepStrictEqual(toggleClasses(builds.baseline["index.html"]), [
+          "px-2",
+          "lowercase",
+        ]);
+        const built = toggleClasses(builds.on["index.html"]);
+        const selectors = selectorClasses(stylesheetOf(builds.on));
+        for (const name of built) {
+          assert.ok(isRenamed(name), `<button> kept ${name}`);
+          assert.ok(selectors.has(name), `no .${name} selector`);
+        }
+        assert.deepStrictEqual(sorted(built.map(decode)), [
+          "lowercase",
+          "px-2",
+        ]);
+        assert.ok(
+          report.renames.some(function (entry) {
+            return entry.token === "lowercase";
+          }),
+        );
+      });
+
+      it("reaches lowercase only through Toggle's object key", function () {
+        const sources = readTree(path.join(FIXTURE, "src"));
+        const uses = Object.keys(sources).filter(function (file) {
+          return /\blowercase\b/.test(sources[file]);
+        });
+        assert.deepStrictEqual(uses, ["components/Toggle.astro"]);
+        assert.match(
+          sources["components/Toggle.astro"],
+          /class:list=\{\["px-2", \{ lowercase: on \}\]\}/,
+        );
+      });
+    });
+
+    // R17 (KTD16): Disclosure's script selects its panel with a ".hidden"
+    // selector string, and no other file spells hidden.
+    describe("selector strings (R17, AE12)", function () {
+      const ABOUT = "about/index.html";
+      const SELECTOR = "[data-disclosure] > .hidden";
+
+      function panelClasses(html: string): Array<string> {
+        const disclosure =
+          /<div\b[^>]*\sdata-disclosure\b[^>]*>([\s\S]*?)<\/div>/.exec(html);
+        assert.ok(disclosure !== null, "no <div data-disclosure>");
+        return classesOf(disclosure[1], "p");
+      }
+
+      it("keeps Disclosure's class original in the markup, the stylesheet, and the script (AE12)", function () {
+        assert.deepStrictEqual(panelClasses(builds.baseline[ABOUT]), [
+          "hidden",
+        ]);
+        assert.deepStrictEqual(panelClasses(builds.on[ABOUT]), ["hidden"]);
+        assert.ok(selectorClasses(stylesheetOf(builds.on)).has("hidden"));
+        const scripts = Array.from(
+          builds.on[ABOUT].matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/g),
+          function (match) {
+            return match[1];
+          },
+        );
+        for (const file of Object.keys(builds.on)) {
+          if (file.endsWith(".js")) scripts.push(builds.on[file]);
+        }
+        assert.ok(
+          scripts.some(function (script) {
+            return script.includes(SELECTOR);
+          }),
+          `no script selects ${SELECTOR}`,
+        );
+        assert.ok(
+          !report.renames.some(function (entry) {
+            return entry.token === "hidden";
+          }),
+        );
+        assert.deepStrictEqual(
+          report.exclusions.filter(function (entry) {
+            return entry.token === "hidden";
+          }),
+          [{ token: "hidden", reason: "runtime-context" }],
+        );
+      });
+
+      it("reaches hidden only through Disclosure's markup and selector string", function () {
+        const sources = readTree(path.join(FIXTURE, "src"));
+        const uses = Object.keys(sources).filter(function (file) {
+          return /\bhidden\b/.test(sources[file]);
+        });
+        assert.deepStrictEqual(uses, ["components/Disclosure.astro"]);
+        const disclosure = sources["components/Disclosure.astro"];
+        assert.ok(disclosure.includes('<p class="hidden">'), disclosure);
+        assert.ok(disclosure.includes(`"${SELECTOR}"`), disclosure);
+      });
+    });
+
+    // R10 (KTD10): both pages import src/scripts/motion.ts, so Rolldown
+    // emits one shared chunk holding it and fake-motion, which Astro never
+    // inlines. trustVendorModules is on for the minwind builds.
+    describe("trusted vendor modules (R10)", function () {
+      function motionChunk(tree: Record<string, string>): string {
+        const files = Object.keys(tree).filter(function (file) {
+          return (
+            path.dirname(file) === "_astro" &&
+            file.endsWith(".js") &&
+            tree[file].includes("[data-motion]")
+          );
+        });
+        assert.strictEqual(files.length, 1, files.join(", "));
+        return files[0];
+      }
+
+      it("ships fake-motion and motion.ts in one external chunk, with no sourcemap (probe)", function () {
+        const chunk = motionChunk(builds.on);
+        const code = builds.on[chunk];
+        assert.match(code, /\.style\.display=[`"']block[`"']/);
+        assert.match(code, /\{position:[`"']absolute[`"']\}/);
+        assert.match(code, /static mark=[`"']\u2726[`"']/);
+        assert.match(code, /\.position===[`"']relative[`"']/);
+        const entries = Object.keys(builds.on).filter(function (file) {
+          return builds.on[file].includes(`"./${path.basename(chunk)}"`);
+        });
+        for (const page of pagesOf(builds.on)) {
+          assert.ok(
+            entries.some(function (entry) {
+              return builds.on[page].includes(`src="/${entry}"`);
+            }),
+            `${page} loads no entry that imports ${chunk}`,
+          );
+        }
+        for (const [name, tree] of Object.entries({
+          on: builds.on,
+          off: builds.off,
+        })) {
+          for (const file of Object.keys(tree)) {
+            assert.ok(!file.endsWith(".map"), `${name}: ${file}`);
+            assert.ok(
+              !tree[file].includes("sourceMappingURL"),
+              `${name}: ${file}`,
+            );
+          }
+        }
+        // The vendor-provenance plugin runs in the on build only, so the
+        // same file names show it changed no chunk's hash.
+        assert.deepStrictEqual(
+          Object.keys(builds.on).sort(),
+          Object.keys(builds.off).sort(),
+        );
+      });
+
+      it("renames block and absolute, which only fake-motion mentions, and keeps relative (AE9)", function () {
+        const renamed = new Set(
+          report.renames.map(function (entry) {
+            return entry.token;
+          }),
+        );
+        assert.ok(renamed.has("block") && renamed.has("absolute"));
+        assert.ok(!renamed.has("relative"));
+        const motion =
+          /<p class="([^"]*)">\s*Motion <span class="([^"]*)">/.exec(
+            builds.on["index.html"],
+          );
+        assert.ok(motion !== null, builds.on["index.html"]);
+        assert.ok(splitClasses(motion[1]).includes("relative"), motion[1]);
+        const span = splitClasses(motion[2]);
+        assert.deepStrictEqual(sorted(span.map(decode)), ["absolute", "block"]);
+        const selectors = selectorClasses(stylesheetOf(builds.on));
+        assert.ok(selectors.has("relative"));
+        for (const name of span) assert.ok(selectors.has(name), name);
+        assert.ok(!selectors.has("block") && !selectors.has("absolute"));
+        // fake-motion's inline-style values keep their bytes.
+        const chunk = motionChunk(builds.on);
+        assert.strictEqual(builds.on[chunk], builds.off[chunk]);
+      });
+
+      it("logs the renamed classes trusted vendor code mentions", function () {
+        const lines = builds.onLog.split("\n").filter(function (line) {
+          return line.includes("trusted vendor code");
+        });
+        assert.strictEqual(lines.length, 1, builds.onLog);
+        assert.match(lines[0], /renamed 2 class\(es\)/);
+        assert.match(lines[0], /: absolute, block\s*$/);
+      });
+    });
   },
 );
+
+// KTD7 on the Astro route: GTM Frontier's nav marks the current page's link
+// with a group variant, and a data-* hook spells the marker in an attribute
+// minwind cannot rewrite. The marker keeps its name, and the variant
+// compounding it keeps its name too, logged on a line of its own.
+const NAV_STYLESHEET = `@layer utilities {
+  .flex { display: flex; }
+  .group-aria-\\[current\\=page\\]\\:underline:is(:where(.group)[aria-current="page"] *) { text-decoration-line: underline; }
+}
+`;
+
+const NAV_MARKUP =
+  '<nav class="flex"><div data-active-class="group">' +
+  '<a href="/" class="group" aria-current="page">' +
+  '<span class="group-aria-[current=page]:underline">Inbox</span>' +
+  "</a></div></nav>";
+
+describe("astro:build:done dependent variants (R7, KTD7)", function () {
+  it("logs a kept marker's dependents apart from the unrewritable classes", async function () {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "minwind-astro-nav-"));
+    try {
+      const cssEntry = path.join("src", "styles", "global.css");
+      writeFile(root, cssEntry, NAV_STYLESHEET);
+      writeFile(root, path.join("src", "pages", "index.astro"), NAV_MARKUP);
+      const compiled = await compileTailwindStylesheet({
+        cssEntry: path.join(root, cssEntry),
+        root,
+      });
+      writeFile(
+        root,
+        path.join("dist", "_astro", "index.css"),
+        compiled.stylesheet,
+      );
+      writeFile(
+        root,
+        path.join("dist", "index.html"),
+        "<!DOCTYPE html><html><head>" +
+          '<link rel="stylesheet" href="/_astro/index.css"></head>' +
+          `<body>${NAV_MARKUP}</body></html>`,
+      );
+      const logs = await build({}, root);
+      const kept = logs.info.filter(function (line) {
+        return line.includes("kept original");
+      });
+      assert.strictEqual(kept.length, 2, logs.info.join("\n"));
+      assert.match(kept[0], /cannot rewrite/);
+      assert.match(kept[0], /: group$/);
+      assert.match(kept[1], /depends on a class kept original/);
+      assert.ok(
+        kept[1].endsWith(": group-aria-[current=page]:underline"),
+        kept[1],
+      );
+      const page = builtPage(root);
+      assert.ok(page.includes('class="group"'), page);
+      assert.ok(
+        page.includes('<span class="group-aria-[current=page]:underline">'),
+        page,
+      );
+      assert.ok(page.includes(`<nav class="${hashClassName("flex")}">`), page);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("trustVendorModules hooks (R10, KTD10, KTD11)", function () {
+  const MOTION =
+    "/site/node_modules/.pnpm/fake-motion@1.0.0/node_modules/fake-motion/index.js";
+  const PROJECT = "/site/src/scripts/motion.ts";
+
+  function pluginOf(updates: Array<unknown>): VendorProvenancePlugin {
+    const plugins = updates.flatMap(function (update) {
+      const vite = (update as { vite?: { plugins: Array<unknown> } }).vite;
+      return vite === undefined ? [] : vite.plugins;
+    });
+    assert.strictEqual(plugins.length, 1, JSON.stringify(updates));
+    return plugins[0] as VendorProvenancePlugin;
+  }
+
+  // A client chunk of the two modules, mapped as Rolldown maps a chunk.
+  function motionChunk(
+    vendor: string,
+    project: string,
+  ): OutputChunkLike & { map: SourceMapLike } {
+    const bundle = new Bundle({ separator: "" });
+    bundle.addSource({ filename: MOTION, content: new MagicString(vendor) });
+    bundle.addSource({ filename: PROJECT, content: new MagicString(project) });
+    const map = bundle.generateMap({ hires: "boundary", includeContent: true });
+    return {
+      type: "chunk",
+      fileName: "_astro/motion.js",
+      code: bundle.toString(),
+      map: {
+        sources: map.sources,
+        sourcesContent: map.sourcesContent,
+        mappings: map.mappings,
+      },
+      sourcemapFileName: "_astro/motion.js.map",
+    };
+  }
+
+  // The hooks of `astro build` around the client build: the plugin asks
+  // for maps, sees the bundle, and records the chunk Astro then writes.
+  async function buildWithChunk(
+    options: MinwindAstroOptions,
+    root: string,
+    chunk: OutputChunkLike,
+  ): Promise<Logs> {
+    const integration = minwind(options);
+    const updates = setup(integration, "build");
+    integration.hooks["astro:config:done"]({
+      config: configFor(root),
+      buildOutput: "static",
+    });
+    const dist = path.join(root, "dist");
+    writeFile(dist, chunk.fileName, chunk.code);
+    if (options.trustVendorModules) {
+      const plugin = pluginOf(updates);
+      plugin.configEnvironment("client", { build: {} });
+      const bundle: OutputBundleLike = {
+        [chunk.fileName]: chunk,
+        [`${chunk.fileName}.map`]: {
+          type: "asset",
+          fileName: `${chunk.fileName}.map`,
+        },
+      };
+      plugin.generateBundle({ sourcemap: "hidden" }, bundle);
+      plugin.writeBundle({ dir: dist }, bundle);
+    }
+    return buildDone(integration, root);
+  }
+
+  it("adds the vendor-provenance plugin on a build, for true or package names", function () {
+    for (const trustVendorModules of [true, ["fake-motion", "@scope/tween"]]) {
+      const updates = setup(minwind({ trustVendorModules }), "build");
+      assert.strictEqual(pluginOf(updates).name, "minwind:vendor-provenance");
+      assert.deepStrictEqual(updates[0], {
+        build: { inlineStylesheets: "never" },
+      });
+    }
+  });
+
+  it("adds no plugin in dev, or when the option is false or absent", function () {
+    assert.deepStrictEqual(
+      setup(minwind({ trustVendorModules: true }), "dev"),
+      [],
+    );
+    for (const options of [{ trustVendorModules: false }, {}]) {
+      assert.deepStrictEqual(setup(minwind(options), "build"), [
+        { build: { inlineStylesheets: "never" } },
+      ]);
+    }
+  });
+
+  it("rejects a value other than a boolean or an array of package names", function () {
+    for (const value of [
+      "gsap",
+      1,
+      null,
+      {},
+      [1],
+      [""],
+      ["node_modules/gsap"],
+      ["gsap/dist"],
+      [" gsap"],
+    ]) {
+      const options = {
+        trustVendorModules: value,
+      } as unknown as MinwindAstroOptions;
+      assert.throws(
+        function () {
+          setup(minwind(options), "build");
+        },
+        /trustVendorModules must be true, false, or an array of package names/,
+        JSON.stringify(value),
+      );
+    }
+  });
+
+  it("runs only in the client environment", function () {
+    const plugin = pluginOf(
+      setup(minwind({ trustVendorModules: true }), "build"),
+    );
+    assert.strictEqual(plugin.applyToEnvironment({ name: "client" }), true);
+    for (const name of ["ssr", "prerender", "astro"]) {
+      assert.strictEqual(plugin.applyToEnvironment({ name }), false, name);
+      assert.strictEqual(
+        plugin.configEnvironment(name, { build: {} }),
+        undefined,
+      );
+    }
+  });
+
+  it("asks for hidden maps and keeps them out of the written bundle", function () {
+    const plugin = pluginOf(
+      setup(minwind({ trustVendorModules: true }), "build"),
+    );
+    // Astro resolves the client config in rounds, and the last ones see
+    // the "hidden" the first asked for.
+    for (const sourcemap of [undefined, false]) {
+      assert.deepStrictEqual(
+        plugin.configEnvironment("client", { build: { sourcemap } }),
+        { build: { sourcemap: "hidden" } },
+      );
+    }
+    assert.strictEqual(
+      plugin.configEnvironment("client", { build: { sourcemap: "hidden" } }),
+      undefined,
+    );
+    const chunk = motionChunk('e.style.display="flex";', "go();");
+    const bundle: OutputBundleLike = {
+      [chunk.fileName]: chunk,
+      "_astro/motion.js.map": {
+        type: "asset",
+        fileName: "_astro/motion.js.map",
+      },
+      "_astro/index.css": { type: "asset", fileName: "_astro/index.css" },
+    };
+    plugin.generateBundle({ sourcemap: "hidden" }, bundle);
+    assert.deepStrictEqual(Object.keys(bundle), [
+      "_astro/motion.js",
+      "_astro/index.css",
+    ]);
+  });
+
+  it("keeps the maps a site asks for itself", function () {
+    for (const sourcemap of [true, "hidden", "inline"]) {
+      const plugin = pluginOf(
+        setup(minwind({ trustVendorModules: true }), "build"),
+      );
+      for (let round = 0; round < 2; round += 1) {
+        assert.strictEqual(
+          plugin.configEnvironment("client", { build: { sourcemap } }),
+          undefined,
+        );
+      }
+      const chunk = motionChunk('e.style.display="flex";', "go();");
+      const bundle: OutputBundleLike = {
+        [chunk.fileName]: chunk,
+        "_astro/motion.js.map": {
+          type: "asset",
+          fileName: "_astro/motion.js.map",
+        },
+      };
+      plugin.generateBundle({ sourcemap }, bundle);
+      assert.deepStrictEqual(
+        Object.keys(bundle),
+        ["_astro/motion.js", "_astro/motion.js.map"],
+        String(sourcemap),
+      );
+    }
+  });
+
+  it("renames a class only vendor code mentions and logs it in one info line (AE9)", async function () {
+    const chunk = motionChunk(
+      'function s(e){e.style.display="flex"}',
+      'if(getComputedStyle(t).alignItems==="items-center")s(t);',
+    );
+    const trusted = await makeSite();
+    const untrusted = await makeSite();
+    try {
+      const logs = await buildWithChunk(
+        { trustVendorModules: ["fake-motion"] },
+        trusted,
+        chunk,
+      );
+      const page = builtPage(trusted);
+      assert.ok(page.includes(`<li class="${hashClassName("flex")} `), page);
+      assert.ok(page.includes(' items-center">'), page);
+      const vendor = logs.info.filter(function (line) {
+        return line.includes("trusted vendor code");
+      });
+      assert.strictEqual(vendor.length, 1, logs.info.join("\n"));
+      assert.match(vendor[0], /^renamed 1 class\(es\) that trusted vendor/);
+      assert.match(vendor[0], /trustVendorModules/);
+      assert.match(vendor[0], /: flex$/);
+      const without = await buildWithChunk({}, untrusted, chunk);
+      assert.ok(
+        builtPage(untrusted).includes('<li class="flex items-center">'),
+      );
+      assert.ok(
+        !without.info.some(function (line) {
+          return line.includes("trusted vendor code");
+        }),
+        without.info.join("\n"),
+      );
+    } finally {
+      fs.rmSync(trusted, { recursive: true, force: true });
+      fs.rmSync(untrusted, { recursive: true, force: true });
+    }
+  });
+
+  it("logs no vendor line when trusted code mentions no renamed class", async function () {
+    const root = await makeSite();
+    try {
+      const logs = await buildWithChunk(
+        { trustVendorModules: true },
+        root,
+        motionChunk("e.style.opacity=1;", "go();"),
+      );
+      assert.ok(
+        !logs.info.some(function (line) {
+          return line.includes("trusted vendor code");
+        }),
+        logs.info.join("\n"),
+      );
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+// Review #9: the vendor-provenance plugin removes only the hidden maps it
+// asked for, so maps the site asks for itself, from its config or a later
+// plugin, ship as Vite emits them. A build that renames nothing gets no
+// plugin.
+describe("trustVendorModules sourcemap ownership", function () {
+  function provenancePlugin(): Plugin {
+    const updates = setup(minwind({ trustVendorModules: true }), "build");
+    const plugins = updates.flatMap(function (update) {
+      const vite = (update as { vite?: { plugins: Array<unknown> } }).vite;
+      return vite === undefined ? [] : vite.plugins;
+    });
+    assert.strictEqual(plugins.length, 1, JSON.stringify(updates));
+    return plugins[0] as Plugin;
+  }
+
+  // A plugin listed after minwind's that turns maps on, as another
+  // integration can.
+  const LATER_MAPS: Plugin = {
+    name: "later-maps",
+    configEnvironment: function () {
+      return { build: { sourcemap: true } };
+    },
+  };
+
+  // Vite client builds of one module from one root, a build per plugin
+  // list, kept in memory: each emitted file's text by name.
+  async function viteOutputs(
+    pluginLists: Array<Array<Plugin>>,
+  ): Promise<Array<Record<string, string>>> {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "minwind-astro-maps-"));
+    try {
+      writeFile(root, "main.js", 'document.body.style.display = "block";\n');
+      const trees: Array<Record<string, string>> = [];
+      for (const plugins of pluginLists) {
+        const result = await viteBuild({
+          root,
+          configFile: false,
+          logLevel: "silent",
+          plugins,
+          build: {
+            write: false,
+            rollupOptions: { input: path.join(root, "main.js") },
+          },
+        });
+        const files: Record<string, string> = {};
+        const outputs = (
+          Array.isArray(result) ? result : [result]
+        ) as Array<Rollup.RollupOutput>;
+        for (const { output } of outputs) {
+          for (const file of output) {
+            files[file.fileName] =
+              file.type === "chunk"
+                ? file.code
+                : Buffer.from(file.source).toString("utf8");
+          }
+        }
+        trees.push(files);
+      }
+      return trees;
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }
+
+  it("leaves a later plugin's maps and their sourceMappingURL comments", async function () {
+    const [site, withMinwind] = await viteOutputs([
+      [LATER_MAPS],
+      [provenancePlugin(), LATER_MAPS],
+    ]);
+    const maps = Object.keys(site).filter(function (file) {
+      return file.endsWith(".js.map");
+    });
+    assert.strictEqual(maps.length, 1, Object.keys(site).join(", "));
+    const chunk = maps[0].slice(0, -".map".length);
+    assert.ok(site[chunk].includes("//# sourceMappingURL="), site[chunk]);
+    assert.deepStrictEqual(withMinwind, site);
+  });
+
+  it("removes the hidden maps it asked for, matching a build without it", async function () {
+    const [plain, withMinwind] = await viteOutputs([[], [provenancePlugin()]]);
+    assert.ok(
+      !Object.keys(plain).some(function (file) {
+        return file.endsWith(".map");
+      }),
+      Object.keys(plain).join(", "),
+    );
+    assert.deepStrictEqual(withMinwind, plain);
+  });
+
+  it("adds no plugin under MINWIND=off or MINWIND_RENAME=off", async function () {
+    for (const name of ["MINWIND", "MINWIND_RENAME"]) {
+      const updates = await withEnv(name, "off", function () {
+        return setup(minwind({ trustVendorModules: true }), "build");
+      });
+      assert.deepStrictEqual(
+        updates,
+        [{ build: { inlineStylesheets: "never" } }],
+        name,
+      );
+    }
+  });
+});

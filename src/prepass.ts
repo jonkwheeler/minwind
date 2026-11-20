@@ -31,7 +31,9 @@ import {
   type StylesheetModel,
 } from "./consolidate.js";
 import { compareCodeUnits } from "./util.js";
+import { dependentTokens } from "./dependents.js";
 import { compileTailwindStylesheet } from "./engines/tailwind.js";
+import { selectorArmTokens } from "./transform-css.js";
 import {
   collectCustomPropertyNamesInCss,
   createCustomPropertyRegistry,
@@ -55,6 +57,13 @@ export interface PrepassOptions {
   // markup classes, third-party widget classes). Defaults to none.
   exclusions?: ExclusionConfig;
   customProperties?: CustomPropertiesConfig;
+  // Directory the source scan walks. Defaults to <root>/src.
+  sourceDir?: string;
+  // True when the caller scans the built output for leaks, as the apply
+  // and Astro routes do: that scan counts the object keys and selector
+  // strings that ship, so the source scan leaves keys outside a composition
+  // (KTD15) and selector strings (KTD16) alone.
+  scansBuiltOutput?: boolean;
 }
 
 export interface PrepassResult {
@@ -84,9 +93,18 @@ interface SourceScan {
   // literal is one contiguous run in the rendered attribute, so the quote
   // solver may name and reorder its tokens as a fragment.
   literalCounts: Map<string, ListFrequency>;
+  // Identifier object keys that keep their tokens original: those a class
+  // position poisons, and on source routes those no composition consumed
+  // (KTD15). Most name no class (size, onClick), so only the stylesheet's
+  // classes among them join the runtime tokens.
+  keyTokens: Set<string>;
+  // On source routes, the class names selector strings name, such as
+  // hidden in querySelector(".hidden") (KTD16). Many name no class (a.png),
+  // so only the stylesheet's classes among them join the runtime tokens.
+  selectorTokens: Set<string>;
 }
 
-async function sourceModulePaths(root: string): Promise<Array<string>> {
+async function sourceModulePaths(sourceDir: string): Promise<Array<string>> {
   const found: Array<string> = [];
   async function walk(directory: string): Promise<void> {
     const entries = await readdir(directory, { withFileTypes: true });
@@ -108,11 +126,16 @@ async function sourceModulePaths(root: string): Promise<Array<string>> {
     // final found.sort() in sourceModulePaths restores a canonical order.
     await Promise.all(children);
   }
-  await walk(path.join(root, "src"));
+  await walk(sourceDir);
   return found.sort();
 }
 
-function scanModule(filePath: string, text: string, scan: SourceScan): void {
+function scanModule(
+  filePath: string,
+  text: string,
+  scan: SourceScan,
+  sourceRoute: boolean,
+): void {
   function recordList(tokens: Array<string>): void {
     const key = canonicalListKey(tokens);
     if (key === "") return;
@@ -166,13 +189,31 @@ function scanModule(filePath: string, text: string, scan: SourceScan): void {
   // by span.
   let groupTokens: Array<string> = [];
   let groupLiterals: Array<{ start: number; tokens: Array<string> }> = [];
+  // KTD15: every identifier object key in the module, and the starts of the
+  // literals a class position consumed, renamed or poisoned.
+  const objectKeys: Array<LiteralOccurrence> | undefined = sourceRoute
+    ? []
+    : undefined;
+  const consumed = sourceRoute ? new Set<number>() : undefined;
 
   walkModuleContexts(filePath, text, {
+    objectLiteralKey:
+      objectKeys === undefined
+        ? undefined
+        : function (key: LiteralOccurrence): void {
+            objectKeys.push(key);
+          },
+    selectorReference: sourceRoute
+      ? function (reference: LiteralOccurrence): void {
+          scan.selectorTokens.add(reference.text);
+        }
+      : undefined,
     enterRenameGroup: function (): void {
       groupTokens = [];
       groupLiterals = [];
     },
     renameLiteral: function (literal: LiteralOccurrence): void {
+      consumed?.add(literal.start);
       const tokens = tokenize(literal.text);
       for (const token of tokens) groupTokens.push(token);
       if (
@@ -198,9 +239,15 @@ function scanModule(filePath: string, text: string, scan: SourceScan): void {
       poisonTemplate(node);
     },
     runtimeLiteral: function (literal: LiteralOccurrence): void {
-      recordRuntime(tokenize(literal.text));
+      consumed?.add(literal.start);
+      if (literal.objectKey === true) scan.keyTokens.add(literal.text);
+      else recordRuntime(tokenize(literal.text));
     },
   });
+  if (objectKeys === undefined || consumed === undefined) return;
+  for (const key of objectKeys) {
+    if (!consumed.has(key.start)) scan.keyTokens.add(key.text);
+  }
 }
 
 interface SourceInventory {
@@ -209,15 +256,20 @@ interface SourceInventory {
   texts: Array<string>;
 }
 
-async function scanSources(root: string): Promise<SourceInventory> {
+async function scanSources(
+  sourceDir: string,
+  sourceRoute: boolean,
+): Promise<SourceInventory> {
   const scan: SourceScan = {
     renameTokens: new Set<string>(),
     runtimeTokens: new Set<string>(),
     dynamicTokens: new Set<string>(),
     listCounts: new Map<string, ListFrequency>(),
     literalCounts: new Map<string, ListFrequency>(),
+    keyTokens: new Set<string>(),
+    selectorTokens: new Set<string>(),
   };
-  const paths = await sourceModulePaths(root);
+  const paths = await sourceModulePaths(sourceDir);
   // Reads batch in parallel; the CPU-bound scans stay sequential in path
   // order, and their writes (Sets, Maps, count increments) commute anyway.
   const texts = await Promise.all(
@@ -226,7 +278,7 @@ async function scanSources(root: string): Promise<SourceInventory> {
     }),
   );
   for (let index = 0; index < paths.length; index += 1) {
-    scanModule(paths[index], texts[index], scan);
+    scanModule(paths[index], texts[index], scan, sourceRoute);
   }
   return { scan, paths, texts };
 }
@@ -241,8 +293,16 @@ export async function runPrepass(
   const stylesheet = compiled.stylesheet;
 
   const stylesheetModel = modelStylesheet(stylesheet);
-  const sourceInventory = await scanSources(options.root);
+  const sourceInventory = await scanSources(
+    options.sourceDir ?? path.join(options.root, "src"),
+    options.scansBuiltOutput !== true,
+  );
   const scan = sourceInventory.scan;
+  for (const names of [scan.keyTokens, scan.selectorTokens]) {
+    for (const token of names) {
+      if (stylesheetModel.universe.has(token)) scan.runtimeTokens.add(token);
+    }
+  }
 
   const hasher = createHasher(hashLengthOf(options.naming));
   const classHasher = resolveHasher(options.naming);
@@ -290,6 +350,28 @@ export async function runPrepass(
     exclusions: options.exclusions,
     hash: classHasher,
   });
+
+  // KTD7: a utility whose every selector arm compounds a class kept
+  // original (excluded, runtime-poisoned, or css-only, such as a `group`
+  // marker) keeps its original name too. It joins the runtime tokens, so
+  // the registry reports it as runtime-context, and the naming solver below
+  // never deals it a name.
+  const dependents = dependentTokens(
+    selectorArmTokens(stylesheet),
+    function (token) {
+      return registry.nameFor(token) !== undefined;
+    },
+  );
+  if (dependents.length > 0) {
+    for (const token of dependents) scan.runtimeTokens.add(token);
+    registry = createNameRegistry({
+      universe: stylesheetModel.universe,
+      sourceTokens,
+      runtimeTokens: scan.runtimeTokens,
+      exclusions: options.exclusions,
+      hash: classHasher,
+    });
+  }
 
   // Themed naming: the provisional hash registry determines which tokens
   // rename (the registry's own classification), the solver assigns words,

@@ -8,6 +8,7 @@
   "dependencies": {
     "@tailwindcss/vite": "4.3.3",
     "astro": "7.4.13",
+    "fake-motion": "file:vendor/fake-motion",
     "minwind": "link:../../..",
     "tailwindcss": "4.3.3"
   }

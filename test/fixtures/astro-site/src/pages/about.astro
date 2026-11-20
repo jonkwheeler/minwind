@@ -1,12 +1,17 @@
 ---
 import Badge from "../components/Badge.astro";
+import Disclosure from "../components/Disclosure.astro";
+import Panel from "../components/Panel.astro";
+import Prose from "../components/Prose.astro";
+import TableRow from "../components/TableRow.astro";
 import Base from "../layouts/Base.astro";
 ---
 
 <Base title="About">
   <h1 class="text-3xl font-bold tracking-tight">About</h1>
   <p class="mt-4 max-w-prose text-base leading-relaxed text-stone-600">
-    A fixture site for the minwind Astro integration.
+    A fixture site for the minwind Astro integration. The badges below sit
+    in a grid, and the nav above is a flex row.
   </p>
   <ul class="mt-6 grid gap-3 sm:grid-cols-2">
     <li class="rounded-lg border border-stone-200 bg-white p-4">
@@ -16,4 +21,23 @@ import Base from "../layouts/Base.astro";
       <Badge label="No adapter" tone="warn" />
     </li>
   </ul>
+  <table class="mt-8 w-full">
+    <tbody>
+      <TableRow label="Output" value="Static HTML" />
+      <TableRow label="Adapter" value="None" />
+    </tbody>
+  </table>
+  <Panel
+    title="Before the call"
+    notes={["Bring the signed quote.", "Ask about parking."]}
+  />
+  <Prose />
+  <Disclosure />
+  <noscript>
+    <p class="text-sm">Enable JavaScript to see live follow-up status.</p>
+  </noscript>
 </Base>
+
+<script>
+  import "../scripts/motion.ts";
+</script>

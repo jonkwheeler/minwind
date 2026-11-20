@@ -5,6 +5,7 @@ import { createNameRegistry, type NameRegistry } from "../src/names.js";
 import {
   assertNoSurvivingTokens,
   assertPresence,
+  selectorArmTokens,
   transformStylesheet,
   type TransformCssResult,
 } from "../src/transform-css.js";
@@ -528,6 +529,144 @@ describe("transformStylesheet dialect names", function () {
         ".hovah\\:flex:hover{display:flex}" +
         ".items-centah{align-items:center}" +
         "}",
+    );
+  });
+});
+
+describe("selector forms outside children lists (R12, KTD12)", function () {
+  it("renames a class inside :nth-child(… of …) with the rest of its arm", function () {
+    const registry = registryFor(["flex"]);
+    const result = transform(
+      "@layer utilities{li:nth-child(2n of .flex){color:red}}",
+      registry,
+    );
+    assert.strictEqual(
+      result.css,
+      `@layer utilities{li:nth-child(2n of .${nameOf(registry, "flex")}){color:red}}`,
+    );
+    assert.doesNotThrow(function () {
+      assertPresence(registry, [result.css]);
+    });
+  });
+
+  it("counts a class inside :nth-child(… of …) in its selector arm", function () {
+    assert.deepStrictEqual(
+      selectorArmTokens(
+        "li:nth-child(2n of .flex){color:red}" +
+          ".a:nth-last-child(odd of .b.c){color:red}",
+      ),
+      [["flex"], ["a", "b", "c"]],
+    );
+  });
+
+  it("fails when a renamed class survives inside :nth-child(… of …)", function () {
+    const registry = registryFor(["flex"]);
+    assert.throws(function () {
+      assertNoSurvivingTokens(
+        registry,
+        "@layer utilities{li:nth-child(2n of .flex){color:red}}",
+        "app.css",
+      );
+    }, /"flex" at offset \d+ survives as a class selector/);
+  });
+
+  it("fails naming a renamed class left in an @scope prelude", function () {
+    const registry = registryFor(["flex"]);
+    assert.throws(function () {
+      transform(
+        "@layer utilities{.flex{display:flex}}@scope (.flex){li{color:red}}",
+        registry,
+      );
+    }, /app\.css: .*"flex" in an @scope prelude/);
+  });
+
+  it("fails naming a renamed class left in a class attribute selector", function () {
+    const registry = registryFor(["flex"]);
+    assert.throws(function () {
+      transform(
+        '@layer utilities{.flex{display:flex}}[class~="flex"]{gap:1rem}',
+        registry,
+      );
+    }, /app\.css: .*"flex" in \[class~="flex"\]/);
+  });
+
+  it("passes Typography's not-prose selector when not-prose is outside the registry", function () {
+    const registry = registryFor(["prose"]);
+    const notProse =
+      ':not(:where([class~="not-prose"],[class~="not-prose"] *))';
+    const result = transform(
+      `@layer utilities{.prose :where(p)${notProse}{margin:0}}`,
+      registry,
+    );
+    assert.strictEqual(
+      result.css,
+      `@layer utilities{.${nameOf(registry, "prose")} :where(p)${notProse}{margin:0}}`,
+    );
+  });
+});
+
+describe("selectorArmTokens (KTD7)", function () {
+  it("lists each selector arm's class tokens, as the transform decides them", function () {
+    const css =
+      "@layer utilities{" +
+      "@media (hover:hover){" +
+      ".group-hover\\:underline:is(:where(.group):hover *){text-decoration-line:underline}" +
+      "}" +
+      ".flex.flex,.shiki .line{display:flex}" +
+      "}" +
+      ".site-card{.flex{outline:none}}" +
+      "a{color:red}" +
+      "@keyframes spin{to{rotate:1turn}}";
+    assert.deepStrictEqual(selectorArmTokens(css), [
+      ["group-hover:underline", "group"],
+      ["flex"],
+      ["shiki", "line"],
+      ["site-card"],
+      ["flex"],
+      [],
+    ]);
+  });
+});
+
+describe("tripwire spellings that CSS matches case-insensitively (R12, KTD12)", function () {
+  const RULE = "@layer utilities{.flex{display:flex}}";
+
+  for (const selector of [
+    '[class~="FLEX" i]',
+    '[class*="FLE" I]',
+    '[class^="Fl" \\69]',
+    '[CLASS~="flex"]',
+    '[cl\\61ss~="flex"]',
+    '[*|class~="flex"]',
+    '[|class~="flex"]',
+  ]) {
+    it(`fails naming flex in ${selector}`, function () {
+      const registry = registryFor(["flex"]);
+      assert.throws(function () {
+        transform(`${RULE}${selector}{gap:1rem}`, registry);
+      }, /app\.css: .*"flex" in \[.*\] at offset \d+ survives where minwind does not rename/);
+    });
+  }
+
+  it("fails naming a renamed class in an uppercase @SCOPE prelude", function () {
+    const registry = registryFor(["flex"]);
+    assert.throws(function () {
+      transform(`${RULE}@SCOPE (.flex){li{color:red}}`, registry);
+    }, /app\.css: .*"flex" in an @scope prelude/);
+  });
+
+  it("passes selectors CSS matches case-sensitively or never against class", function () {
+    const registry = registryFor(["flex"]);
+    const css =
+      '[class~="FLEX"]{gap:1rem}' +
+      '[class~="FLEX" s]{gap:1rem}' +
+      '[class~="zzz" i]{gap:1rem}' +
+      '[data-class~="flex"]{gap:1rem}' +
+      '[svg|class~="flex"]{gap:1rem}';
+    const result = transform(`${RULE}${css}`, registry);
+    assert.strictEqual(
+      result.css,
+      `@layer utilities{.${nameOf(registry, "flex")}{display:flex}}${css}`,
     );
   });
 });

@@ -1,7 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
+import process from "node:process";
 import { fileURLToPath } from "node:url";
-import type { MinwindEngineId, MinwindMode } from "./flags.js";
+import { keptUnrewritable } from "./apply.js";
+import {
+  resolveFlags,
+  type MinwindEngineId,
+  type MinwindMode,
+} from "./flags.js";
 import type { ExclusionConfig } from "./names.js";
 import {
   isThemedNaming,
@@ -10,6 +16,12 @@ import {
   type NamingConfig,
 } from "./naming.js";
 import { runApply, type RunApplyResult } from "./run-apply.js";
+import {
+  vendorProvenancePlugin,
+  type ChunkProvenance,
+  type VendorProvenancePlugin,
+  type VendorTrust,
+} from "./vendor-provenance.js";
 
 // Astro integration (KTD1). Astro compiles and renders the site itself;
 // astro:build:done then runs the apply engine in-process on the finished
@@ -21,8 +33,8 @@ import { runApply, type RunApplyResult } from "./run-apply.js";
 
 export interface MinwindAstroOptions {
   // Tailwind CSS entry compiled by the pre-pass, resolved against the Astro
-  // root. Defaults to src/styles/global.css when it exists, otherwise
-  // src/app.css.
+  // root. Defaults to <srcDir>/styles/global.css when it exists, otherwise
+  // <srcDir>/app.css.
   cssEntry?: string;
   // As in the Vite plugin: content-hash naming by default; words, quotes,
   // dialect, and maps strategies are opt-in.
@@ -40,6 +52,13 @@ export interface MinwindAstroOptions {
   // <body>, then the first class-bearing elements). false deals by length
   // alone. Hash, dialect, and maps naming never rank.
   prominence?: boolean;
+  // Off by default. true, or the names of the node_modules packages to
+  // trust: a class name that only trusted vendor JavaScript mentions, such
+  // as a motion library's el.style.display = "block", no longer keeps the
+  // class original. A trusted script that adds such a class by its
+  // original name breaks, so the build log names each renamed class
+  // trusted code mentions. Project code always counts.
+  trustVendorModules?: boolean | ReadonlyArray<string>;
 }
 
 export interface AstroLoggerLike {
@@ -55,13 +74,17 @@ export interface AstroConfigLike {
   security?: { csp?: unknown };
 }
 
+export type AstroConfigUpdate =
+  | { build: { inlineStylesheets: "never" } }
+  | { vite: { plugins: Array<VendorProvenancePlugin> } };
+
 export interface MinwindAstroIntegration {
   name: string;
   hooks: {
     "astro:config:setup": (params: {
       // "dev", "build", "preview", or "sync".
       command: string;
-      updateConfig(config: { build: { inlineStylesheets: "never" } }): unknown;
+      updateConfig(config: AstroConfigUpdate): unknown;
     }) => void;
     "astro:config:done": (params: {
       config: AstroConfigLike;
@@ -88,6 +111,28 @@ const CUSTOM_PROPERTIES_ERROR =
 function assertNaming(naming: NamingConfig | undefined): void {
   resolveHasher(naming);
   if (isThemedNaming(naming)) resolveVocabulary(naming);
+}
+
+// A package name as it appears after node_modules/: one segment, or two
+// for a scoped package.
+const PACKAGE_NAME = /^(?:@[^@/\s]+\/)?[^@/\s]+$/;
+
+function resolveVendorTrust(value: unknown): VendorTrust | undefined {
+  if (value === undefined || value === false) return undefined;
+  if (value === true) return true;
+  if (
+    Array.isArray(value) &&
+    value.every(function (name) {
+      return typeof name === "string" && PACKAGE_NAME.test(name);
+    })
+  ) {
+    return value.slice();
+  }
+  throw new Error(
+    "minwind/astro: trustVendorModules must be true, false, or an array of" +
+      ' package names such as ["gsap", "@scope/name"], but got' +
+      ` ${JSON.stringify(value) ?? String(value)}`,
+  );
 }
 
 function assertRenameableConfig(
@@ -126,21 +171,16 @@ function assertRenameableConfig(
         " changed it; list minwind after that integration.",
     );
   }
-  const srcDir = path.resolve(fileURLToPath(config.srcDir));
-  if (srcDir !== path.join(fileURLToPath(config.root), "src")) {
-    throw new Error(
-      "minwind/astro supports Astro's default srcDir (src/) only, but" +
-        ` the config sets "${srcDir}". minwind's pre-pass reads class` +
-        " names and lists from <root>/src, so it would miss the components" +
-        " in another directory.",
-    );
-  }
 }
 
-function resolveCssEntry(root: string, cssEntry: string | undefined): string {
+function resolveCssEntry(
+  root: string,
+  sourceDir: string,
+  cssEntry: string | undefined,
+): string {
   if (cssEntry !== undefined) return path.resolve(root, cssEntry);
-  const global = path.join(root, "src", "styles", "global.css");
-  return fs.existsSync(global) ? global : path.join(root, "src", "app.css");
+  const global = path.join(sourceDir, "styles", "global.css");
+  return fs.existsSync(global) ? global : path.join(sourceDir, "app.css");
 }
 
 function logSummary(
@@ -172,12 +212,28 @@ function logSummary(
         " visible drew the first vocabulary words",
     );
   }
-  if (result.keptOriginal.length > 0) {
+  const unrewritable = keptUnrewritable(result);
+  if (unrewritable.length > 0) {
     logger.info(
-      `kept original names for ${result.keptOriginal.length} class(es)` +
+      `kept original names for ${unrewritable.length} class(es)` +
         " that also appear where minwind cannot rewrite them (a minified" +
         " call argument or an inline script):" +
-        ` ${result.keptOriginal.join(", ")}`,
+        ` ${unrewritable.join(", ")}`,
+    );
+  }
+  if (result.keptDependent.length > 0) {
+    logger.info(
+      `kept original names for ${result.keptDependent.length} class(es)` +
+        " because each depends on a class kept original:" +
+        ` ${result.keptDependent.join(", ")}`,
+    );
+  }
+  if (result.vendorMentions.length > 0) {
+    logger.info(
+      `renamed ${result.vendorMentions.length} class(es) that trusted` +
+        " vendor code mentions (trustVendorModules); if a vendor script" +
+        " adds one by its original name, list it in exclusions:" +
+        ` ${result.vendorMentions.join(", ")}`,
     );
   }
   if (result.warnings.length > 0) {
@@ -195,7 +251,10 @@ export default function minwind(
   // command, so the later hooks read the one astro:config:setup stored.
   let command: string | undefined;
   let root: string | undefined;
+  let sourceDir: string | undefined;
   let cssEntry: string | undefined;
+  let trust: VendorTrust | undefined;
+  let vendorChunks: Array<ChunkProvenance> = [];
 
   return {
     name: "minwind",
@@ -210,21 +269,41 @@ export default function minwind(
           throw new Error(CUSTOM_PROPERTIES_ERROR);
         }
         assertNaming(options.naming);
+        trust = resolveVendorTrust(passed.trustVendorModules);
         // Overrides the user's value. A later integration can change it
         // again, so astro:config:done checks the final value.
         params.updateConfig({ build: { inlineStylesheets: "never" } });
+        // Not under MINWIND=off or MINWIND_RENAME=off: nothing reads the
+        // chunks there, so the off build stays a build without minwind.
+        if (
+          trust !== undefined &&
+          resolveFlags(process.env, {
+            mode: options.mode,
+            engines: options.engines,
+          }).enabled
+        ) {
+          vendorChunks = [];
+          params.updateConfig({
+            vite: { plugins: [vendorProvenancePlugin(vendorChunks)] },
+          });
+        }
       },
 
       "astro:config:done": function (params) {
         if (command !== "build") return;
         assertRenameableConfig(params.config, params.buildOutput);
         root = fileURLToPath(params.config.root);
-        cssEntry = resolveCssEntry(root, options.cssEntry);
+        sourceDir = path.resolve(fileURLToPath(params.config.srcDir));
+        cssEntry = resolveCssEntry(root, sourceDir, options.cssEntry);
       },
 
       "astro:build:done": async function (params) {
         if (command !== "build") return;
-        if (root === undefined || cssEntry === undefined) {
+        if (
+          root === undefined ||
+          sourceDir === undefined ||
+          cssEntry === undefined
+        ) {
           throw new Error(
             "minwind/astro: astro:build:done ran before astro:config:done",
           );
@@ -234,13 +313,17 @@ export default function minwind(
         const outcome = await runApply({
           dir: fileURLToPath(params.dir),
           root,
+          sourceDir,
           cssEntry,
           naming: options.naming,
           exclusions: options.exclusions,
           mode: options.mode,
           engines: options.engines,
           prominence: ranked ? "auto" : undefined,
+          vendorProvenance:
+            trust === undefined ? undefined : { trust, chunks: vendorChunks },
         });
+        vendorChunks.length = 0;
         logSummary(params.logger, outcome, ranked);
       },
     },

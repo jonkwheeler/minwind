@@ -1,0 +1,25 @@
+---
+// GTM Frontier's header nav (R7): each link is a group, and the current
+// page's label underlines through group-aria-[current=page]. The links sit
+// in a role="group" wrapper, an attribute value that spells the marker.
+const onAbout = Astro.url.pathname.startsWith("/about");
+---
+
+<nav class="mx-auto flex max-w-2xl gap-6 px-6 py-4 text-sm font-semibold">
+  <div role="group" class="flex gap-6">
+    <a
+      href="/"
+      class="group text-stone-700 underline-offset-4 hover:underline"
+      aria-current={onAbout ? undefined : "page"}
+    >
+      <span class="group-aria-[current=page]:underline">Inbox</span>
+    </a>
+    <a
+      href="/about/"
+      class="group text-stone-700 underline-offset-4 hover:underline"
+      aria-current={onAbout ? "page" : undefined}
+    >
+      <span class="group-aria-[current=page]:underline">About</span>
+    </a>
+  </div>
+</nav>

@@ -155,9 +155,11 @@ instead renames the finished static output at the end of the build, with the
 same engine as [`minwind apply`](#post-build-apply). It does nothing during
 `astro dev`, `astro preview`, or `astro sync`.
 
-Options match the Vite plugin's `naming`, `mode`, `engines`, and `exclusions`.
-`cssEntry` resolves against the Astro root and defaults to
-`src/styles/global.css` when that file exists, otherwise `src/app.css`. With
+Options match the Vite plugin's `naming`, `mode`, `engines`, and `exclusions`,
+plus [`trustVendorModules`](#vendor-javascript-trustvendormodules). `cssEntry`
+resolves against the Astro root. It defaults to `styles/global.css` inside
+Astro's `srcDir` when that file exists, otherwise `app.css` there
+(`src/styles/global.css` or `src/app.css` with the default `srcDir`). With
 `words` or `quotes` naming, minwind ranks the built pages by visibility before
 renaming them, so `<html>`, `<body>`, and the first class-bearing elements get
 the first vocabulary words in one build. Pass `prominence: false` to skip the
@@ -173,11 +175,13 @@ ranking.
   integration listed after it changes the value back, the build fails.
 - minwind does not rewrite HTML `<style>` blocks such as `<style is:inline>`.
   If one references a renamed class, the build fails and lists each file and
-  class.
+  class. That includes a class attribute selector, a `:nth-child(… of …)`
+  argument, and an `@scope` prelude (see
+  [Selectors minwind does not rename](#selectors-minwind-does-not-rename)).
 - `customProperties` is not supported here and fails the build. Use the Vite
   or webpack plugin for [owned custom properties](#owned-css-custom-properties).
-- Keep Astro's default `srcDir` (`src/`). minwind reads class names and lists
-  from `<root>/src`, so another `srcDir` fails the build.
+- A custom `srcDir` works. minwind reads class names and lists from Astro's
+  `srcDir` (`src/` by default) and looks for the default `cssEntry` there.
 - `astro add minwind` is not supported: it would register the package root,
   which is the Vite plugin. Add the integration by hand as above.
 - Node.js 22.23.4 or newer. That floor is Astro's, not minwind's: Astro
@@ -186,6 +190,48 @@ ranking.
   filenames, so a file's contents can change while its name stays the same.
   Serve `/_astro/*` with revalidation (for example
   `Cache-Control: public, max-age=0, must-revalidate`), never `immutable`.
+
+### Vendor JavaScript (`trustVendorModules`)
+
+A class name that appears in a client bundle as a word in a string, template
+literal, identifier, or object key keeps its original name everywhere (see
+[What keeps a class original](#what-keeps-a-class-original)). Code from
+`node_modules` counts too. A motion library that sets
+`el.style.display = "block"` keeps `block` original site-wide. GSAP's CSS
+plugin, which the main `gsap` import includes, holds `{grid:1,flex:1}`, so
+`grid` and `flex` keep their original names. `trustVendorModules` stops
+counting those mentions:
+
+```js
+minwind({ trustVendorModules: ["gsap"] });
+```
+
+- `true` trusts every `node_modules` package. An array trusts only the
+  packages it names, and a scoped name is written whole (`"@scope/name"`).
+  The array keeps new and unaudited dependencies under the default rule. Any
+  other value fails the build. The option is off by default.
+- minwind maps each occurrence in an emitted client chunk back to its source
+  through the chunk's sourcemap and skips the ones copied from a trusted
+  package. Everything else still counts: project code in the same chunk,
+  inline `<script>` blocks, JavaScript copied from `public/`, and any chunk
+  minwind cannot attribute.
+- When the site configures no client sourcemaps, minwind asks Vite for hidden
+  ones and removes them before the write, so `dist` matches a build without
+  the option. Sourcemaps the site configures itself stay as configured.
+- Renaming still covers whole chunks, so a class list in trusted code renames
+  with the rest of the site.
+- The build log names each renamed class that trusted code mentions.
+
+Trust a package when it never adds a class by name: libraries that only set
+inline styles, and scripts that select elements by `data-*` attribute or id.
+Do not trust libraries that toggle utility classes by name, such as Flowbite,
+Preline, and Alpine plugins. Their `classList.add("hidden")` adds a name the
+renamed stylesheet no longer has, and the page breaks. If a trusted package
+does add a class by name, list that class in `exclusions.names`.
+
+The option is Astro-only. The Vite and webpack plugins never scan
+`node_modules`, and `minwind apply` cannot tell which module a built file's
+code came from.
 
 ## webpack and rspack
 
@@ -258,7 +304,8 @@ npx minwind apply .output/public
 `apply` handles HTML class attributes, CSS selectors and consolidation, and
 provable class lists in JavaScript bundles. A token found in an ambiguous
 runtime context keeps its original name everywhere and appears in the report as
-a `runtime-context` exclusion.
+a `runtime-context` exclusion. See
+[What keeps a class original](#what-keeps-a-class-original).
 
 `apply` does not rewrite HTML `<style>` blocks. If one references a renamed
 class, apply fails and lists each file and class rather than ship a rule that
@@ -318,9 +365,62 @@ npx minwind apply out --naming words --theme star-wars --prominence auto
 Scripts can run the same thing in-process with `runApply` from `minwind`. Its
 options cover the same ground as the flags (`dir`, `root`, `cssEntry`,
 `naming`, `mode`, `consolidate`, `engines`, `prominence`, `dryRun`) and add
-`exclusions`. `naming` takes the plugin's config object, and `prominence`
-takes `"auto"` or a parsed manifest. It throws on failure and returns
-`{ enabled: false }` under `MINWIND=off`.
+`exclusions` and `sourceDir`. `sourceDir` is the directory the pre-pass reads
+class names and lists from (default `<root>/src`), and `cssEntry` defaults to
+`<sourceDir>/app.css`. `naming` takes the plugin's config object, and
+`prominence` takes `"auto"` or a parsed manifest. It throws on failure and
+returns `{ enabled: false }` under `MINWIND=off`.
+
+### What keeps a class original
+
+`minwind apply` and `minwind/astro` rewrite finished output, so they look for
+every place a script could read a class name that the rewrite cannot reach. A
+registry class found in one of these places keeps its original name in the
+HTML, CSS, and JavaScript, and the report lists it as `runtime-context`:
+
+- Built JavaScript, meaning bundles and executable inline scripts: a whole
+  word in a string, template literal, or identifier, as in
+  `el.className === "hidden"` or `el.style.display = "block"`; an identifier
+  object key, shorthand, or method name, as in `e({hidden:t})`; and a class
+  selector inside a string, as in `querySelector(".hidden")`,
+  `":not(.hidden)"`, `".md\\:flex"`, or ``String.raw`.md\:flex` ``.
+- Built HTML: a whole word in the value of any attribute not listed below,
+  such as `data-*`, `value`, `id`, `name`, event handlers, URLs, and
+  `<astro-island>` props; a whole word in the text of a `<textarea>` or of
+  an `<option>` without a `value` attribute, which a script reads back as
+  the field's value; a whole word in a script whose type is neither
+  JavaScript nor JSON-LD, such as `application/json`; an identifier object
+  key in an attribute value that parses as JavaScript, such as Alpine
+  `:class="{ hidden: !open }"`, `x-bind:class`, or `x-data`; and a class
+  selector inside a string of an attribute that runs as JavaScript: an
+  event handler, as in `onclick="document.querySelector('.hidden').remove()"`,
+  or an Alpine or htmx attribute (`@*`, `x-on:*`, `x-init`, `x-effect`,
+  `x-data`, `x-bind:*`, `:*`, `hx-on:*`, or `hx-on-*`). Other attributes,
+  such as `data-bs-target=".hidden"`, are not read for selectors. Markup
+  held in a script whose type is neither JavaScript nor JSON, such as Vue's
+  `text/x-template`, gets the same key and selector reads. Entity-encoded
+  names count too.
+
+These positions never count:
+
+- JavaScript comments and reserved words (`static` is the one Tailwind
+  utility among them), and property access outside strings (`el.hidden`).
+- Other HTML text, including `<title>`, `<noscript>`, and the text of an
+  `<option>` with a `value` attribute, and HTML comments.
+- The contents of `<script type="application/ld+json">`.
+- The values of `role`, `type`, `aria-*`, `alt`, `title`, `placeholder`,
+  `lang`, `dir`, `rel`, `autocomplete`, `loading`, `decoding`,
+  `fetchpriority`, `style`, and `content` on `<meta>`.
+
+Those positions hold no class names unless a script copies them into a class
+list. A script that copies page text or a `title`, `alt`, or `aria-*` value
+into a class list is unsupported, like a class name fetched at runtime. List
+such classes in `exclusions.names`.
+
+Object keys and selector strings keep their classes original on the Vite and
+webpack routes too; see
+[Class-composition objects](#class-composition-objects) and
+[Selector strings in JavaScript](#selector-strings-in-javascript).
 
 ## Verify the result
 
@@ -644,6 +744,83 @@ An exclusion is global: an excluded original token cannot be assigned as a
 generated name, and that token remains unchanged across HTML, JavaScript, and
 CSS.
 
+A utility whose every selector compounds a class kept original keeps its
+original name too, whatever kept that class: an exclusion, a runtime
+reference, or no use in source. `group-hover:underline` keeps its name when
+`group` does, and the same goes for `peer-*`, named groups, a class-strategy
+`dark` variant, and any custom variant that compounds a class. The report
+lists these as `runtime-context`. `minwind apply` and `minwind/astro` also
+log them on their own line ("depends on a class kept original").
+
+### Class-composition objects
+
+In a recognized composition, every key of an object literal is a class name
+and renames. The recognized compositions are a `cn()` argument (`cn` by that
+name, or imported as `cn` under another name), a Vue `:class` or
+`v-bind:class` value, and an Astro `class:list` value. Identifier, shorthand,
+and string keys all count, in objects nested in arrays, in either branch of
+`?:`, on the right of `&&`, on either side of `||` and `??`, and in spreads.
+Values are conditions and keep their bytes.
+
+```tsx
+<div class={cn("p-4", { hidden: !open, "font-bold": active })} />
+```
+
+- A shorthand key `{ hidden }` expands to `{ <name>: hidden }`, so its value
+  binding survives.
+- A renamed key that is not a valid identifier, such as a dialect name, is
+  written quoted. In a Vue `:class` attribute it takes the quote the
+  attribute does not use. An unquoted attribute value can hold no quote, so
+  the build fails and asks you to quote the attribute. Svelte `class:`
+  directive names stay bare, since directive names allow hyphens.
+- A method or accessor name, a computed key other than a string literal, and
+  the keys of an object passed to another call inside `cn()`, such as
+  `cn(button({ size }))`, keep their classes original.
+
+Any other identifier key, shorthand, or method name that names a class keeps
+that class original on every route. That covers keys passed to `clsx`,
+`classnames`, or another call minwind does not recognize, React
+`className={clsx({ hidden: !open })}`, Svelte 5 `class={{ hidden: open }}`,
+and any object outside a composition, such as `{ flex: 1 }` in a config. In
+built output, where a minifier has renamed `cn`, every identifier key counts
+this way, except in a CSS Modules export map that the Modules engine proves.
+
+minwind treats `cn()` as plain concatenation. A `cn()` that wraps `twMerge`,
+as in shadcn/ui, receives renamed names, so tailwind-merge cannot resolve
+conflicts between them. String arguments have behaved this way since 1.1.0,
+and 1.2.0 extends it to object keys.
+
+### Selector strings in JavaScript
+
+A class written as a selector inside a JavaScript string, as in
+`document.querySelector(".hidden")` or `el.closest(".group")`, keeps its
+original name on every route. minwind cannot prove which API reads a string,
+so it does not rename the selector. Property access such as `el.hidden` does
+not count. A tagged template counts in its raw form too, so
+``String.raw`.md\:flex` `` keeps `md:flex` original. On the `minwind apply`
+and `minwind/astro` routes, so does a selector in an HTML attribute that
+runs as JavaScript: an inline event handler such as `onclick`, or an Alpine
+or htmx attribute such as `@click`, `x-init`, or `hx-on:click`. Select by
+`data-*` attribute or id to let the class rename.
+
+A string that only looks like a selector counts too, such as a file name
+ending in `.hidden`. On the Vite and webpack routes, so does a class string in
+JavaScript or JSX that holds an arbitrary variant such as `[&_.hidden]:block`.
+That costs compression, never correctness.
+
+### Selectors minwind does not rename
+
+minwind renames class selectors in emitted CSS, including a class inside
+`:nth-child(… of …)`. It never renames class attribute selectors
+(`[class~="flex"]`, `[class*="fle"]`) or `@scope` preludes, so a renamed
+class left in one fails the build, and the error names the class.
+`minwind apply` and `minwind/astro` never rewrite HTML `<style>` blocks, so
+there a renamed class fails the build in any selector form. A multi-branch
+prelude such as `@scope (#panel, .grid)`, or a substring matcher (`*=`, `^=`,
+`$=`, `|=`), can fail a build whose rule still applies through another branch
+or match. Add the named class to `exclusions.names` to keep its original name
+everywhere.
+
 ## Owned CSS custom properties
 
 minwind can also shorten CSS custom-property names when your application owns
@@ -715,8 +892,28 @@ The source transform supports:
   and `cjs`.
 - Single-file components: `.vue`, `.svelte`, and `.astro`.
 - JSX/template class attributes, framework bindings such as `:class`,
-  `class:list`, and `class:foo`, script blocks, `classList` objects, and common
-  literal class-composition calls.
+  `class:list`, and `class:foo`, script blocks, `classList` objects, and
+  `cn()` calls (see
+  [Class-composition objects](#class-composition-objects)).
+- In templates and built HTML, classes on table elements (`<tr>`, `<td>`,
+  `<th>`, `<thead>`, `<tbody>`, `<tfoot>`, `<caption>`, `<col>`,
+  `<colgroup>`), including a component whose root is one of them, on
+  elements inside `<select>`, and on `<noscript>` markup. In `.vue`,
+  `.svelte`, and `.astro`, also inside components named like HTML elements
+  (`<Select>`, `<Table>`, `<Title>`).
+- In `.astro`, markup inside expressions, such as
+  `{items.map((item) => <li class="px-4">{item}</li>)}` and
+  `{open && <p class="text-sm">…</p>}`, `class:list` included. Unclosed void
+  elements such as `<img class="w-8">` are fine there. An expression that
+  still does not parse as TSX is skipped; on the Astro route its classes
+  still match the rest of the site and only cost compression.
+- In `.astro` frontmatter, a top-level, non-exported `const` holding a string,
+  or a template literal without substitutions, reads like a class attribute
+  when every reference to it is a class position. A class position is the
+  whole value of `class={card}`, the `class:list` value or an array element
+  inside it, or a direct `cn()` argument. Any other reference, such as
+  `title={card}`, leaves the constant unread. Variant maps
+  (`class={tones[tone]}`) and destructured prop defaults are not read.
 
 JavaScript files are parsed using JSX grammar, which is a safe superset of valid
 JavaScript and supports React projects that place JSX in `.js` files.

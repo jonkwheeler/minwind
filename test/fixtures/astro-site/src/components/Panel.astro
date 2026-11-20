@@ -1,0 +1,26 @@
+---
+import Card from "./Card.astro";
+
+interface Props {
+  title: string;
+  notes: Array<string>;
+}
+
+// Class strings held in frontmatter constants. 1.1.0 read classes only from
+// attributes and cn() arguments, so these kept their Tailwind names (R3).
+// Every reference is a class position: a class attribute, a class:list
+// element, a class inside expression markup, and a component's class prop.
+const frame = "rounded-xl border-dashed p-6";
+const heading = "text-lg tracking-wide";
+const note = "italic leading-snug";
+const pinned = "ring-1 ring-sky-300";
+const { title, notes } = Astro.props;
+---
+
+<section data-panel class={frame}>
+  <h2 class:list={[heading, { "uppercase": notes.length > 1 }]}>{title}</h2>
+  {notes.map((text) => <p class={note}>{text}</p>)}
+  <Card class={pinned}>
+    <p>Pinned to the top.</p>
+  </Card>
+</section>

@@ -702,6 +702,16 @@ const el = <div class={cn('${nameOf(registry, "mb-16")}', props.class)}>x</div>
   });
 });
 
+describe("modelStylesheet selector walk (R12, KTD12)", function () {
+  it("puts a class inside :nth-child(… of …) in the universe and its rule", function () {
+    const model = modelStylesheet(
+      LAYER_OPEN + "li:nth-child(2n of .flex){color:red}}",
+    );
+    assert.ok(model.universe.has("flex"));
+    assert.deepStrictEqual(model.rules[0].classes, ["flex"]);
+  });
+});
+
 describe("verifyConsolidation (KTD3 re-verification, R10)", function () {
   const TOKENS = ["flex", "items-center", "p-4", "card-reset"];
   const EMITTED =

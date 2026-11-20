@@ -1,5 +1,159 @@
 # Changelog
 
+## 1.2.0
+
+Closes the rename gaps a static Astro site hit on 1.1.0, and adds
+`trustVendorModules` to `minwind/astro`. No option or flag is removed or
+changes meaning. More classes rename, so names in `map.json` shift. Some
+builds that passed on 1.1.0 can now fail; see Builds that can now fail.
+
+### Added
+
+- `trustVendorModules` on `minwind/astro`, off by default. `true` trusts every
+  `node_modules` package, and an array trusts only the packages it names
+  (`["gsap"]`, `["@scope/name"]`). An occurrence of a class name in an
+  emitted client chunk that the chunk's sourcemap attributes to a trusted
+  package no longer keeps that class original. Project code in the same
+  chunk, inline `<script>` blocks, JavaScript copied from `public/`, and any
+  chunk minwind cannot attribute count as before. When the site configures
+  no client sourcemaps, minwind asks Vite for hidden ones and removes them
+  before the write, so `dist` is unchanged. The build log names each renamed
+  class that trusted code mentions. The risk: a trusted library that adds a
+  utility class by its original name, as Flowbite, Preline, and Alpine
+  plugins do, breaks the page. Trust only packages that never do, or list
+  the classes they add in `exclusions.names`. A value other than `true`,
+  `false`, or an array of package names fails the build.
+- `minwind/astro` works with a custom `srcDir`. It reads class names and
+  lists from that directory and looks for the default `cssEntry` there:
+  `<srcDir>/styles/global.css` when it exists, otherwise `<srcDir>/app.css`.
+  1.1.0 refused any `srcDir` but `src/`.
+- `runApply` accepts `sourceDir`, the directory the pre-pass reads class
+  names and lists from (default `<root>/src`). `cssEntry` defaults to
+  `<sourceDir>/app.css`, which is `<root>/src/app.css` as before when
+  `sourceDir` is unset. `runApply` also accepts `vendorProvenance`, through
+  which `minwind/astro` passes the chunks it records for
+  `trustVendorModules`. Its result gains `keptDependent` and
+  `vendorMentions`.
+
+### Changed
+
+- More classes rename: markup in Astro expressions, frontmatter class
+  constants, table, `<select>`, and `<noscript>` markup, entity-encoded
+  variants, and object keys in `cn()`, Vue `:class`, and Astro `class:list`
+  (see Fixed), plus classes that prose and keyword attributes used to hold
+  back (below). `map.json` changes with them. With `words` or `quotes`
+  naming, the words dealt to classes that already renamed shift too. Hash,
+  dialect, and `maps` names depend only on the class, so a class that
+  renames in both versions keeps its name.
+- In built HTML, text content, comments, JSON-LD, and the values of `role`,
+  `type`, `aria-*`, `alt`, `title`, `placeholder`, `lang`, `dir`, `rel`,
+  `autocomplete`, `loading`, `decoding`, `fetchpriority`, `style`, and
+  `content` on `<meta>` no longer keep a class original. In built
+  JavaScript, comments and reserved words no longer do. A script that copies
+  page text or a `title`, `alt`, or `aria-*` value into a class list is now
+  unsupported, like a class name fetched at runtime; list such classes in
+  `exclusions.names`. `data-*`, `value`, event handlers, URLs, island props,
+  every other attribute, and executable scripts are still scanned, and so is
+  the text of a `<textarea>` and of an `<option>` without a `value`
+  attribute, which a script reads back as the field's value.
+- A utility whose every selector compounds a class kept original now keeps
+  its original name too: `group-*` when `group` keeps its name, `peer-*`,
+  named groups, a class-strategy `dark` variant, and any custom variant that
+  compounds a class. 1.1.0 failed these builds instead (see Fixed). The
+  report lists them as `runtime-context`, and `minwind apply` and
+  `minwind/astro` log them on their own line ("depends on a class kept
+  original"), apart from classes kept for an unrewritable position.
+- These now keep a class original by default where 1.1.0 renamed it:
+  - An identifier object key, shorthand, or method name that names a class,
+    outside `cn()`, Vue `:class`, and Astro `class:list`: in source on the
+    Vite and webpack routes, in built JavaScript, and in built HTML
+    attribute values that parse as JavaScript, such as Alpine `:class`,
+    `x-bind:class`, and `x-data`. That covers React
+    `className={clsx({ hidden: !open })}`, Svelte 5 `class={{ … }}`, and
+    plain objects such as `{ flex: 1 }`. GSAP's CSS plugin, part of the main
+    `gsap` import, holds `{grid:1,flex:1}`, so `grid` and `flex` keep their
+    original names unless `trustVendorModules` covers `gsap`.
+  - A class selector inside a JavaScript string, such as
+    `querySelector(".hidden")` or ``String.raw`.md\:flex` ``, on every
+    route, and in built HTML one inside an inline event handler or an
+    Alpine or htmx attribute that runs as JavaScript (`@click`, `x-init`,
+    `x-data`, `:*` bindings, `hx-on:*`, and the like). A string that only
+    looks like a selector counts too. On the Vite and webpack
+    routes that includes a class string in JavaScript or JSX holding an
+    arbitrary variant such as `[&_.hidden]:block`.
+  - Inside `cn()`, the string keys of an object passed to another call, such
+    as `cn(button({ "ring-2": on }))`, and the strings inside a computed key
+    such as `{ [base + " shadow"]: on }`.
+  - A Tailwind `nth-[…_of_.x]` utility, when `x` keeps its own name. When
+    `x` renames, the class inside `:nth-child(… of …)` now renames with it.
+  - An entity-encoded class name in a scanned attribute or island props,
+    and the classes of a built class attribute whose encoded value cannot be
+    split into tokens, such as one holding `&#32;`.
+- `entities` and `@jridgewell/sourcemap-codec` are new runtime
+  dependencies. Both were already installed through `parse5` and
+  `magic-string`.
+
+### Builds that can now fail
+
+- Emitted CSS that keeps a renamed class in a class attribute selector
+  (`[class~="flex"]`, or the `=`, `*=`, `^=`, `$=`, or `|=` matcher) or in
+  an `@scope` prelude fails the build on every route, because minwind renames
+  neither. HTML `<style>` blocks, which `minwind apply` and `minwind/astro`
+  never rewrite, now fail on those forms and on a class inside
+  `:nth-child(… of …)` too. A multi-branch prelude such as
+  `@scope (#panel, .grid)`, or a substring matcher, can fail a build whose
+  rule still applies through another branch or match. The error names the
+  class; add it to `exclusions.names` to keep its original name everywhere.
+- A renamed object key whose new name is not a valid JavaScript identifier,
+  such as England's `'idden` or an emoji name, needs quotes. In an unquoted
+  Vue `:class` attribute value no quote can be written, so the build fails.
+  Quote the attribute.
+
+### Fixed
+
+- `group-*`, `peer-*`, and other variants that compound a marker class no
+  longer fail the build with "presence assertion failed" when the marker
+  keeps its original name, for example through `exclusions.names` or a
+  runtime reference.
+- Entity-encoded classes in built HTML and bundle markup, such as
+  `[&amp;_a]:underline`, `has-[&gt;img]:p-2`, and `content-[&#39;x&#39;]`,
+  rename. 1.1.0 renamed the CSS selector but missed the HTML token, so the
+  page lost those styles without a warning.
+- Classes on markup inside Astro expressions, such as
+  `{items.map((item) => <li class="…">)}` and `{cond && <p class="…">}`,
+  `class:list` included, are read. Classes used only there kept their
+  Tailwind names in 1.1.0.
+- An Astro frontmatter `const` holding a class string is read when every
+  reference to it is a class position. See the README for the limits.
+- An apostrophe in Astro expression markup text, such as
+  `{cond && <p>Don't</p>}`, no longer hides the template elements after it.
+- Table elements such as a component whose root is `<tr>` or `<td>`,
+  elements inside `<select>`, components named like HTML elements
+  (`<Select>`, `<Table>`, `<Title>`), and `<noscript>` markup are read in
+  `.astro`, `.svelte`, `.vue`, and built HTML. The template parse used to
+  drop them. On the Vite and webpack routes their classes could keep
+  original names while other files renamed them, which broke the page; on
+  the Astro route they cost compression.
+- The inline-style tripwire in `minwind apply` and `minwind/astro` sees
+  class attribute selectors, `:nth-child(… of …)` arguments, and `@scope`
+  preludes. 1.1.0 let them through, and the rules stopped matching.
+- In emitted CSS, a class inside `:nth-child(… of …)` renames with its
+  selector. 1.1.0 left it original while renaming the class elsewhere.
+- Identifier and shorthand keys in `cn()`, Vue `:class`, and Astro
+  `class:list` objects rename. Before, they were neither renamed nor
+  flagged, so `cn({ hidden: open })` added the original `hidden` after the
+  stylesheet renamed it, and the page broke silently.
+- A `.token` selector string in JavaScript keeps its class original. Before,
+  it was neither renamed nor flagged, so `querySelector(".hidden")` selected
+  nothing once `hidden` renamed.
+- `clsx({ hidden: c })` and other unrecognized calls in a class position keep
+  their identifier keys' classes original. 1.1.0 poisoned only their string
+  literals.
+- A renamed object key whose new name is not a valid identifier is written
+  quoted. That fixes Solid `classList`, where 1.1.0 wrote a dialect name such
+  as England's `'idden` bare, which is not valid JavaScript. Svelte `class:`
+  directive names stay bare.
+
 ## 1.1.0
 
 Adds an Astro integration and one-build visibility ranking for `minwind

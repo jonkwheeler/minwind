@@ -1,6 +1,12 @@
 import assert from "node:assert";
 import { describe, it } from "node:test";
-import { createNameRegistry, type NameRegistry } from "../src/names.js";
+import { parseSourceModule } from "../src/class-contexts.js";
+import { createDialectHasher } from "../src/dialect.js";
+import {
+  createHasher,
+  createNameRegistry,
+  type NameRegistry,
+} from "../src/names.js";
 import {
   transformSource,
   type TransformSourceResult,
@@ -658,7 +664,13 @@ ${layoutMarkup("")}`);
 
   it("reports min-h-screen on <body> in chef-tony's layout", function () {
     const result = classContexts(CHEF_TONY_LAYOUT);
-    assert.deepStrictEqual(result.renamed, ["min-h-screen"]);
+    // The other two sit on markup inside <body>'s {tile && ...} and
+    // {brand.base && (...)} expressions (R1).
+    assert.deepStrictEqual(result.renamed, [
+      "min-h-screen",
+      "tile-field",
+      "comparison-bar",
+    ]);
   });
 
   it("renames html and body classes in a layout", function () {
@@ -822,7 +834,7 @@ import BaseHead from "../components/BaseHead.astro";
   });
 
   it("leaves elements around a content expression unchanged", function () {
-    // The expression's own markup is masked with it, as on one line.
+    // The expression's own markup is read in place, as on one line.
     const oneLine = classContexts(
       `<ul class="flex flex-col">{items.map((item) => (<li class="p-4">{item}</li>))}</ul>
 <p class="mb-16">after</p>
@@ -838,10 +850,243 @@ import BaseHead from "../components/BaseHead.astro";
 <p class="mb-16">after</p>
 `);
     assert.deepStrictEqual(oneLine, {
-      renamed: ["flex flex-col", "mb-16"],
+      renamed: ["flex flex-col", "p-4", "mb-16"],
       runtime: [],
     });
     assert.deepStrictEqual(multiLine, oneLine);
+  });
+});
+
+// R1 and R2: markup inside Astro content expressions is read with the JSX
+// rules, and its text never moves an expression's end.
+describe("Astro expression markup (R1, R2)", function () {
+  function svelteContexts(code: string): {
+    renamed: Array<string>;
+    runtime: Array<string>;
+  } {
+    const renamed: Array<string> = [];
+    const runtime: Array<string> = [];
+    walkSfcClassContexts("/site/src/Card.svelte", code, {
+      renameLiteral: function (literal) {
+        renamed.push(code.slice(literal.start, literal.end));
+      },
+      runtimeLiteral: function (literal) {
+        runtime.push(code.slice(literal.start, literal.end));
+      },
+    });
+    return { renamed, runtime };
+  }
+
+  const EXPRESSION_TOKENS = ["flex", "p-4", "w-8", "mt-4"];
+  const EXPRESSION_REGISTRY: NameRegistry = createNameRegistry({
+    universe: new Set(EXPRESSION_TOKENS),
+    sourceTokens: new Set(EXPRESSION_TOKENS),
+    runtimeTokens: new Set(),
+    exclusions: { names: [], prefixes: [] },
+  });
+
+  function expressionNameOf(token: string): string {
+    const name = EXPRESSION_REGISTRY.nameFor(token);
+    assert.ok(name !== undefined, `${token} must be renamed in the registry`);
+    return name;
+  }
+
+  function transformExpression(code: string): TransformSourceResult {
+    const result = transformSource({
+      code,
+      id: "/site/src/components/List.astro",
+      registry: EXPRESSION_REGISTRY,
+    });
+    assert.ok(result !== null);
+    return result;
+  }
+
+  it("classifies a mapped element's class like template markup", function () {
+    assert.deepStrictEqual(
+      classEvents(
+        `<ul>{items.map((item) => <li class="p-4">{item}</li>)}</ul>\n`,
+      ),
+      classEvents(`<ul><li class="p-4">x</li></ul>\n`),
+    );
+  });
+
+  it("reports a && conditional's classes", function () {
+    assert.deepStrictEqual(
+      classContexts(
+        `<p>x{cond && <span class="ml-2 text-xs">new</span>}</p>\n`,
+      ),
+      { renamed: ["ml-2 text-xs"], runtime: [] },
+    );
+  });
+
+  it("reports both branches of a ternary", function () {
+    assert.deepStrictEqual(
+      classContexts(
+        `{cond ? <b class="font-bold">a</b> : <i class="italic">b</i>}\n`,
+      ),
+      { renamed: ["font-bold", "italic"], runtime: [] },
+    );
+  });
+
+  it("reports nested maps", function () {
+    assert.deepStrictEqual(
+      classContexts(
+        `{groups.map((g) => <ul>{g.items.map((i) => <li class="py-1">{i}</li>)}</ul>)}\n`,
+      ),
+      { renamed: ["py-1"], runtime: [] },
+    );
+  });
+
+  it("gives class:list cn() semantics, as at top level", function () {
+    const inExpression = classEvents(
+      `{on && <div class:list={["a", { "b": on }]}>x</div>}\n`,
+    );
+    assert.deepStrictEqual(inExpression, [
+      { event: "enter", kind: "cn-argument" },
+      {
+        event: "rename",
+        kind: "cn-argument",
+        source: "a",
+        text: "a",
+        quoted: true,
+      },
+      {
+        event: "rename",
+        kind: "cn-argument",
+        source: "b",
+        text: "b",
+        quoted: true,
+      },
+      {
+        event: "exit",
+        kind: "cn-argument",
+        fullyLiteral: false,
+        staticList: false,
+      },
+    ]);
+    assert.deepStrictEqual(
+      inExpression,
+      classEvents(`<div class:list={["a", { "b": on }]}>x</div>\n`),
+    );
+  });
+
+  it("poisons a class={...} ternary, as at top level", function () {
+    const inExpression = classContexts(
+      `{show && <div class={cond ? "x" : "y"}>z</div>}\n`,
+    );
+    assert.deepStrictEqual(inExpression, { renamed: [], runtime: ["x", "y"] });
+    assert.deepStrictEqual(
+      inExpression,
+      classContexts(`<div class={cond ? "x" : "y"}>z</div>\n`),
+    );
+  });
+
+  it("never lets an apostrophe in expression text hide later elements (AE2)", function () {
+    assert.deepStrictEqual(
+      classContexts(
+        `{cond && <p>Don't</p>}<div class="mt-4">x</div>{more && <p>It's</p>}\n`,
+      ),
+      { renamed: ["mt-4"], runtime: [] },
+    );
+  });
+
+  for (const [label, expression] of [
+    ["a string", `"}"`],
+    ["a template literal", "`${a}}`"],
+    ["a comment", `/* } */ x`],
+  ]) {
+    it(`ends a run holding a brace in ${label} at its own brace`, function () {
+      // Ended early, the run would leave the string's markup to the parser.
+      assert.deepStrictEqual(
+        classContexts(
+          `<p>{${expression} || '<b class="p-4">'}</p>\n<div class="mt-4">x</div>\n`,
+        ),
+        { renamed: ["mt-4"], runtime: [] },
+      );
+    });
+  }
+
+  it("reads an unclosed void element and renames it at its exact span", function () {
+    const code = `{cond && <><br><img class="w-8" src="a.png"><hr><span class="p-4">x</span></>}\n<div class="mt-4">y</div>\n`;
+    assert.deepStrictEqual(classContexts(code), {
+      renamed: ["w-8", "p-4", "mt-4"],
+      runtime: [],
+    });
+    const result = transformExpression(code);
+    assert.strictEqual(
+      result.code,
+      `{cond && <><br><img class="${expressionNameOf("w-8")}" src="a.png"><hr><span class="${expressionNameOf("p-4")}">x</span></>}\n<div class="${expressionNameOf("mt-4")}">y</div>\n`,
+    );
+  });
+
+  it("skips a run TSX rejects and still reads the elements around it", function () {
+    assert.deepStrictEqual(
+      classContexts(
+        `<div class="flex">{cond && <div><!-- note --><span class="p-4">x</span></div>}</div>\n<p class="mt-4">y</p>\n`,
+      ),
+      { renamed: ["flex", "mt-4"], runtime: [] },
+    );
+  });
+
+  for (const expression of ["title", "a < b", "a<b"]) {
+    it(`reads nothing from {${expression}} and still reads the next element`, function () {
+      assert.deepStrictEqual(
+        classContexts(`<p>{${expression}}</p>\n<div class="mt-4">x</div>\n`),
+        { renamed: ["mt-4"], runtime: [] },
+      );
+    });
+  }
+
+  it("reads markup after a type argument", function () {
+    assert.deepStrictEqual(
+      classContexts(
+        `{(xs as Array<Item>).map((x) => <li class="p-4">{x}</li>)}\n`,
+      ),
+      { renamed: ["p-4"], runtime: [] },
+    );
+  });
+
+  it("reads markup after a comparison in the same run", function () {
+    assert.deepStrictEqual(
+      classContexts(
+        `{count<max ? <span class="p-4">x</span> : null}<div class="mt-2">y</div>\n`,
+      ),
+      { renamed: ["p-4", "mt-2"], runtime: [] },
+    );
+  });
+
+  it("keeps {count<max} one masked run in Svelte", function () {
+    assert.deepStrictEqual(
+      svelteContexts(`<p>{count<max}</p>\n<div class="mt-2">y</div>\n`),
+      { renamed: ["mt-2"], runtime: [] },
+    );
+  });
+
+  it("walks no braces inside <style> or <title>", function () {
+    assert.deepStrictEqual(
+      classContexts(`<html>
+  <head>
+    <title>{cond && <b class="p-4">x</b>}</title>
+    <style>
+      .a {(<b class="w-8">x</b>)}
+    </style>
+  </head>
+  <body class="mt-4"></body>
+</html>
+`),
+      { renamed: ["mt-4"], runtime: [] },
+    );
+  });
+
+  it("renames a class inside an expression at its exact span", function () {
+    const result = transformExpression(
+      `<ul class="flex">{items.map((item) => <li class="p-4">{item}</li>)}</ul>\n`,
+    );
+    assert.strictEqual(
+      result.code,
+      `<ul class="${expressionNameOf("flex")}">{items.map((item) => <li class="${expressionNameOf("p-4")}">{item}</li>)}</ul>\n`,
+    );
+    assert.deepStrictEqual(result.warnings, []);
   });
 });
 
@@ -875,5 +1120,717 @@ describe("SFC leak-check masking", function () {
       }),
       [],
     );
+  });
+});
+
+// R4 and R5: parse5 drops table-fragment and in-select start tags with their
+// attributes, lowercases component names onto those same paths, and reads
+// <noscript> content as raw text. Each list below is sliced from the file,
+// so a wrong offset shows up as the wrong text.
+function classAttributesIn(filePath: string, code: string): Array<string> {
+  const lists: Array<string> = [];
+  walkSfcClassContexts(filePath, code, {
+    renameLiteral: function (literal, kind) {
+      assert.strictEqual(kind, "class-attribute");
+      lists.push(code.slice(literal.start, literal.end));
+    },
+    runtimeLiteral: function (literal) {
+      assert.fail(`runtime literal ${code.slice(literal.start, literal.end)}`);
+    },
+  });
+  return lists;
+}
+
+describe("table, select, look-alike component, and noscript markup (R4, R5)", function () {
+  it("reports a table row component's root classes (AE4)", function () {
+    assert.deepStrictEqual(
+      classAttributesIn(
+        "/site/src/components/Row.astro",
+        `---
+const { label } = Astro.props;
+---
+<tr class="border-b"><td class="px-4">{label}</td></tr>
+`,
+      ),
+      ["border-b", "px-4"],
+    );
+  });
+
+  it("reports the classes on every table-fragment root", function () {
+    for (const [markup, expected] of [
+      [
+        `<tbody class="divide-y"><tr class="h-8"><td>x</td></tr></tbody>`,
+        ["divide-y", "h-8"],
+      ],
+      [
+        `<thead class="bg-stone-50"><tr><th>x</th></tr></thead>`,
+        ["bg-stone-50"],
+      ],
+      [`<tfoot class="font-bold"><tr><td>x</td></tr></tfoot>`, ["font-bold"]],
+      [`<th class="text-left">x</th>`, ["text-left"]],
+      [`<caption class="sr-only">x</caption>`, ["sr-only"]],
+      [`<colgroup><col class="w-1/3" /><col /></colgroup>`, ["w-1/3"]],
+      [`<col class="w-1/3">`, ["w-1/3"]],
+    ] as const) {
+      assert.deepStrictEqual(
+        classAttributesIn("/site/src/components/Part.astro", `${markup}\n`),
+        expected,
+        markup,
+      );
+    }
+  });
+
+  it("reports a row wrapped in a component", function () {
+    for (const filePath of [
+      "/site/src/components/Rows.astro",
+      "/site/src/Rows.svelte",
+    ]) {
+      assert.deepStrictEqual(
+        classAttributesIn(
+          filePath,
+          `<MyTable><tr class="h-8"><td>x</td></tr></MyTable>\n`,
+        ),
+        ["h-8"],
+        filePath,
+      );
+    }
+    assert.deepStrictEqual(
+      classAttributesIn(
+        "/site/src/Rows.vue",
+        `<template><MyTable><tr class="h-8"><td>x</td></tr></MyTable></template>\n`,
+      ),
+      ["h-8"],
+    );
+  });
+
+  it("reports markup inside <select> and <option>", function () {
+    const markup = `<select class="w-full"><option class="p-2"><span class="font-bold">x</span></option></select>`;
+    for (const [filePath, code] of [
+      ["/site/src/components/Picker.astro", `${markup}\n`],
+      ["/site/src/Picker.svelte", `${markup}\n`],
+      ["/site/src/Picker.vue", `<template>${markup}</template>\n`],
+      ["/out/index.html", `<!doctype html><html><body>${markup}</body></html>`],
+    ]) {
+      assert.deepStrictEqual(
+        classAttributesIn(filePath, code),
+        ["w-full", "p-2", "font-bold"],
+        filePath,
+      );
+    }
+  });
+
+  it("reports a component named like <select> and its children", function () {
+    for (const filePath of [
+      "/site/src/components/Field.astro",
+      "/site/src/Field.svelte",
+    ]) {
+      assert.deepStrictEqual(
+        classAttributesIn(
+          filePath,
+          `<Select class="w-full"><span class="ml-2">x</span></Select>\n`,
+        ),
+        ["w-full", "ml-2"],
+        filePath,
+      );
+    }
+  });
+
+  it("reads a component named like a raw-text element as an element", function () {
+    assert.deepStrictEqual(
+      classAttributesIn(
+        "/site/src/components/Heading.astro",
+        `<Title class="text-xl"><b class="font-bold">x</b></Title>\n`,
+      ),
+      ["text-xl", "font-bold"],
+    );
+  });
+
+  it("reports classes on markup inside <noscript> (AE5)", function () {
+    const markup = `<noscript><p class="text-sm">Enable JavaScript</p></noscript>`;
+    assert.deepStrictEqual(
+      classAttributesIn(
+        "/site/src/pages/about.astro",
+        `<main class="mx-auto">${markup}</main>\n`,
+      ),
+      ["mx-auto", "text-sm"],
+    );
+    assert.deepStrictEqual(
+      classAttributesIn(
+        "/out/about/index.html",
+        `<!doctype html><html><body><main class="mx-auto">${markup}</main></body></html>`,
+      ),
+      ["mx-auto", "text-sm"],
+    );
+  });
+
+  it("recovers the body class after a <noscript> in <head> implies <body>", function () {
+    // With scripting off, the <img> ends <head> and implies <body>, so the
+    // real <body> start tag only adds its attributes, without a location.
+    // The walk is in tree order: the implied <body> holds the <img>.
+    assert.deepStrictEqual(
+      classContexts(`---
+const title = "x";
+---
+<!doctype html>
+<html lang="en">
+  <head>
+    <title>{title}</title>
+    <noscript><img class="h-0" src="/pixel.gif" alt="" /></noscript>
+  </head>
+  <body class="min-h-screen">
+    <slot />
+  </body>
+</html>
+`),
+      { renamed: ["min-h-screen", "h-0"], runtime: [] },
+    );
+    assert.deepStrictEqual(
+      classAttributesIn(
+        "/out/index.html",
+        `<!doctype html><html lang="en"><head><title>x</title>` +
+          `<noscript><img class="h-0" src="/pixel.gif" alt=""></noscript>` +
+          `</head><body class="min-h-screen"><main>x</main></body></html>`,
+      ),
+      ["min-h-screen", "h-0"],
+    );
+  });
+
+  it("never reads a literal <body inside a <textarea> as a tag", function () {
+    assert.deepStrictEqual(
+      classContexts(`---
+import BaseHead from "../components/BaseHead.astro";
+---
+<!doctype html>
+<html lang="en">
+  <head>
+    <BaseHead />
+    <textarea><body class="antialiased"></textarea>
+  </head>
+  <body class="min-h-screen">
+    <slot />
+  </body>
+</html>
+`),
+      { renamed: ["min-h-screen"], runtime: [] },
+    );
+  });
+});
+
+// R3 and KTD5: a top-level, non-exported frontmatter const holding a class
+// string is read like a class attribute when every reference to it is a
+// class position, and is left unread otherwise.
+describe("Astro frontmatter class constants (R3)", function () {
+  const CARD = "rounded-lg p-6";
+  const CONSTANT_TOKENS = ["rounded-lg", "p-6", "px-2"];
+  const CONSTANT_REGISTRY: NameRegistry = createNameRegistry({
+    universe: new Set(CONSTANT_TOKENS),
+    sourceTokens: new Set(CONSTANT_TOKENS),
+    runtimeTokens: new Set(),
+    exclusions: { names: [], prefixes: [] },
+  });
+
+  function constantNameOf(token: string): string {
+    const name = CONSTANT_REGISTRY.nameFor(token);
+    assert.ok(name !== undefined, `${token} must be renamed in the registry`);
+    return name;
+  }
+
+  function transformConstant(code: string): TransformSourceResult {
+    const result = transformSource({
+      code,
+      id: "/site/src/components/Panel.astro",
+      registry: CONSTANT_REGISTRY,
+    });
+    assert.ok(result !== null);
+    return result;
+  }
+
+  function withCard(template: string, frontmatter = ""): string {
+    return `---\nconst card = "${CARD}";\n${frontmatter}---\n${template}\n`;
+  }
+
+  // How often the constant's literal is reported as a rename, and whether
+  // it is ever reported as a runtime literal.
+  function cardReads(code: string): { renamed: number; runtime: boolean } {
+    const result = classContexts(code);
+    return {
+      renamed: result.renamed.filter(function (source) {
+        return source === CARD;
+      }).length,
+      runtime: result.runtime.includes(CARD),
+    };
+  }
+
+  const READ = { renamed: 1, runtime: false };
+  const UNREAD = { renamed: 0, runtime: false };
+
+  it("reports a constant used only as class={card} as one dynamic group (AE3)", function () {
+    assert.deepStrictEqual(classEvents(withCard(`<div class={card}>x</div>`)), [
+      { event: "enter", kind: "class-attribute" },
+      {
+        event: "rename",
+        kind: "class-attribute",
+        source: CARD,
+        text: CARD,
+        quoted: true,
+      },
+      {
+        event: "exit",
+        kind: "class-attribute",
+        fullyLiteral: true,
+        staticList: false,
+      },
+    ]);
+  });
+
+  it("renames the frontmatter literal in place (AE3)", function () {
+    const result = transformConstant(withCard(`<div class={card}>x</div>`));
+    assert.strictEqual(
+      result.code,
+      `---\nconst card = "${constantNameOf("rounded-lg")} ${constantNameOf("p-6")}";\n---\n<div class={card}>x</div>\n`,
+    );
+    assert.deepStrictEqual(result.warnings, []);
+  });
+
+  it("reports the literal once however many class positions use it", function () {
+    assert.deepStrictEqual(
+      cardReads(
+        withCard(
+          `<div class={card}>a</div>\n<p class:list={[card]}>b</p>\n{on && <b class={card}>c</b>}`,
+        ),
+      ),
+      READ,
+    );
+  });
+
+  for (const [label, template] of [
+    ["the whole class:list expression", `<div class:list={card}>x</div>`],
+    [
+      "a class:list array element",
+      `<div class:list={[card, { ring: on }]}>x</div>`,
+    ],
+    [
+      "a class:list element nested in arrays",
+      `<div class:list={["px-2", [[card]]]}>x</div>`,
+    ],
+    ["a component's class prop", `<Comp class={card} />`],
+    ["a self-closed component's class prop", `<Comp class={card}/>`],
+    [
+      "class={card} inside expression markup",
+      `<ul>{items.map((item) => <li class={card}>{item}</li>)}</ul>`,
+    ],
+    [
+      "class:list inside expression markup",
+      `{on && <b class:list={[card, { ring: on }]}>x</b>}`,
+    ],
+    [
+      "a cn() argument inside expression markup",
+      `{on && <b class={cn(card, "px-2")}>x</b>}`,
+    ],
+  ]) {
+    it(`reads a constant used as ${label}`, function () {
+      assert.deepStrictEqual(cardReads(withCard(template)), READ);
+    });
+  }
+
+  it("reads a constant used as an adopted <body>'s class", function () {
+    assert.deepStrictEqual(
+      cardReads(
+        withCard(`<html lang="en">
+  <head>
+    <HeadMeta />
+  </head>
+  <body class={card}>
+    <slot />
+  </body>
+</html>`),
+      ),
+      READ,
+    );
+  });
+
+  it("reads a constant passed to cn() in the frontmatter", function () {
+    const code = withCard(
+      `<div class={merged}>x</div>`,
+      `import { cn } from "../lib/cn";\nconst merged = cn(card, "px-2");\n`,
+    );
+    assert.deepStrictEqual(cardReads(code), READ);
+    const result = transformConstant(code);
+    assert.ok(
+      result.code.includes(
+        `const card = "${constantNameOf("rounded-lg")} ${constantNameOf("p-6")}";`,
+      ),
+      result.code,
+    );
+    assert.ok(
+      result.code.includes(`cn(card, "${constantNameOf("px-2")}")`),
+      result.code,
+    );
+    assert.deepStrictEqual(result.warnings, []);
+  });
+
+  it("reads a constant held in a template literal without substitutions", function () {
+    assert.deepStrictEqual(
+      cardReads(
+        `---\nconst card = \`${CARD}\`;\n---\n<div class={card}>x</div>\n`,
+      ),
+      READ,
+    );
+  });
+
+  for (const [label, template, frontmatter] of [
+    ["title={card}", `<div class={card} title={card}>x</div>`, ""],
+    [
+      "<meta content={card}>",
+      `<meta content={card} /><div class={card}>x</div>`,
+      "",
+    ],
+    ["a text expression", `<p>{card}</p><div class={card}>x</div>`, ""],
+    [
+      "part of a class expression",
+      `<div class={on ? card : "px-2"}>x</div><p class={card}>y</p>`,
+      "",
+    ],
+    [
+      "a quoted class value",
+      `<div class="{card}">x</div><p class={card}>y</p>`,
+      "",
+    ],
+    [
+      "a non-class attribute inside expression markup",
+      `{on && <b class={card} title={card}>x</b>}`,
+      "",
+    ],
+    [
+      "a shadowing parameter",
+      `{items.map((card) => <li class={card}>{card}</li>)}`,
+      "",
+    ],
+    [
+      "a run TSX rejects",
+      `<div class={card}>x</div>{on && <div><!-- note --><b title={card}>y</b></div>}`,
+      "",
+    ],
+    [
+      "console.log(card) in the frontmatter",
+      `<div class={card}>x</div>`,
+      "console.log(card);\n",
+    ],
+    [
+      "concatenation in the frontmatter",
+      `<div class={card}>x</div>`,
+      `const x = card + " y";\n`,
+    ],
+    [
+      "an identifier in a <script> block",
+      `<div class={card}>x</div>\n<script>\n  console.log(card);\n</script>`,
+      "",
+    ],
+    ["a spread", `<div class={card}>x</div><p>{[...card].length}</p>`, ""],
+  ]) {
+    it(`leaves a constant also used in ${label} unread`, function () {
+      assert.deepStrictEqual(
+        cardReads(withCard(template, frontmatter)),
+        UNREAD,
+      );
+    });
+  }
+
+  it("keeps the literal's bytes when the constant is unread", function () {
+    const code = withCard(`<div class={card} title={card}>x</div>`);
+    assert.strictEqual(transformConstant(code).code, code);
+  });
+
+  for (const [label, frontmatter] of [
+    ["an exported const", `export const card = "${CARD}";`],
+    ["a let", `let card = "${CARD}";`],
+    [
+      "a template literal with a substitution",
+      "const size = 6;\nconst card = `rounded-lg p-${size}`;",
+    ],
+    ["a const inside a block", `{\n  const card = "${CARD}";\n}`],
+  ]) {
+    it(`leaves ${label} unread`, function () {
+      const result = classContexts(
+        `---\n${frontmatter}\n---\n<div class={card}>x</div>\n`,
+      );
+      assert.deepStrictEqual(result, { renamed: [], runtime: [] });
+    });
+  }
+
+  it("leaves an unreferenced constant unread", function () {
+    assert.deepStrictEqual(
+      classContexts(withCard(`<div class="px-2">x</div>`)),
+      { renamed: ["px-2"], runtime: [] },
+    );
+  });
+
+  it("never counts the name in template text, static values, or after a dot", function () {
+    assert.deepStrictEqual(
+      cardReads(
+        withCard(
+          `<p title="card" class="card">A card, {item.card}</p>\n<div class={card}>x</div>`,
+          `const label = Astro.props.card;\n// card\n`,
+        ),
+      ),
+      READ,
+    );
+  });
+});
+
+// R6 (KTD6): only built HTML is decoded. A source class attribute holds a
+// raw `&`, which is how the token reached the registry, so it matches as in
+// 1.1.0, and an encoded spelling there stays as written.
+describe("source formats read class text without decoding (R6, KTD6)", function () {
+  it("renames a raw & in .astro, .vue, and .svelte and leaves &amp; alone", function () {
+    const token = "[&_a]:underline";
+    const registry = createNameRegistry({
+      universe: new Set([token]),
+      sourceTokens: new Set([token]),
+    });
+    const name = registry.nameFor(token);
+    assert.ok(name !== undefined);
+    for (const [id, open, close] of [
+      ["/site/src/components/Prose.astro", "", ""],
+      ["/site/src/components/Prose.vue", "<template>", "</template>"],
+      ["/site/src/components/Prose.svelte", "", ""],
+    ]) {
+      const result = transformSource({
+        code: `${open}<div class="${token} [&amp;_a]:underline">x</div>${close}\n`,
+        id,
+        registry,
+      });
+      assert.ok(result !== null, id);
+      assert.strictEqual(
+        result.code,
+        `${open}<div class="${name} [&amp;_a]:underline">x</div>${close}\n`,
+        id,
+      );
+    }
+  });
+});
+
+// KTD8 narrows the leak scan of built HTML only. A source format's
+// reverse-leak finding only warns, so its scan keeps prose and keyword
+// attributes.
+describe("source formats keep the whole leak scan (R8, KTD8)", function () {
+  it("still warns on prose and a role value in .astro, .vue, and .svelte", function () {
+    for (const [id, open, close] of [
+      ["/site/src/components/Note.astro", "", ""],
+      ["/site/src/components/Note.vue", "<template>", "</template>"],
+      ["/site/src/components/Note.svelte", "", ""],
+    ]) {
+      const result = transform(
+        `${open}<div class="flex"><p>a flex row</p>` +
+          `<div role="mb-16"></div><!-- p-4 --></div>${close}\n`,
+        id,
+      );
+      assert.ok(result !== null, id);
+      assert.deepStrictEqual(
+        result.warnings
+          .filter(function (warning) {
+            return warning.kind === "reverse-leak";
+          })
+          .map(function (warning) {
+            return warning.token;
+          })
+          .sort(),
+        ["flex", "mb-16", "p-4"],
+        id,
+      );
+    }
+  });
+});
+
+// R16 (KTD15): an object at a composition position of Vue :class or Astro
+// class:list holds class names in its identifier keys too. A key inside an
+// HTML attribute that must be quoted takes the quote the attribute does not
+// use. Svelte and Astro class={...} runs poison object keys they cannot
+// prove, as they poison string literals.
+describe("class-composition object keys in SFC templates (R16, KTD15)", function () {
+  const KEY_TOKENS = ["hidden", "uppercase", "p-4", "px-2", "block"];
+  const KEY_REGISTRY = createNameRegistry({
+    universe: new Set(KEY_TOKENS),
+    sourceTokens: new Set(KEY_TOKENS),
+  });
+  const PREFIXED_REGISTRY = createNameRegistry({
+    universe: new Set(KEY_TOKENS),
+    sourceTokens: new Set(KEY_TOKENS),
+    hash: createHasher(undefined, "tw-"),
+  });
+
+  function keyName(token: string, registry = KEY_REGISTRY): string {
+    const name = registry.nameFor(token);
+    assert.ok(name !== undefined, `${token} must be renamed`);
+    return name;
+  }
+
+  function transformKeys(
+    code: string,
+    id: string,
+    registry: NameRegistry = KEY_REGISTRY,
+  ): TransformSourceResult {
+    const result = transformSource({ code, id, registry });
+    assert.ok(result !== null);
+    return result;
+  }
+
+  function contexts(
+    filePath: string,
+    code: string,
+  ): { renamed: Array<string>; runtime: Array<string> } {
+    const renamed: Array<string> = [];
+    const runtime: Array<string> = [];
+    walkSfcClassContexts(filePath, code, {
+      renameLiteral: function (literal) {
+        renamed.push(code.slice(literal.start, literal.end));
+      },
+      runtimeLiteral: function (literal) {
+        runtime.push(code.slice(literal.start, literal.end));
+      },
+    });
+    return { renamed, runtime };
+  }
+
+  it("renames identifier keys in Vue :class objects and arrays", function () {
+    const result = transformKeys(
+      `<template>
+  <div :class="{ hidden: open }">x</div>
+  <div :class="[{ hidden: open }, 'p-4']">y</div>
+</template>
+`,
+      "/site/src/Card.vue",
+    );
+    assert.strictEqual(
+      result.code,
+      `<template>
+  <div :class="{ ${keyName("hidden")}: open }">x</div>
+  <div :class="[{ ${keyName("hidden")}: open }, '${keyName("p-4")}']">y</div>
+</template>
+`,
+    );
+    assert.deepStrictEqual(result.warnings, []);
+  });
+
+  it("renames identifier keys in Astro class:list objects, in and out of expression markup", function () {
+    const result = transformKeys(
+      `<span class:list={{ uppercase: on }}>a</span>
+{show && <b class:list={["px-2", { uppercase: on }]}>b</b>}
+`,
+      "/site/src/components/Toggle.astro",
+    );
+    assert.strictEqual(
+      result.code,
+      `<span class:list={{ ${keyName("uppercase")}: on }}>a</span>
+{show && <b class:list={["${keyName("px-2")}", { ${keyName(
+        "uppercase",
+      )}: on }]}>b</b>}
+`,
+    );
+    assert.deepStrictEqual(result.warnings, []);
+  });
+
+  it("poisons a Svelte 5 class={{ ... }} object's keys", function () {
+    assert.deepStrictEqual(
+      contexts(
+        "/site/src/Card.svelte",
+        `<div class={{ hidden: open, "p-4": wide }}>x</div>\n`,
+      ),
+      { renamed: [], runtime: ["hidden", "p-4"] },
+    );
+  });
+
+  it("poisons a clsx() object's keys in an Astro class={...}", function () {
+    assert.deepStrictEqual(
+      contexts(
+        "/site/src/Card.astro",
+        `<div class={clsx({ hidden: open })}>x</div>\n`,
+      ),
+      { renamed: [], runtime: ["hidden"] },
+    );
+  });
+
+  it("keeps the quoted-literal poison of mixed class values", function () {
+    for (const filePath of ["/site/src/Card.svelte", "/site/src/Card.astro"]) {
+      assert.deepStrictEqual(
+        contexts(
+          filePath,
+          `<div class="p-4 {cond ? 'block' : ''} px-2">x</div>\n`,
+        ),
+        { renamed: [], runtime: ["p-4 ", "block", " px-2"] },
+        filePath,
+      );
+    }
+  });
+
+  it("quotes a prefixed key in a Vue attribute with the other quote", function () {
+    const result = transformKeys(
+      `<template>
+  <div :class="{ hidden }">x</div>
+  <div :class='{ block: on }'>y</div>
+</template>
+`,
+      "/site/src/Card.vue",
+      PREFIXED_REGISTRY,
+    );
+    const hidden = keyName("hidden", PREFIXED_REGISTRY);
+    const block = keyName("block", PREFIXED_REGISTRY);
+    assert.ok(hidden.startsWith("tw-"));
+    assert.strictEqual(
+      result.code,
+      `<template>
+  <div :class="{ '${hidden}': hidden }">x</div>
+  <div :class='{ "${block}": on }'>y</div>
+</template>
+`,
+    );
+    // Each binding still parses as the JavaScript expression Vue compiles.
+    for (const match of result.code.matchAll(/:class=(["'])(.*?)\1/g)) {
+      const parsed = parseSourceModule(
+        "/site/src/binding.ts",
+        `(${match[2]})`,
+      ) as unknown as { parseDiagnostics: ReadonlyArray<unknown> };
+      assert.deepStrictEqual(parsed.parseDiagnostics, [], match[2]);
+    }
+  });
+
+  it("keeps a prefixed Svelte class: directive name bare", function () {
+    const result = transformKeys(
+      `<div class:hidden={x}>x</div>\n`,
+      "/site/src/Card.svelte",
+      PREFIXED_REGISTRY,
+    );
+    assert.strictEqual(
+      result.code,
+      `<div class:${keyName("hidden", PREFIXED_REGISTRY)}={x}>x</div>\n`,
+    );
+  });
+
+  it("escapes the other quote in a dialect key inside a Vue attribute", function () {
+    const dialect = createNameRegistry({
+      universe: new Set(KEY_TOKENS),
+      sourceTokens: new Set(KEY_TOKENS),
+      hash: createDialectHasher("england"),
+    });
+    assert.strictEqual(dialect.nameFor("hidden"), "'idden");
+    const result = transformKeys(
+      `<template><div :class="{ hidden: open }">x</div></template>\n`,
+      "/site/src/Card.vue",
+      dialect,
+    );
+    assert.strictEqual(
+      result.code,
+      `<template><div :class="{ '\\'idden': open }">x</div></template>\n`,
+    );
+  });
+
+  it("fails when a key needing quotes sits in an unquoted attribute value", function () {
+    assert.throws(function () {
+      transformSource({
+        code: `<template><div :class={hidden:open}>x</div></template>\n`,
+        id: "/site/src/Card.vue",
+        registry: PREFIXED_REGISTRY,
+      });
+    }, /^Error: minwind: .*unquoted/);
   });
 });

@@ -1,11 +1,16 @@
 import assert from "node:assert";
+import { execFile } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
-import { applyBuildOutput } from "../src/apply.js";
+import { promisify } from "node:util";
+import MagicString, { Bundle } from "magic-string";
+import * as parse5 from "parse5";
+import { applyBuildOutput, type ApplyResult } from "../src/apply.js";
 import { parseArgs, runApplyCli } from "../src/apply-cli.js";
+import { createDialectHasher } from "../src/dialect.js";
 import { compileTailwindStylesheet } from "../src/engines/tailwind.js";
 import { MODULES_COMPRESS_WARNING } from "../src/flags.js";
 import { runProminenceCli } from "../src/prominence-cli.js";
@@ -23,8 +28,12 @@ import {
   type NameRegistry,
 } from "../src/names.js";
 import { transformBundle } from "../src/transform-bundle.js";
-import { transformModule } from "../src/transform-source.js";
+import {
+  transformModule,
+  type TransformSourceResult,
+} from "../src/transform-source.js";
 import type { ConsolidationVerdict } from "../src/consolidate.js";
+import type { SourceMapLike, VendorTrust } from "../src/vendor-provenance.js";
 
 // The post-build path (`minwind apply`): emitted HTML rewrites through the
 // same walker as the SFC formats, stylesheets through the shared CSS core,
@@ -507,6 +516,38 @@ describe("transformModule on emitted HTML", function () {
       result.warnings.some(function (warning) {
         return warning.kind === "reverse-leak" && warning.token === "mb-16";
       }),
+    );
+  });
+});
+
+// R4 and R5 in built HTML: parse5 drops markup inside <option> and reads
+// <noscript> content as raw text, so both leaked their tokens in 1.1.0.
+describe("transformModule on emitted <select> and <noscript> markup (R4, R5)", function () {
+  it("renames classes inside <option> and <noscript> without a leak", function () {
+    const result = transformModule({
+      code:
+        `<!doctype html><html><head>` +
+        `<noscript><link rel="stylesheet" href="/nojs.css"></noscript>` +
+        `</head><body>` +
+        `<select class="flex"><option class="p-4">` +
+        `<span class="items-center">One</span></option></select>` +
+        `<noscript><p class="mb-16">Enable JavaScript</p></noscript>` +
+        `</body></html>`,
+      id: "/out/index.html",
+      registry: REGISTRY,
+    });
+    assert.ok(result !== null);
+    assert.deepStrictEqual(result.warnings, []);
+    assert.ok(
+      result.code.includes(
+        `<select class="${nameOf("flex")}"><option class="${nameOf("p-4")}">` +
+          `<span class="${nameOf("items-center")}">One</span>`,
+      ),
+      result.code,
+    );
+    assert.ok(
+      result.code.includes(`<noscript><p class="${nameOf("mb-16")}">`),
+      result.code,
     );
   });
 });
@@ -1044,6 +1085,59 @@ describe("runApply (apply-site fixture)", function () {
   });
 });
 
+describe("runApply sourceDir (R13)", function () {
+  it("scans sourceDir and compiles <sourceDir>/app.css by default", async function () {
+    // No src/ directory: the sources and the CSS entry live under app/.
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "minwind-source-dir-"));
+    function write(relative: string, text: string): void {
+      const file = path.join(root, relative);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, text);
+    }
+    try {
+      write(
+        path.join("app", "app.css"),
+        "@layer utilities {\n  .flex { display: flex; }\n" +
+          "  .gap-4 { gap: 1rem; }\n}\n",
+      );
+      write(
+        path.join("app", "pages", "index.astro"),
+        '<section class="flex gap-4">a</section>\n',
+      );
+      const compiled = await compileTailwindStylesheet({
+        cssEntry: path.join(root, "app", "app.css"),
+        root,
+      });
+      write(path.join("dist", "_astro", "index.css"), compiled.stylesheet);
+      write(
+        path.join("dist", "index.html"),
+        '<!DOCTYPE html><html><head><link rel="stylesheet"' +
+          ' href="/_astro/index.css"></head><body>' +
+          '<section class="flex gap-4">a</section></body></html>',
+      );
+      const outcome = await runApply({
+        dir: path.join(root, "dist"),
+        root,
+        sourceDir: path.join(root, "app"),
+      });
+      assert.ok(outcome.enabled);
+      assert.strictEqual(outcome.renamed, 2);
+      const html = fs.readFileSync(
+        path.join(root, "dist", "index.html"),
+        "utf8",
+      );
+      assert.ok(
+        html.includes(
+          `<section class="${hashClassName("flex")} ${hashClassName("gap-4")}">`,
+        ),
+        html,
+      );
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
 // Consolidation judges member removability from source class lists, but apply
 // rewrites the built output, whose lists can differ: an Astro component that
 // merges a class prop renders `<Card class="flex gap-4">` as
@@ -1340,6 +1434,87 @@ describe("inline-style tripwire (R7)", function () {
   });
 });
 
+describe("inline-style tripwire selector forms (R11, KTD12)", function () {
+  // Fails runApply on index.html carrying `css` in a <style> block, and
+  // checks the error names each `page: reference` line.
+  async function assertTripwireNames(
+    css: string,
+    references: ReadonlyArray<string>,
+  ): Promise<void> {
+    const dir = await copyApplySiteOut();
+    cleanArtifacts();
+    try {
+      addInlineStyle(dir, "index.html", css);
+      await assert.rejects(
+        runApply({ dir, root: APPLY_SITE }),
+        function (error: Error) {
+          for (const reference of references) {
+            assert.ok(
+              error.message.includes(
+                `${path.join(dir, "index.html")}: ${reference}`,
+              ),
+              error.message,
+            );
+          }
+          return true;
+        },
+      );
+      assert.ok(!fs.existsSync(artifactsDir()));
+    } finally {
+      cleanArtifacts();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  for (const selector of [
+    '[class~="flex"]',
+    '[class="flex"]',
+    '[class*="fle"]',
+    '[class^="fl"]',
+  ]) {
+    it(`fails naming flex and the page for ${selector}`, async function () {
+      await assertTripwireNames(`${selector}{gap:1rem}`, [
+        `.flex in ${selector}`,
+      ]);
+    });
+  }
+
+  it("fails naming a renamed class inside :nth-child(… of …)", async function () {
+    await assertTripwireNames("li:nth-child(2n of .flex){color:red}", [
+      ".flex",
+    ]);
+  });
+
+  it("fails naming both renamed classes of an @scope prelude", async function () {
+    await assertTripwireNames("@scope (.flex) to (.p-4){li{color:red}}", [
+      ".flex",
+      ".p-4",
+    ]);
+  });
+
+  async function assertTripwirePasses(css: string): Promise<void> {
+    const dir = await copyApplySiteOut();
+    cleanArtifacts();
+    try {
+      addInlineStyle(dir, "index.html", css);
+      const outcome = await runApply({ dir, root: APPLY_SITE });
+      assert.ok(outcome.enabled);
+      assert.ok(readTree(dir)["index.html"].includes(`<style>${css}</style>`));
+    } finally {
+      cleanArtifacts();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  it("passes attribute selectors that reference no renamed class", async function () {
+    await assertTripwirePasses(
+      "[data-state=open]{color:red}" +
+        '[class~="keep-me"]{color:red}' +
+        '[class*="zzz"]{color:red}',
+    );
+  });
+});
+
 describe("apply --prominence", function () {
   it("auto deals the first word to the first class-bearing element", async function () {
     const vocabulary = writeVocabulary();
@@ -1465,6 +1640,1936 @@ describe("apply --prominence", function () {
       assert.match(outcome.notices[0], /first 7 class-bearing elements/);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// KTD7: a class kept original takes the utilities that compound it with it.
+// GTM Frontier's nav underlines the current page's label through
+// group-aria-[current=page], and a data-* value that spells "group" leaks
+// the marker. In 1.1.0 the variant still renamed while its only selector
+// arm named the kept .group, so the arm was skipped and the build failed
+// on presence.
+const GROUP_VARIANT = "group-aria-[current=page]:text-lav";
+const GROUP_RULE =
+  ".group-aria-\\[current\\=page\\]\\:text-lav" +
+  ":is(:where(.group)[aria-current=page] *){color:red}";
+const GROUP_LEAK = '<div data-active-class="group"></div>';
+
+function registryOf(tokens: Array<string>): NameRegistry {
+  return createNameRegistry({
+    universe: new Set(tokens),
+    sourceTokens: new Set(tokens),
+  });
+}
+
+function writeOutput(files: Record<string, string>): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minwind-dependents-"));
+  for (const [file, text] of Object.entries(files)) {
+    fs.writeFileSync(path.join(dir, file), text);
+  }
+  return dir;
+}
+
+const execFileAsync = promisify(execFile);
+const CLI = path.join(HERE, "..", "src", "cli.ts");
+const TSX = path.join(HERE, "..", "node_modules", ".bin", "tsx");
+
+describe("dependent variants keep their markers (R7, KTD7)", function () {
+  it("keeps a leaked marker's variant original instead of failing on presence", function () {
+    const html =
+      '<!doctype html><a class="group" aria-current="page">' +
+      `<span class="${GROUP_VARIANT}">Inbox</span></a>${GROUP_LEAK}`;
+    const css = `@layer utilities{${GROUP_RULE}}`;
+    const dir = writeOutput({ "index.html": html, "app.css": css });
+    try {
+      const result = applyBuildOutput({
+        dir,
+        registry: registryOf(["group", GROUP_VARIANT]),
+        consolidationVerdicts: [],
+        consolidate: false,
+      });
+      assert.deepStrictEqual(result.keptOriginal, ["group", GROUP_VARIANT]);
+      assert.deepStrictEqual(result.keptDependent, [GROUP_VARIANT]);
+      assert.strictEqual(
+        fs.readFileSync(path.join(dir, "index.html"), "utf8"),
+        html,
+      );
+      assert.strictEqual(
+        fs.readFileSync(path.join(dir, "app.css"), "utf8"),
+        css,
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("renames a token with an ordinary arm and skips its dependent arm with a warning", function () {
+    const registry = registryOf(["group", "nav-link"]);
+    const dir = writeOutput({
+      "index.html":
+        '<!doctype html><a class="group"><span class="nav-link">Inbox</span>' +
+        `</a>${GROUP_LEAK}`,
+      "app.css":
+        "@layer utilities{.nav-link{color:gray}}" +
+        ".group:hover .nav-link{color:black}",
+    });
+    try {
+      const result = applyBuildOutput({
+        dir,
+        registry,
+        consolidationVerdicts: [],
+        consolidate: false,
+      });
+      const name = registry.nameFor("nav-link");
+      assert.ok(name !== undefined);
+      assert.deepStrictEqual(result.keptOriginal, ["group"]);
+      assert.deepStrictEqual(result.keptDependent, []);
+      assert.strictEqual(
+        fs.readFileSync(path.join(dir, "app.css"), "utf8"),
+        `@layer utilities{.${name}{color:gray}}` +
+          ".group:hover .nav-link{color:black}",
+      );
+      const skipped = result.warnings.filter(function (warning) {
+        return warning.kind === "mixed-compound-skipped";
+      });
+      assert.deepStrictEqual(
+        skipped.map(function (warning) {
+          return "selector" in warning ? warning.selector : "";
+        }),
+        [".group:hover .nav-link"],
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("still fails presence for a renamed token with no selector arm", function () {
+    const dir = writeOutput({
+      "index.html":
+        '<!doctype html><a class="group" aria-current="page">' +
+        `<span class="${GROUP_VARIANT} ghost">Inbox</span></a>${GROUP_LEAK}`,
+      "app.css": `@layer utilities{${GROUP_RULE}}`,
+    });
+    try {
+      assert.throws(
+        function () {
+          applyBuildOutput({
+            dir,
+            registry: registryOf(["group", GROUP_VARIANT, "ghost"]),
+            consolidationVerdicts: [],
+            consolidate: false,
+          });
+        },
+        function (error: Error) {
+          assert.match(error.message, /presence assertion failed/);
+          assert.ok(error.message.includes('"ghost"'), error.message);
+          assert.ok(!error.message.includes(GROUP_VARIANT), error.message);
+          return true;
+        },
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("stops merging a consolidation verdict that names a dependent token", function () {
+    const registry = registryOf(["flex", "group", GROUP_VARIANT]);
+    const flex = registry.nameFor("flex");
+    assert.ok(flex !== undefined);
+    const dir = writeOutput({
+      "index.html":
+        '<!doctype html><a class="group" aria-current="page">' +
+        `<span class="flex ${GROUP_VARIANT}">a</span></a>` +
+        `<p class="flex ${GROUP_VARIANT}">b</p>${GROUP_LEAK}`,
+      "app.css": `@layer utilities{.flex{display:flex}${GROUP_RULE}}`,
+    });
+    try {
+      const result = applyBuildOutput({
+        dir,
+        registry,
+        consolidationVerdicts: [
+          {
+            tokens: ["flex", GROUP_VARIANT],
+            frequency: 2,
+            safe: true,
+            name: "combo",
+            removableTokens: ["flex", GROUP_VARIANT],
+          },
+        ],
+        consolidate: true,
+      });
+      assert.strictEqual(result.consolidated, 0);
+      const css = fs.readFileSync(path.join(dir, "app.css"), "utf8");
+      assert.strictEqual(
+        css,
+        `@layer utilities{.${flex}{display:flex}${GROUP_RULE}}`,
+      );
+      const html = fs.readFileSync(path.join(dir, "index.html"), "utf8");
+      assert.ok(html.includes(`<p class="${flex} ${GROUP_VARIANT}">`), html);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("prints dependents on their own line and reports them runtime-context", async function () {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "minwind-dep-site-"));
+    try {
+      function write(relative: string, text: string): void {
+        const file = path.join(root, relative);
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, text);
+      }
+      write(
+        path.join("src", "app.css"),
+        `@layer utilities {\n  .flex { display: flex; }\n  ${GROUP_RULE}\n}\n`,
+      );
+      write(
+        path.join("src", "nav.tsx"),
+        "export function Nav() {\n" +
+          "  return (\n" +
+          '    <nav class="flex">\n' +
+          '      <a class="group" aria-current="page">\n' +
+          `        <span class="${GROUP_VARIANT}">Inbox</span>\n` +
+          "      </a>\n" +
+          "    </nav>\n" +
+          "  );\n" +
+          "}\n",
+      );
+      const compiled = await compileTailwindStylesheet({
+        cssEntry: path.join(root, "src", "app.css"),
+        root,
+      });
+      write(path.join("dist", "app.css"), compiled.stylesheet);
+      write(
+        path.join("dist", "index.html"),
+        '<!doctype html><nav class="flex"><a class="group"' +
+          ` aria-current="page"><span class="${GROUP_VARIANT}">Inbox</span>` +
+          `</a></nav>${GROUP_LEAK}`,
+      );
+      const { stdout } = await execFileAsync(TSX, [
+        CLI,
+        "apply",
+        path.join(root, "dist"),
+        "--root",
+        root,
+      ]);
+      const lines = stdout.split("\n");
+      assert.ok(
+        lines.includes(
+          "  kept original names for 1 token(s) in unrewritable positions:" +
+            " group",
+        ),
+        stdout,
+      );
+      assert.ok(
+        lines.includes(
+          "  kept original names for 1 token(s) because each depends on a" +
+            ` class kept original: ${GROUP_VARIANT}`,
+        ),
+        stdout,
+      );
+      const report = JSON.parse(
+        fs.readFileSync(
+          path.join(root, ".output", "minwind", "report.json"),
+          "utf8",
+        ),
+      ) as TransformReport;
+      assert.deepStrictEqual(report.exclusions, [
+        { token: "group", reason: "runtime-context" },
+        { token: GROUP_VARIANT, reason: "runtime-context" },
+      ]);
+      assert.deepStrictEqual(
+        report.renames.map(function (entry) {
+          return entry.token;
+        }),
+        ["flex"],
+      );
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+// R6 (KTD6): emitters write `&`, `>`, and quotes in a class attribute as
+// character references, and the DOM decodes them, so the decoded token is the
+// class. It renames when the registry holds it, written back escaped.
+const ENCODED_TOKENS = [
+  "[&_a]:underline",
+  "has-[>img]:p-2",
+  "content-['x']",
+  "[&>li]:mt-2",
+  "p-4",
+  "flex",
+  "items-center",
+];
+
+const ENCODED_CSS =
+  "@layer utilities{" +
+  ".\\[\\&_a\\]\\:underline a{text-decoration-line:underline}" +
+  ".has-\\[\\>img\\]\\:p-2:has(>img){padding:.5rem}" +
+  ".content-\\[\\'x\\'\\]{content:'x'}" +
+  ".\\[\\&\\>li\\]\\:mt-2>li{margin-top:.5rem}" +
+  ".p-4{padding:1rem}" +
+  ".flex{display:flex}" +
+  ".items-center{align-items:center}" +
+  "}";
+
+describe("entity-encoded classes in built output (R6, KTD6)", function () {
+  const registry = registryOf(ENCODED_TOKENS);
+
+  function encodedName(token: string): string {
+    const name = registry.nameFor(token);
+    assert.ok(name !== undefined, `${token} must be renamed`);
+    return name;
+  }
+
+  function transformPage(
+    code: string,
+    consolidationVerdicts?: ReadonlyArray<ConsolidationVerdict>,
+  ): TransformSourceResult {
+    const result = transformModule({
+      code,
+      id: "/out/index.html",
+      registry,
+      consolidationVerdicts,
+    });
+    assert.ok(result !== null, code);
+    return result;
+  }
+
+  function leakedTokens(result: TransformSourceResult): Array<string> {
+    return result.warnings
+      .filter(function (warning) {
+        return warning.kind === "reverse-leak";
+      })
+      .map(function (warning) {
+        return warning.token ?? "";
+      })
+      .sort();
+  }
+
+  function applyTo(files: Record<string, string>): {
+    dir: string;
+    result: ApplyResult;
+  } {
+    const dir = writeOutput(files);
+    try {
+      const result = applyBuildOutput({
+        dir,
+        registry,
+        consolidationVerdicts: [],
+        consolidate: false,
+      });
+      return { dir, result };
+    } catch (error) {
+      fs.rmSync(dir, { recursive: true, force: true });
+      throw error;
+    }
+  }
+
+  it("renames an encoded token and a plain one in one built attribute (AE6)", function () {
+    const result = transformPage(
+      '<div class="[&amp;_a]:underline p-4"><a href="/">x</a></div>',
+    );
+    assert.ok(
+      result.code.includes(
+        `<div class="${encodedName("[&_a]:underline")} ${encodedName("p-4")}">`,
+      ),
+      result.code,
+    );
+    assert.deepStrictEqual(leakedTokens(result), []);
+  });
+
+  it("renames tokens written with &gt;, &#39;, and Astro's class:list spelling", function () {
+    for (const [written, token] of [
+      ["has-[&gt;img]:p-2", "has-[>img]:p-2"],
+      ["content-[&#39;x&#39;]", "content-['x']"],
+      ["[&amp;&gt;li]:mt-2", "[&>li]:mt-2"],
+      ["[&amp;>li]:mt-2", "[&>li]:mt-2"],
+    ]) {
+      const result = transformPage(`<ul class="${written}"><li>x</li></ul>`);
+      assert.strictEqual(
+        result.code,
+        `<ul class="${encodedName(token)}"><li>x</li></ul>`,
+        written,
+      );
+      assert.deepStrictEqual(leakedTokens(result), [], written);
+    }
+  });
+
+  it('writes a dialect name holding & or " escaped, so the attribute decodes to it', function () {
+    const tokens = ["[&_a]:underline", 'content-["x"]'];
+    const dialect = createNameRegistry({
+      universe: new Set(tokens),
+      sourceTokens: new Set(tokens),
+      hash: createDialectHasher("boston"),
+    });
+    const names = tokens.map(function (token) {
+      const name = dialect.nameFor(token);
+      assert.ok(name !== undefined, token);
+      return name;
+    });
+    assert.ok(names[0].includes("&"), names[0]);
+    assert.ok(names[1].includes('"'), names[1]);
+    const result = transformModule({
+      code: '<div class="[&amp;_a]:underline content-[&quot;x&quot;]">x</div>',
+      id: "/out/index.html",
+      registry: dialect,
+    });
+    assert.ok(result !== null);
+    const div = parse5.parseFragment(result.code).childNodes[0];
+    assert.ok("attrs" in div, result.code);
+    assert.deepStrictEqual(div.attrs, [
+      { name: "class", value: names.join(" ") },
+    ]);
+  });
+
+  it("gives a value with encoded whitespace no edit and keeps its tokens original", function () {
+    const html =
+      '<!doctype html><div class="flex&#32;p-4 items-center">x</div>';
+    const { dir, result } = applyTo({
+      "index.html": html,
+      "app.css": ENCODED_CSS,
+    });
+    try {
+      assert.deepStrictEqual(result.keptOriginal, [
+        "flex",
+        "items-center",
+        "p-4",
+      ]);
+      assert.strictEqual(
+        fs.readFileSync(path.join(dir, "index.html"), "utf8"),
+        html,
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a token original when an encoded copy sits in a data-* value", function () {
+    const html =
+      '<!doctype html><div class="[&amp;_a]:underline"><a href="/">x</a></div>' +
+      '<div data-x="[&amp;_a]:underline"></div>';
+    const { dir, result } = applyTo({
+      "index.html": html,
+      "app.css": ENCODED_CSS,
+    });
+    try {
+      assert.deepStrictEqual(result.keptOriginal, ["[&_a]:underline"]);
+      assert.strictEqual(
+        fs.readFileSync(path.join(dir, "index.html"), "utf8"),
+        html,
+      );
+      assert.ok(
+        fs
+          .readFileSync(path.join(dir, "app.css"), "utf8")
+          .includes(".\\[\\&_a\\]\\:underline a{"),
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("collapses a built list whose decoded key matches a safe verdict", function () {
+    const result = transformPage(
+      '<div class="[&amp;_a]:underline p-4"><a href="/">x</a></div>',
+      [
+        {
+          tokens: ["p-4", "[&_a]:underline"],
+          frequency: 2,
+          safe: true,
+          name: "combo",
+        },
+      ],
+    );
+    assert.strictEqual(
+      result.code,
+      '<div class="combo"><a href="/">x</a></div>',
+    );
+  });
+
+  it("renames a bundle's encoded markup string and keeps a bare encoded string original", function () {
+    const markup = transformBundle({
+      code: `const tpl = '<div class="[&amp;_a]:underline">x</div>';\n`,
+      id: "/out/assets/app.js",
+      registry,
+    });
+    assert.ok(markup !== null);
+    assert.strictEqual(
+      markup.code,
+      `const tpl = '<div class="${encodedName("[&_a]:underline")}">x</div>';\n`,
+    );
+    assert.deepStrictEqual(leakedTokens(markup), []);
+    const bare = transformBundle({
+      code: 'const raw = "[&amp;_a]:underline";\n',
+      id: "/out/assets/app.js",
+      registry,
+    });
+    assert.ok(bare !== null);
+    assert.strictEqual(bare.code, 'const raw = "[&amp;_a]:underline";\n');
+    assert.deepStrictEqual(leakedTokens(bare), ["[&_a]:underline"]);
+  });
+
+  it("still scans a bundle's raw text, where &copy; is literal", function () {
+    const token = "content-['&copy;']";
+    const result = transformBundle({
+      code: `el.classList.add("${token}");\n`,
+      id: "/out/assets/app.js",
+      registry: registryOf([token]),
+    });
+    assert.ok(result !== null);
+    assert.deepStrictEqual(leakedTokens(result), [token]);
+  });
+});
+
+// R8 and R9: built HTML positions that never hold class names, and
+// JavaScript comments and reserved words, no longer keep a class original.
+// Every position a script can read a class list from still does.
+describe("leak scan narrowing in built HTML and JS (R8, R9, KTD8, KTD9)", function () {
+  const registry = registryOf([
+    "grid",
+    "group",
+    "flex",
+    "hidden",
+    "block",
+    "static",
+    "dark",
+    "opacity-0",
+  ]);
+
+  function leaks(result: TransformSourceResult | null): Array<string> {
+    if (result === null) return [];
+    return result.warnings
+      .filter(function (warning) {
+        return warning.kind === "reverse-leak";
+      })
+      .map(function (warning) {
+        return warning.token ?? "";
+      })
+      .sort();
+  }
+
+  function pageLeaks(code: string): Array<string> {
+    return leaks(transformModule({ code, id: "/out/index.html", registry }));
+  }
+
+  function bundleLeaks(code: string): Array<string> {
+    return leaks(transformBundle({ code, id: "/out/assets/app.js", registry }));
+  }
+
+  it("ignores prose and a role value that spell utilities (AE8)", function () {
+    assert.deepStrictEqual(
+      pageLeaks(
+        '<!doctype html><html><body><div class="grid">' +
+          "<p>the grid layout</p>" +
+          '<div role="group"><a class="group" href="/">x</a></div>' +
+          "</div></body></html>",
+      ),
+      [],
+    );
+  });
+
+  it("ignores the values of attributes that never hold class names", function () {
+    for (const markup of [
+      '<img alt="flex" src="/a.png">',
+      '<input type="hidden">',
+      '<span style="display:block">x</span>',
+      '<meta name="x" content="grid">',
+      '<a href="/" title="grid">x</a>',
+      '<input placeholder="flex">',
+      '<p lang="flex" dir="block">x</p>',
+      '<link rel="block" href="/a.css">',
+      '<input autocomplete="hidden">',
+      '<img loading="block" decoding="flex" fetchpriority="grid" src="/a.png">',
+      '<button aria-label="hidden" aria-describedby="flex">x</button>',
+    ]) {
+      assert.deepStrictEqual(
+        pageLeaks(`<!doctype html><html><body>${markup}</body></html>`),
+        [],
+        markup,
+      );
+    }
+  });
+
+  it("ignores comments, <title>, valued <option>, and <noscript> text", function () {
+    for (const markup of [
+      "<!-- flex --><p>x</p>",
+      '<select><option value="x">flex</option></select>',
+      "<noscript>Turn on JavaScript for the grid view.</noscript>",
+    ]) {
+      assert.deepStrictEqual(
+        pageLeaks(`<!doctype html><html><body>${markup}</body></html>`),
+        [],
+        markup,
+      );
+    }
+    assert.deepStrictEqual(
+      pageLeaks(
+        "<!doctype html><html><head><title>grid</title></head>" +
+          "<body><p>x</p></body></html>",
+      ),
+      [],
+    );
+  });
+
+  it("decodes only what the mask leaves, so encoded prose stays ignored", function () {
+    assert.deepStrictEqual(
+      pageLeaks("<!doctype html><html><body><p>a gr&#105;d</p></body></html>"),
+      [],
+    );
+    assert.deepStrictEqual(
+      pageLeaks(
+        '<!doctype html><html><body><p data-x="gr&#105;d">x</p></body></html>',
+      ),
+      ["grid"],
+    );
+  });
+
+  it("still scans a text node that spans an adopted <body> start tag", function () {
+    // The <img> ends <head> and implies <body>, so the real <body> start tag
+    // only adds its attributes, and parse5 merges the whitespace around it
+    // into one text node whose span covers that tag.
+    assert.deepStrictEqual(
+      pageLeaks(
+        '<!doctype html><html><head><noscript><img src="x"></noscript>\n' +
+          '</head>\n<body data-active-class="hidden">\n' +
+          '<p class="hidden">x</p></body></html>',
+      ),
+      ["hidden"],
+    );
+  });
+
+  it("ignores JSON-LD and still scans other script data", function () {
+    assert.deepStrictEqual(
+      pageLeaks(
+        '<!doctype html><html><head><script type="application/ld+json">' +
+          '{"description":"a grid"}</script></head><body></body></html>',
+      ),
+      [],
+    );
+    assert.deepStrictEqual(
+      pageLeaks(
+        '<!doctype html><html><head><script type="application/json">' +
+          '{"c":"flex"}</script></head><body></body></html>',
+      ),
+      ["flex"],
+    );
+  });
+
+  it("still scans data-*, handlers, value, id, name, island props, and unknown attributes (AE8)", function () {
+    for (const [markup, token] of [
+      ['<div data-active-class="hidden"></div>', "hidden"],
+      [`<button onclick="el.classList.add('hidden')">x</button>`, "hidden"],
+      ['<option value="dark">Dark</option>', "dark"],
+      ['<div id="block"></div>', "block"],
+      ['<input name="block">', "block"],
+      [`<astro-island props='{"class":[0,"flex"]}'></astro-island>`, "flex"],
+      ['<div x-transition:enter="opacity-0"></div>', "opacity-0"],
+      ['<div content="hidden"></div>', "hidden"],
+    ]) {
+      assert.deepStrictEqual(
+        pageLeaks(`<!doctype html><html><body>${markup}</body></html>`),
+        [token],
+        markup,
+      );
+    }
+  });
+
+  it("ignores comments and reserved words in executable inline scripts", function () {
+    for (const script of [
+      "<script>// block\n</script>",
+      '<script type="module">/* flex */ init();</script>',
+      "<script>class A { static x = 1; }</script>",
+      "<script>// gr&#105;d\n</script>",
+    ]) {
+      assert.deepStrictEqual(
+        pageLeaks(`<!doctype html><html><body>${script}</body></html>`),
+        [],
+        script,
+      );
+    }
+    assert.deepStrictEqual(
+      pageLeaks(
+        '<!doctype html><html><body><script>el.classList.add("block")' +
+          "</script></body></html>",
+      ),
+      ["block"],
+    );
+  });
+
+  it("ignores comments and reserved words in a bundle", function () {
+    for (const code of [
+      "/*! flex */\nexport const a = 1;\n",
+      "const a = 1; // grid\n",
+      "class X { static y }\n",
+      "// gr&#105;d\nconst a = 1;\n",
+    ]) {
+      assert.deepStrictEqual(bundleLeaks(code), [], code);
+    }
+  });
+
+  it("still counts strings in comparisons, case labels, and style assignments", function () {
+    for (const [code, token] of [
+      ['if (el.className === "hidden") go();\n', "hidden"],
+      ['switch (c) { case "flex": go(); }\n', "flex"],
+      ['el.style.display = "block";\n', "block"],
+    ]) {
+      assert.deepStrictEqual(bundleLeaks(code), [token], code);
+    }
+  });
+});
+
+// R16 (KTD15) on the apply route: an identifier object key in a bundle, an
+// inline script, or a built HTML attribute value that parses as JavaScript
+// names a class the post-build passes cannot rename, so its token keeps its
+// original name everywhere. The whole-word scan misses these keys because
+// `:` is a class-name character.
+describe("object keys in built output (R16, KTD15)", function () {
+  const registry = registryOf(["hidden", "block", "flex", "p-4"]);
+  const CSS =
+    "@layer utilities{.hidden{display:none}.block{display:block}" +
+    ".flex{display:flex}.p-4{padding:1rem}}";
+
+  function leaks(result: TransformSourceResult | null): Array<string> {
+    if (result === null) return [];
+    return result.warnings
+      .filter(function (warning) {
+        return warning.kind === "reverse-leak";
+      })
+      .map(function (warning) {
+        return warning.token ?? "";
+      })
+      .sort();
+  }
+
+  function bundleLeaks(code: string): Array<string> {
+    return leaks(transformBundle({ code, id: "/out/assets/app.js", registry }));
+  }
+
+  function pageLeaks(code: string): Array<string> {
+    return leaks(transformModule({ code, id: "/out/index.html", registry }));
+  }
+
+  it("counts identifier, shorthand, and method keys in a bundle (AE11)", function () {
+    for (const code of [
+      "e({hidden:t});\n",
+      "const o={hidden};\n",
+      "const o={hidden(){return 1}};\n",
+      "const o={get hidden(){return 1}};\n",
+      'const o={"hidden":t};\n',
+    ]) {
+      assert.deepStrictEqual(bundleLeaks(code), ["hidden"], code);
+    }
+  });
+
+  it("never counts member access, binding patterns, class members, or destructuring assignments", function () {
+    for (const code of [
+      "a.hidden=1;\n",
+      "const {hidden:a}=b;\n",
+      "function f({hidden:a}){return a}\n",
+      "({hidden:a}=b);\n",
+      "for(const {hidden:a} of b);\n",
+      "[{hidden:a}]=b;\n",
+    ]) {
+      assert.deepStrictEqual(bundleLeaks(code), [], code);
+    }
+  });
+
+  it("keeps a bundle key's class original everywhere (AE11)", function () {
+    const dir = writeOutput({
+      "index.html": '<!doctype html><div class="hidden p-4">x</div>',
+      "app.css": CSS,
+      "app.js": "e({hidden:t});\n",
+    });
+    try {
+      const result = applyBuildOutput({
+        dir,
+        registry,
+        consolidationVerdicts: [],
+        consolidate: false,
+      });
+      assert.deepStrictEqual(result.keptOriginal, ["hidden"]);
+      const html = fs.readFileSync(path.join(dir, "index.html"), "utf8");
+      assert.ok(
+        html.includes(`class="hidden ${registry.nameFor("p-4")}"`),
+        html,
+      );
+      const css = fs.readFileSync(path.join(dir, "app.css"), "utf8");
+      assert.ok(css.includes(".hidden{display:none}"), css);
+      assert.strictEqual(
+        fs.readFileSync(path.join(dir, "app.js"), "utf8"),
+        "e({hidden:t});\n",
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("counts keys in an executable inline script", function () {
+    assert.deepStrictEqual(
+      pageLeaks(
+        '<!doctype html><html><body><p class="block">x</p>' +
+          "<script>init({block:!0})</script></body></html>",
+      ),
+      ["block"],
+    );
+    assert.deepStrictEqual(
+      pageLeaks(
+        "<!doctype html><html><body>" +
+          '<script type="text/x-template">{block:!0}</script>' +
+          "</body></html>",
+      ),
+      [],
+    );
+  });
+
+  it("counts keys in Alpine and Vue-in-DOM attribute values (AE11)", function () {
+    for (const [markup, token] of [
+      ['<div :class="{ hidden: !open }" class="hidden"></div>', "hidden"],
+      ['<div x-bind:class="{ block: on }" class="block"></div>', "block"],
+      ['<div x-data="{ flex: true }" class="flex"></div>', "flex"],
+      ['<div x-data="{ flex: a &amp;&amp; b }" class="flex"></div>', "flex"],
+    ]) {
+      assert.deepStrictEqual(
+        pageLeaks(`<!doctype html><html><body>${markup}</body></html>`),
+        [token],
+        markup,
+      );
+    }
+  });
+
+  it("ignores attribute values that never hold class names or do not parse", function () {
+    for (const markup of [
+      '<a title="{ flex: true }" href="/">x</a>',
+      '<div data-x="{ flex: true" class="p-4"></div>',
+      '<div x-init="a = 1; b({ flex: 1 })"></div>',
+    ]) {
+      assert.deepStrictEqual(
+        pageLeaks(`<!doctype html><html><body>${markup}</body></html>`),
+        [],
+        markup,
+      );
+    }
+  });
+
+  it("keeps Alpine-bound classes original through applyBuildOutput", function () {
+    const dir = writeOutput({
+      "index.html":
+        "<!doctype html><html><body>" +
+        '<div :class="{ hidden: !open }" class="hidden"></div>' +
+        '<div x-bind:class="{ block: on }" class="block"></div>' +
+        '<div x-data="{ flex: true }" class="flex p-4"></div>' +
+        "</body></html>",
+      "app.css": CSS,
+    });
+    try {
+      const result = applyBuildOutput({
+        dir,
+        registry,
+        consolidationVerdicts: [],
+        consolidate: false,
+      });
+      assert.deepStrictEqual(result.keptOriginal, ["block", "flex", "hidden"]);
+      const css = fs.readFileSync(path.join(dir, "app.css"), "utf8");
+      for (const token of ["hidden", "block", "flex"]) {
+        assert.ok(css.includes(`.${token}{`), token);
+      }
+      assert.ok(css.includes(`.${registry.nameFor("p-4")}{`), css);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("leaves a source key the build never ships to the output scan (runApply)", async function () {
+    // The pre-pass behind runApply counts no key outside a composition: the
+    // output scan counts the keys that ship, and a frontmatter object never
+    // reaches the built page.
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "minwind-keys-"));
+    function write(relative: string, text: string): void {
+      const file = path.join(root, relative);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, text);
+    }
+    try {
+      write(
+        path.join("src", "app.css"),
+        "@layer utilities {\n  .flex { display: flex; }\n}\n",
+      );
+      write(
+        path.join("src", "pages", "index.astro"),
+        '---\nconst layout = { flex: true };\n---\n<section class="flex">a</section>\n',
+      );
+      const compiled = await compileTailwindStylesheet({
+        cssEntry: path.join(root, "src", "app.css"),
+        root,
+      });
+      write(path.join("dist", "_astro", "index.css"), compiled.stylesheet);
+      write(
+        path.join("dist", "index.html"),
+        '<!DOCTYPE html><html><head><link rel="stylesheet"' +
+          ' href="/_astro/index.css"></head><body>' +
+          '<section class="flex">a</section></body></html>',
+      );
+      const outcome = await runApply({ dir: path.join(root, "dist"), root });
+      assert.ok(outcome.enabled);
+      assert.deepStrictEqual(outcome.result.keptOriginal, []);
+      const html = fs.readFileSync(
+        path.join(root, "dist", "index.html"),
+        "utf8",
+      );
+      assert.ok(
+        html.includes(`<section class="${hashClassName("flex")}">`),
+        html,
+      );
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a Module export map's Tailwind-named key original without the Modules engine", function () {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minwind-dual-out-"));
+    try {
+      const bundler = "Card-module__abc__flex";
+      fs.writeFileSync(
+        path.join(dir, "index.html"),
+        `<div class="flex ${bundler}">x</div>`,
+      );
+      fs.writeFileSync(path.join(dir, "app.css"), LAYERED_CSS);
+      fs.writeFileSync(path.join(dir, "card.css"), `.${bundler}{gap:4px}`);
+      fs.writeFileSync(
+        path.join(dir, "app.js"),
+        `const styles = { flex: "${bundler}" };\n`,
+      );
+      const result = applyBuildOutput({
+        dir,
+        registry: REGISTRY,
+        consolidationVerdicts: [],
+        consolidate: false,
+      });
+      assert.deepStrictEqual(result.keptOriginal, ["flex"]);
+      const html = fs.readFileSync(path.join(dir, "index.html"), "utf8");
+      assert.ok(html.includes(`class="flex ${bundler}"`), html);
+      const app = fs.readFileSync(path.join(dir, "app.css"), "utf8");
+      assert.ok(app.includes(".flex{display:flex}"), app);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// R17 (KTD16) on the apply route: a class selector inside a string of a
+// bundle or an executable inline script looks its class up by the original
+// name, so the class keeps that name everywhere. The whole-word scan misses
+// these because `.` is a class-name character.
+describe("selector strings in built output (R17, KTD16)", function () {
+  const registry = registryOf([
+    "hidden",
+    "block",
+    "flex",
+    "group",
+    "grid",
+    "md:flex",
+    "p-4",
+  ]);
+  const CSS =
+    "@layer utilities{.hidden{display:none}.block{display:block}" +
+    ".flex{display:flex}.grid{display:grid}.group{color:red}" +
+    ".p-4{padding:1rem}@media (width>=48rem){.md\\:flex{display:flex}}}";
+
+  function leaks(result: TransformSourceResult | null): Array<string> {
+    if (result === null) return [];
+    return result.warnings
+      .filter(function (warning) {
+        return warning.kind === "reverse-leak";
+      })
+      .map(function (warning) {
+        return warning.token ?? "";
+      })
+      .sort();
+  }
+
+  function bundleLeaks(code: string): Array<string> {
+    return leaks(transformBundle({ code, id: "/out/assets/app.js", registry }));
+  }
+
+  function pageLeaks(code: string): Array<string> {
+    return leaks(transformModule({ code, id: "/out/index.html", registry }));
+  }
+
+  it("counts a class selector in a bundle string (AE12)", function () {
+    for (const [code, tokens] of [
+      ['document.querySelector(".hidden");\n', ["hidden"]],
+      ['document.querySelectorAll("ul > .flex");\n', ["flex"]],
+      ['e.closest(".group");\n', ["group"]],
+      ['e.matches(".hidden, .block");\n', ["block", "hidden"]],
+      ["document.querySelector(`.${a} .flex`);\n", ["flex"]],
+      ['e.querySelector(":not(.hidden)");\n', ["hidden"]],
+      [
+        "e.querySelector('div.hidden > .flex:first-child');\n",
+        ["flex", "hidden"],
+      ],
+      ['e.querySelector(".hidden.block[data-x]");\n', ["block", "hidden"]],
+    ] as const) {
+      assert.deepStrictEqual(bundleLeaks(code), tokens, code);
+    }
+  });
+
+  it("decodes the string's JavaScript and CSS escapes", function () {
+    for (const [code, tokens] of [
+      ['e.querySelector(".md\\\\:flex");\n', ["md:flex"]],
+      ['e.querySelector("\\x2ehidden");\n', ["hidden"]],
+      ['e.querySelector(".\\\\68 idden");\n', ["hidden"]],
+      ['e.querySelector(".grid\\\\:x");\n', []],
+      ['e.querySelector("a\\\\.hidden");\n', []],
+    ] as const) {
+      assert.deepStrictEqual(bundleLeaks(code), tokens, code);
+    }
+  });
+
+  it("reports the selector's position in the bundle", function () {
+    const code = 'x();\ne.querySelector("ul > .md\\\\:flex");\n';
+    const result = transformBundle({
+      code,
+      id: "/out/assets/app.js",
+      registry,
+    });
+    assert.ok(result !== null);
+    assert.deepStrictEqual(
+      result.warnings.map(function (warning) {
+        return [warning.token, warning.line, warning.column];
+      }),
+      [["md:flex", 2, code.indexOf("md\\\\:flex") - code.indexOf("\n")]],
+    );
+  });
+
+  it("never counts property access, comments, or a regular expression (AE12)", function () {
+    for (const code of [
+      "el.hidden=!0;\n",
+      "a.flex();\n",
+      "// .grid\nx();\n",
+      "/* .grid */x();\n",
+      "const r=/\\.hidden/;\n",
+      'x("1.5rem");\n',
+    ]) {
+      assert.deepStrictEqual(bundleLeaks(code), [], code);
+    }
+  });
+
+  it("counts a class selector in an executable inline script", function () {
+    assert.deepStrictEqual(
+      pageLeaks(
+        '<!doctype html><html><body><p class="block">x</p>' +
+          '<script>document.querySelector(".block")</script></body></html>',
+      ),
+      ["block"],
+    );
+    assert.deepStrictEqual(
+      pageLeaks(
+        "<!doctype html><html><body>" +
+          '<script type="application/ld+json">{"a":".block"}</script>' +
+          "</body></html>",
+      ),
+      [],
+    );
+  });
+
+  it("keeps a selected class original everywhere, and still renames a class only property access names (AE12)", function () {
+    const dir = writeOutput({
+      "index.html":
+        "<!doctype html><html><body>" +
+        '<div class="hidden p-4">x</div><p class="block grid">y</p>' +
+        '<script>document.querySelector(".block").dataset.on=1</script>' +
+        "</body></html>",
+      "app.css": CSS,
+      "app.js": 'const e=document.querySelector(".hidden");e.grid=!0;\n',
+    });
+    try {
+      const result = applyBuildOutput({
+        dir,
+        registry,
+        consolidationVerdicts: [],
+        consolidate: false,
+      });
+      assert.deepStrictEqual(result.keptOriginal, ["block", "hidden"]);
+      const html = fs.readFileSync(path.join(dir, "index.html"), "utf8");
+      assert.ok(
+        html.includes(`class="hidden ${registry.nameFor("p-4")}"`),
+        html,
+      );
+      assert.ok(
+        html.includes(`class="block ${registry.nameFor("grid")}"`),
+        html,
+      );
+      assert.ok(html.includes('querySelector(".block")'), html);
+      const css = fs.readFileSync(path.join(dir, "app.css"), "utf8");
+      assert.ok(css.includes(".hidden{display:none}"), css);
+      assert.ok(css.includes(".block{display:block}"), css);
+      assert.ok(css.includes(`.${registry.nameFor("grid")}{`), css);
+      assert.strictEqual(
+        fs.readFileSync(path.join(dir, "app.js"), "utf8"),
+        'const e=document.querySelector(".hidden");e.grid=!0;\n',
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("trusted vendor occurrences (R10, KTD10)", function () {
+  const registry = registryOf(["block", "absolute", "relative", "hidden"]);
+  const CSS =
+    "@layer utilities{.block{display:block}.absolute{position:absolute}" +
+    ".relative{position:relative}.hidden{display:none}}";
+  const PAGE =
+    '<!doctype html><div class="relative">' +
+    '<span class="absolute block hidden">x</span></div>';
+  const MOTION =
+    "/site/node_modules/.pnpm/fake-motion@1.0.0/node_modules/fake-motion/index.js";
+  const PROJECT = "/site/src/scripts/motion.ts";
+  const SHOW = 'function s(e){e.style.display="block"}';
+
+  interface Part {
+    source: string;
+    code: string;
+    // Rewrites the part the way a minifier does: [original, replacement].
+    edit?: [string, string];
+  }
+
+  interface Chunk {
+    code: string;
+    map: SourceMapLike | null;
+    // The bytes on disk, when a later hook changed them after recording.
+    written?: string;
+  }
+
+  // Module code concatenated as a bundler does, with a map at word
+  // boundaries, the resolution Rolldown's minified chunks have. Appended
+  // and prepended text has no mapping, as text a render hook adds.
+  function chunkOf(
+    parts: Array<Part>,
+    added: { prepend?: string; append?: string } = {},
+  ): Chunk {
+    const bundle = new Bundle({ separator: "" });
+    for (const part of parts) {
+      const content = new MagicString(part.code);
+      if (part.edit !== undefined) {
+        const at = part.code.indexOf(part.edit[0]);
+        assert.ok(at !== -1, part.edit[0]);
+        content.overwrite(at, at + part.edit[0].length, part.edit[1]);
+      }
+      bundle.addSource({ filename: part.source, content });
+    }
+    if (added.prepend !== undefined) bundle.prepend(added.prepend);
+    if (added.append !== undefined) bundle.append(added.append);
+    const map = bundle.generateMap({ hires: "boundary", includeContent: true });
+    return {
+      code: bundle.toString(),
+      map: {
+        sources: map.sources,
+        sourcesContent: map.sourcesContent,
+        mappings: map.mappings,
+      },
+    };
+  }
+
+  function vendorChunk(source: string, code: string = SHOW): Chunk {
+    return chunkOf([{ source, code }]);
+  }
+
+  // Applies the output with each chunk recorded, unless trust is undefined.
+  function applyChunks(
+    chunks: Record<string, Chunk>,
+    trust: VendorTrust | undefined,
+    extra: Record<string, string> = {},
+  ): { result: ApplyResult; files: Record<string, string> } {
+    const files: Record<string, string> = {
+      "index.html": PAGE,
+      "app.css": CSS,
+      ...extra,
+    };
+    for (const [name, chunk] of Object.entries(chunks)) {
+      files[name] = chunk.written ?? chunk.code;
+    }
+    const dir = writeOutput(files);
+    try {
+      const result = applyBuildOutput({
+        dir,
+        registry,
+        consolidationVerdicts: [],
+        consolidate: false,
+        vendorProvenance:
+          trust === undefined
+            ? undefined
+            : {
+                trust,
+                chunks: Object.entries(chunks).map(function ([name, chunk]) {
+                  return {
+                    file: path.join(dir, name),
+                    code: chunk.code,
+                    map: chunk.map,
+                  };
+                }),
+              },
+      });
+      return { result, files: readTree(dir) };
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  function renamed(token: string): string {
+    const name = registry.nameFor(token);
+    assert.ok(name !== undefined, token);
+    return name;
+  }
+
+  it("renames block when its one JS occurrence maps to a trusted vendor (AE9)", function () {
+    // Rolldown's minifier requotes string literals with backticks.
+    const chunk = chunkOf([
+      { source: MOTION, code: SHOW, edit: ['"block"', "`block`"] },
+      { source: PROJECT, code: "s(document.body);" },
+    ]);
+    const trusted = applyChunks({ "motion.js": chunk }, true);
+    assert.deepStrictEqual(trusted.result.keptOriginal, []);
+    const page = trusted.files["index.html"];
+    assert.ok(page.includes(renamed("block")), page);
+    const css = trusted.files["app.css"];
+    assert.ok(css.includes(`.${renamed("block")}{display:block}`), css);
+    // The inline style value keeps its bytes.
+    assert.strictEqual(trusted.files["motion.js"], chunk.code);
+    const untrusted = applyChunks({ "motion.js": chunk }, undefined);
+    assert.deepStrictEqual(untrusted.result.keptOriginal, ["block"]);
+    assert.ok(untrusted.files["app.css"].includes(".block{display:block}"));
+  });
+
+  it("keeps relative original when a project module in the chunk mentions it (AE9)", function () {
+    const chunk = chunkOf([
+      { source: MOTION, code: SHOW },
+      {
+        source: PROJECT,
+        code: 'if(getComputedStyle(t).position==="relative")s(t);',
+      },
+    ]);
+    assert.deepStrictEqual(
+      applyChunks({ "motion.js": chunk }, true).result.keptOriginal,
+      ["relative"],
+    );
+  });
+
+  it("counts an occurrence the attribution does not cover", function () {
+    const folded = chunkOf([
+      { source: MOTION, code: SHOW },
+      {
+        source: PROJECT,
+        code: 't.classList.add("hid"+"den");',
+        edit: ['"hid"+"den"', '"hidden"'],
+      },
+    ]);
+    // Render-hook text after vendor code on the same line has no mapping
+    // of its own, so the last vendor segment would otherwise cover it.
+    const appended = chunkOf([{ source: MOTION, code: SHOW }], {
+      append: ';document.body.classList.add("hidden");',
+    });
+    const banner = chunkOf([{ source: MOTION, code: SHOW }], {
+      prepend: 'const c="hidden";\n',
+    });
+    for (const chunk of [folded, appended, banner]) {
+      assert.deepStrictEqual(
+        applyChunks({ "motion.js": chunk }, true).result.keptOriginal,
+        ["hidden"],
+        chunk.code,
+      );
+    }
+  });
+
+  it("scans a chunk without usable attribution whole", function () {
+    const chunk = vendorChunk(MOTION);
+    const map = chunk.map;
+    assert.ok(map !== null);
+    for (const unusable of [
+      { ...chunk, map: null },
+      { ...chunk, map: { ...map, sourcesContent: undefined } },
+      { ...chunk, written: `${chunk.code}\n` },
+      { ...chunk, map: { ...map, mappings: "" } },
+      { ...chunk, map: { ...map, mappings: "!!!" } },
+      // Line breaks a parser and a map generator can count differently,
+      // in the chunk or in a source.
+      chunkOf([{ source: MOTION, code: SHOW }], { append: "/* */" }),
+      { ...chunk, map: { ...map, sourcesContent: [`${SHOW}\r`] } },
+    ]) {
+      assert.deepStrictEqual(
+        applyChunks({ "motion.js": unusable }, true).result.keptOriginal,
+        ["block"],
+        JSON.stringify(unusable),
+      );
+    }
+  });
+
+  it("adds no leaks for a vendor-only chunk and renames its class markup", function () {
+    const chunk = vendorChunk(
+      MOTION,
+      `e.innerHTML='<i class="block"></i>';${SHOW}`,
+    );
+    const { result, files } = applyChunks({ "motion.js": chunk }, true);
+    assert.deepStrictEqual(result.keptOriginal, []);
+    assert.strictEqual(
+      files["motion.js"],
+      `e.innerHTML='<i class="${renamed("block")}"></i>';${SHOW}`,
+    );
+  });
+
+  it("scans an unrecorded JS file and an inline script as today", function () {
+    const recorded = { "motion.js": vendorChunk(MOTION) };
+    assert.deepStrictEqual(
+      applyChunks(recorded, true, { "copied.js": SHOW }).result.keptOriginal,
+      ["block"],
+    );
+    assert.deepStrictEqual(
+      applyChunks(recorded, true, {
+        "index.html": `${PAGE}<script>${SHOW}</script>`,
+      }).result.keptOriginal,
+      ["block"],
+    );
+  });
+
+  it("classifies sources by path", function () {
+    for (const [source, vendor] of [
+      [MOTION, true],
+      ["\0vite/preload-helper.js", false],
+      ["\0/site/node_modules/fake-motion/index.js", true],
+      ["/site/node_modules/fake-motion/index.js?v=1a2b", true],
+      ["C:\\site\\node_modules\\fake-motion\\index.js", true],
+      ["../../node_modules/fake-motion/index.js", true],
+      ["node_modules/fake-motion/index.js", true],
+      [PROJECT, false],
+      ["/site/src/node_modules.js", false],
+      ["/site/src/vendor.js?node_modules/x", false],
+    ] as const) {
+      assert.deepStrictEqual(
+        applyChunks({ "motion.js": vendorChunk(source) }, true).result
+          .keptOriginal,
+        vendor ? [] : ["block"],
+        JSON.stringify(source),
+      );
+    }
+  });
+
+  it("trusts only the listed packages, scoped names by two segments", function () {
+    const trust = ["fake-motion", "@scope/tween"];
+    for (const [source, trusted] of [
+      ["/site/node_modules/fake-motion/index.js", true],
+      ["/site/node_modules/other-lib/index.js", false],
+      ["/site/node_modules/fake-motion-extra/index.js", false],
+      ["/site/node_modules/other-lib/node_modules/fake-motion/a.js", true],
+      ["/site/node_modules/fake-motion/node_modules/other-lib/a.js", false],
+      ["/site/node_modules/@scope/tween/dist/index.js", true],
+      ["/site/node_modules/@scope/other/index.js", false],
+      ["/site/node_modules/@scope/index.js", false],
+    ] as const) {
+      assert.deepStrictEqual(
+        applyChunks({ "motion.js": vendorChunk(source) }, trust).result
+          .keptOriginal,
+        trusted ? [] : ["block"],
+        source,
+      );
+    }
+  });
+
+  it("exempts a trusted vendor's identifier key and counts a project key (KTD15)", function () {
+    const vendorKey = { source: MOTION, code: "const o={hidden:!0};" };
+    assert.deepStrictEqual(
+      applyChunks({ "motion.js": chunkOf([vendorKey]) }, true).result
+        .keptOriginal,
+      [],
+    );
+    assert.deepStrictEqual(
+      applyChunks(
+        {
+          "motion.js": chunkOf([
+            vendorKey,
+            { source: PROJECT, code: "f({hidden:!0});" },
+          ]),
+        },
+        true,
+      ).result.keptOriginal,
+      ["hidden"],
+    );
+  });
+
+  it("reports no reverse-leak warnings at vendor occurrences", function () {
+    const { result } = applyChunks({ "motion.js": vendorChunk(MOTION) }, true);
+    assert.deepStrictEqual(result.keptOriginal, []);
+    assert.deepStrictEqual(
+      result.warnings.filter(function (warning) {
+        return warning.kind === "reverse-leak";
+      }),
+      [],
+    );
+  });
+
+  it("lists the renamed classes that trusted vendor code mentions", function () {
+    const chunk = chunkOf([
+      {
+        source: MOTION,
+        code: 'e.style.display="block";e.style.position="absolute";e.dataset.p="relative";',
+      },
+      { source: PROJECT, code: 'if(p==="relative")g();' },
+    ]);
+    const { result } = applyChunks({ "motion.js": chunk }, true);
+    assert.deepStrictEqual(result.keptOriginal, ["relative"]);
+    assert.deepStrictEqual(result.vendorMentions, ["absolute", "block"]);
+    const quiet = chunkOf([{ source: MOTION, code: "e.style.opacity=1;" }]);
+    assert.deepStrictEqual(
+      applyChunks({ "motion.js": quiet }, true).result.vendorMentions,
+      [],
+    );
+  });
+});
+
+// KTD15 with both engines: the object-key leak scan skips only an object the
+// Modules remap claims in full, every value a name the module emitted. Any
+// other object whose keys happen to be one module's locals is a runtime class
+// list as far as the scan can tell, so its keys keep their classes original.
+describe("Module export maps the remap does not claim (KTD15)", function () {
+  const registry = registryOf(["hidden", "p-4"]);
+  const HIDDEN = "Panel-module__abc__hidden";
+  const PANEL = "Panel-module__abc__panel";
+
+  function applyBoth(js: string): { result: ApplyResult; dir: string } {
+    const site = fs.mkdtempSync(path.join(os.tmpdir(), "minwind-dual-root-"));
+    try {
+      fs.mkdirSync(path.join(site, "src"));
+      fs.writeFileSync(
+        path.join(site, "src", "Panel.module.css"),
+        ".hidden { opacity: 0 }\n.panel { color: red }",
+      );
+      const inventory = collectModuleInventory(site);
+      const dir = writeOutput({
+        "index.html": `<!doctype html><div class="hidden p-4 ${PANEL}">x</div>`,
+        "app.css": "@layer utilities{.hidden{display:none}.p-4{padding:1rem}}",
+        "panel.css": `.${HIDDEN}{opacity:0}.${PANEL}{color:red}`,
+        "app.js": js,
+      });
+      const result = applyBuildOutput({
+        dir,
+        registry,
+        consolidationVerdicts: [],
+        consolidate: false,
+        modules: {
+          root: site,
+          inventory,
+          registry: createModuleNameRegistry(inventory),
+        },
+      });
+      return { result, dir };
+    } finally {
+      fs.rmSync(site, { recursive: true, force: true });
+    }
+  }
+
+  it("keeps a key original when the remap claims none or only some of the object's values", function () {
+    for (const states of [
+      '{hidden:""}',
+      '{hidden:" "}',
+      '{hidden:"0"}',
+      `{hidden:"",panel:"${PANEL}"}`,
+    ]) {
+      const js = `const states=${states};target.classList.add(...Object.keys(states));\n`;
+      const { result, dir } = applyBoth(js);
+      try {
+        assert.deepStrictEqual(result.keptOriginal, ["hidden"], states);
+        const html = fs.readFileSync(path.join(dir, "index.html"), "utf8");
+        assert.ok(
+          html.includes(`class="hidden ${registry.nameFor("p-4")} `),
+          html,
+        );
+        const css = fs.readFileSync(path.join(dir, "app.css"), "utf8");
+        assert.ok(css.includes(".hidden{display:none}"), css);
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it("still skips a map whose every value the remap claims", function () {
+    const { result, dir } = applyBoth(
+      `const styles={hidden:"${HIDDEN}",panel:"${PANEL}"};\n`,
+    );
+    try {
+      assert.deepStrictEqual(result.keptOriginal, []);
+      const css = fs.readFileSync(path.join(dir, "app.css"), "utf8");
+      assert.ok(
+        css.includes(`.${registry.nameFor("hidden")}{display:none}`),
+        css,
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("inline-style tripwire spellings CSS matches case-insensitively (R11, KTD12)", function () {
+  // Runs apply on index.html carrying `css` in a <style> block. Returns the
+  // error's `page: reference` lines, or null when apply passed and left the
+  // block untouched.
+  async function tripwireLines(css: string): Promise<Array<string> | null> {
+    const dir = await copyApplySiteOut();
+    cleanArtifacts();
+    try {
+      addInlineStyle(dir, "index.html", css);
+      try {
+        await runApply({ dir, root: APPLY_SITE });
+      } catch (error) {
+        assert.ok(error instanceof Error);
+        assert.ok(!fs.existsSync(artifactsDir()));
+        const prefix = `  ${path.join(dir, "index.html")}: `;
+        return error.message
+          .split("\n")
+          .filter(function (line) {
+            return line.startsWith(prefix);
+          })
+          .map(function (line) {
+            return line.slice(prefix.length);
+          });
+      }
+      assert.ok(readTree(dir)["index.html"].includes(`<style>${css}</style>`));
+      return null;
+    } finally {
+      cleanArtifacts();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  it("fails naming flex for the i flag and uppercase or escaped class names, and p-4 for @SCOPE", async function () {
+    const selectors = [
+      '[class~="FLEX"i]',
+      '[class*="FLE"I]',
+      '[CLASS~="flex"]',
+      '[cl\\61ss~="flex"]',
+      '[*|class~="flex"]',
+    ];
+    const css =
+      selectors
+        .map(function (selector) {
+          return `${selector}{gap:1rem}`;
+        })
+        .join("") + "@SCOPE (.p-4){li{color:red}}";
+    const lines = await tripwireLines(css);
+    assert.ok(lines !== null, "apply must fail");
+    for (const reference of [
+      ...selectors.map(function (selector) {
+        return `.flex in ${selector}`;
+      }),
+      ".p-4",
+    ]) {
+      assert.ok(lines.includes(reference), `${reference} not in ${lines}`);
+    }
+  });
+
+  it("passes selectors CSS matches case-sensitively or never against class", async function () {
+    assert.strictEqual(
+      await tripwireLines(
+        '[class~="FLEX"]{gap:1rem}' +
+          '[class~="FLEX"s]{gap:1rem}' +
+          '[class~="zzz"i]{gap:1rem}' +
+          '[svg|class~="flex"]{gap:1rem}',
+      ),
+      null,
+    );
+  });
+});
+// R17 (KTD16): a tagged template hands its tag the raw text too,
+// and String.raw keeps the backslash that makes `:` part of the CSS class
+// name, so String.raw`.md\:flex` selects md:flex.
+describe("tagged-template selector strings in built output (R17, KTD16)", function () {
+  const registry = registryOf(["hidden", "md", "md:flex", "flex"]);
+
+  function leaks(result: TransformSourceResult | null): Array<string> {
+    if (result === null) return [];
+    return result.warnings
+      .filter(function (warning) {
+        return warning.kind === "reverse-leak";
+      })
+      .map(function (warning) {
+        return warning.token ?? "";
+      })
+      .sort();
+  }
+
+  it("counts the raw text of a String.raw selector in a bundle", function () {
+    for (const [code, tokens] of [
+      ["document.querySelector(String.raw`.md\\:flex`);\n", ["md", "md:flex"]],
+      [
+        "document.querySelector(String.raw`ul > .md\\:flex ${x}`);\n",
+        ["md", "md:flex"],
+      ],
+      ["e.querySelector(String.raw`${x} .md\\:flex`);\n", ["md", "md:flex"]],
+      ["e.querySelector(String.raw`.hidden`);\n", ["hidden"]],
+      ["e.querySelector(`.md\\:flex`);\n", ["md"]],
+    ] as const) {
+      const result = transformBundle({
+        code,
+        id: "/out/assets/app.js",
+        registry,
+      });
+      assert.deepStrictEqual(leaks(result), tokens, code);
+    }
+  });
+
+  it("reports the raw selector at the class name", function () {
+    const code = "x();\ne.querySelector(String.raw`.md\\:flex`);\n";
+    const result = transformBundle({
+      code,
+      id: "/out/assets/app.js",
+      registry: registryOf(["md:flex"]),
+    });
+    assert.ok(result !== null);
+    assert.deepStrictEqual(
+      result.warnings.map(function (warning) {
+        return [warning.token, warning.line, warning.column];
+      }),
+      [["md:flex", 2, code.indexOf("md\\:flex") - code.indexOf("\n")]],
+    );
+  });
+
+  it("counts a String.raw selector in an executable inline script", function () {
+    assert.deepStrictEqual(
+      leaks(
+        transformModule({
+          code:
+            '<!doctype html><html><body><div class="md:flex">x</div>' +
+            "<script>document.querySelector(String.raw`.md\\:flex`)</script>" +
+            "</body></html>",
+          id: "/out/index.html",
+          registry: registryOf(["md:flex"]),
+        }),
+      ),
+      ["md:flex"],
+    );
+  });
+
+  it("keeps a String.raw-selected class original everywhere", function () {
+    const dir = writeOutput({
+      "index.html":
+        '<!doctype html><html><body><div class="md:flex hidden">x</div>' +
+        "</body></html>",
+      "app.css":
+        "@layer utilities{.hidden{display:none}" +
+        "@media (width>=48rem){.md\\:flex{display:flex}}}",
+      "app.js": "document.querySelector(String.raw`.md\\:flex`).x=1;\n",
+    });
+    try {
+      const result = applyBuildOutput({
+        dir,
+        registry: registryOf(["hidden", "md:flex"]),
+        consolidationVerdicts: [],
+        consolidate: false,
+      });
+      assert.deepStrictEqual(result.keptOriginal, ["md:flex"]);
+      const css = fs.readFileSync(path.join(dir, "app.css"), "utf8");
+      assert.ok(css.includes(".md\\:flex{display:flex}"), css);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// R8 and R17 (KTD16): an inline event handler is a script body, so
+// a class selector in one of its strings selects that class. The handler
+// is read after HTML decoding, and each occurrence reports at its bytes in
+// the page.
+describe("selector strings in inline event handlers (R8, R17, KTD16)", function () {
+  const registry = registryOf(["hidden", "md:flex", "flex", "block"]);
+
+  function pageWarnings(code: string): Array<[string, number]> {
+    const result = transformModule({ code, id: "/out/index.html", registry });
+    if (result === null) return [];
+    return result.warnings
+      .filter(function (warning) {
+        return warning.kind === "reverse-leak";
+      })
+      .map(function (warning): [string, number] {
+        return [warning.token ?? "", warning.column];
+      })
+      .sort(function (a, b) {
+        return a[1] - b[1];
+      });
+  }
+
+  it("counts a class selector in an onclick handler", function () {
+    const code =
+      "<!doctype html><html><body>" +
+      `<button onclick="document.querySelector('.hidden').remove()"></button>` +
+      '<div class="hidden"></div></body></html>';
+    assert.deepStrictEqual(pageWarnings(code), [
+      ["hidden", code.indexOf("hidden") + 1],
+    ]);
+  });
+
+  it("reads a handler body with statements, after HTML decoding", function () {
+    for (const [handler, token, raw] of [
+      [
+        "document.querySelector('.block').hidden = true; return false",
+        "block",
+        "block",
+      ],
+      ["q(&quot;.flex&quot;)", "flex", "flex"],
+      ["q('.&#104;idden')", "hidden", "&#104;idden"],
+      ["q(&quot;.md\\\\:flex&quot;)", "md:flex", "md\\\\:flex"],
+    ] as const) {
+      const code =
+        "<!doctype html><html><body>" +
+        `<button onclick="${handler}">x</button></body></html>`;
+      assert.deepStrictEqual(
+        pageWarnings(code),
+        [[token, code.indexOf(raw) + 1]],
+        handler,
+      );
+    }
+  });
+
+  it("keeps a class an inline handler selects original everywhere", function () {
+    const dir = writeOutput({
+      "index.html":
+        "<!doctype html><html><body>" +
+        `<button onclick="document.querySelector('.hidden').remove()">x</button>` +
+        '<div class="hidden block">y</div></body></html>',
+      "app.css": "@layer utilities{.hidden{display:none}.block{display:block}}",
+    });
+    try {
+      const result = applyBuildOutput({
+        dir,
+        registry: registryOf(["hidden", "block"]),
+        consolidationVerdicts: [],
+        consolidate: false,
+      });
+      assert.deepStrictEqual(result.keptOriginal, ["hidden"]);
+      const html = fs.readFileSync(path.join(dir, "index.html"), "utf8");
+      assert.ok(html.includes("querySelector('.hidden')"), html);
+      assert.ok(html.includes('class="hidden '), html);
+      const css = fs.readFileSync(path.join(dir, "app.css"), "utf8");
+      assert.ok(css.includes(".hidden{display:none}"), css);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// R8 (KTD8): an <option> without a value attribute exposes its
+// text as option.value and select.value, and a <textarea> exposes its text
+// as its value, so scripts read both back. Their text stays in the leak
+// scan; the text of an option with a value attribute is still masked.
+describe("form-value text in built HTML (R8, KTD8)", function () {
+  const registry = registryOf(["hidden", "flex", "dark"]);
+
+  function pageLeaks(code: string): Array<string> {
+    const result = transformModule({ code, id: "/out/index.html", registry });
+    if (result === null) return [];
+    return result.warnings
+      .filter(function (warning) {
+        return warning.kind === "reverse-leak";
+      })
+      .map(function (warning) {
+        return warning.token ?? "";
+      })
+      .sort();
+  }
+
+  it("scans the text of a value-less <option> and of a <textarea>", function () {
+    for (const [markup, tokens] of [
+      ["<select><option>hidden</option></select>", ["hidden"]],
+      ["<select><option> flex </option><option>x</option></select>", ["flex"]],
+      ["<datalist><option>hidden</option></datalist>", ["hidden"]],
+      ["<textarea>flex</textarea>", ["flex"]],
+      ['<select><option value="x">hidden</option></select>', []],
+      ['<select><option value="">flex</option></select>', []],
+      ['<select><option value="dark">Dark</option></select>', ["dark"]],
+    ] as const) {
+      assert.deepStrictEqual(
+        pageLeaks(`<!doctype html><html><body>${markup}</body></html>`),
+        tokens,
+        markup,
+      );
+    }
+  });
+
+  it("keeps a class a select's implicit value toggles original everywhere", function () {
+    const dir = writeOutput({
+      "index.html":
+        "<!doctype html><html><body>" +
+        '<select id="mode"><option>hidden</option><option>x</option></select>' +
+        '<div id="t" class="hidden flex">y</div>' +
+        "<script>t.classList.toggle(mode.value)</script></body></html>",
+      "app.css": "@layer utilities{.hidden{display:none}.flex{display:flex}}",
+    });
+    try {
+      const result = applyBuildOutput({
+        dir,
+        registry: registryOf(["hidden", "flex"]),
+        consolidationVerdicts: [],
+        consolidate: false,
+      });
+      assert.deepStrictEqual(result.keptOriginal, ["hidden"]);
+      const html = fs.readFileSync(path.join(dir, "index.html"), "utf8");
+      assert.ok(html.includes('class="hidden '), html);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// R16 and R17 (KTD15, KTD16): markup held in a <script> of a type
+// that is neither JavaScript nor JSON, such as Vue's text/x-template, is
+// compiled at runtime, so its attribute values get the object-key and
+// selector scans of page markup. Executable scripts and JSON keep theirs.
+describe("markup in non-JavaScript script types (R16, R17, KTD15, KTD16)", function () {
+  const registry = registryOf(["hidden", "flex", "block"]);
+
+  function pageLeaks(code: string): Array<string> {
+    const result = transformModule({ code, id: "/out/index.html", registry });
+    if (result === null) return [];
+    return result.warnings
+      .filter(function (warning) {
+        return warning.kind === "reverse-leak";
+      })
+      .map(function (warning) {
+        return warning.token ?? "";
+      })
+      .sort();
+  }
+
+  function page(script: string): string {
+    return `<!doctype html><html><body>${script}<div class="hidden flex"></div></body></html>`;
+  }
+
+  it("counts object keys in template markup", function () {
+    for (const type of [
+      "text/x-template",
+      "text/template",
+      "text/html",
+      "text/x-handlebars-template",
+    ]) {
+      assert.deepStrictEqual(
+        pageLeaks(
+          page(
+            `<script type="${type}" id="t">` +
+              '<div :class="{ hidden: !open }"><template>' +
+              "<p x-bind:class=\"{ 'x': a, flex: b }\"></p>" +
+              "</template></div></script>",
+          ),
+        ),
+        ["flex", "hidden"],
+        type,
+      );
+    }
+  });
+
+  it("reports a template key at its bytes in the page", function () {
+    const code = page(
+      '<script type="text/x-template"><i :class="{ hidden: a }"></i></script>',
+    );
+    const result = transformModule({ code, id: "/out/index.html", registry });
+    assert.ok(result !== null);
+    assert.deepStrictEqual(
+      result.warnings.map(function (warning) {
+        return [warning.token, warning.column];
+      }),
+      [["hidden", code.indexOf("hidden") + 1]],
+    );
+  });
+
+  it("counts a class selector in a template's inline handler", function () {
+    assert.deepStrictEqual(
+      pageLeaks(
+        page(
+          '<script type="text/x-template">' +
+            `<button onclick="document.querySelector('.block').remove()">x</button>` +
+            "</script>",
+        ),
+      ),
+      ["block"],
+    );
+  });
+
+  it("leaves executable scripts and JSON to their own scans", function () {
+    for (const script of [
+      `<script>const t = "<div :class='{ hidden: a }'></div>";</script>`,
+      `<script type="module">const t = "<i :class='{ hidden: a }'></i>";</script>`,
+      `<script type="application/json">"<div :class='{ hidden: a }'></div>"</script>`,
+      `<script type="importmap">{"x":"<div :class='{ hidden: a }'></div>"}</script>`,
+      `<script type="application/ld+json">{"x":"<i :class='{ hidden: a }'></i>"}</script>`,
+    ]) {
+      assert.deepStrictEqual(pageLeaks(page(script)), [], script);
+    }
+  });
+});
+
+// R17 (KTD16): the attributes Alpine and htmx run as JavaScript hold
+// selector strings as an inline handler does, so a class selector in one
+// of their strings counts, read decoded and reported at its page bytes.
+// Every other attribute is never parsed for selectors.
+describe("selector strings in framework JavaScript attributes (R17, KTD16)", function () {
+  const registry = registryOf(["hidden", "block"]);
+
+  function pageWarnings(code: string): Array<[string, number]> {
+    const result = transformModule({ code, id: "/out/index.html", registry });
+    if (result === null) return [];
+    return result.warnings
+      .filter(function (warning) {
+        return warning.kind === "reverse-leak";
+      })
+      .map(function (warning): [string, number] {
+        return [warning.token ?? "", warning.column];
+      });
+  }
+
+  function page(attribute: string): string {
+    return (
+      "<!doctype html><html><body>" +
+      `<div ${attribute}>x</div><p class="hidden block">y</p>` +
+      "</body></html>"
+    );
+  }
+
+  it("counts a class selector in Alpine and htmx JavaScript attributes", function () {
+    for (const attribute of [
+      `@click="document.querySelector('.hidden').remove()"`,
+      `x-on:click.prevent="$el.closest('.hidden').remove()"`,
+      `x-init="$el.querySelector('.hidden').focus()"`,
+      `x-effect="open && $el.querySelector('.hidden')"`,
+      `x-data="{ init() { this.$el.querySelector('.hidden') } }"`,
+      `x-bind:data-on="!!$el.querySelector('.hidden')"`,
+      `:data-on="!!document.querySelector('.hidden')"`,
+      `hx-on:click="htmx.find('.hidden')"`,
+      `hx-on::after-request="htmx.find('.hidden')"`,
+      `hx-on--after-request="htmx.find('.hidden')"`,
+    ]) {
+      const code = page(attribute);
+      assert.deepStrictEqual(
+        pageWarnings(code),
+        [["hidden", code.indexOf("hidden") + 1]],
+        attribute,
+      );
+    }
+  });
+
+  it("reads the value after HTML decoding, reporting the raw bytes", function () {
+    const code = page('@click="q(&quot;.&#104;idden&quot;)"');
+    assert.deepStrictEqual(pageWarnings(code), [
+      ["hidden", code.indexOf("&#104;idden") + 1],
+    ]);
+  });
+
+  it("never parses another attribute for selectors", function () {
+    for (const attribute of [
+      `data-x="document.querySelector('.hidden')"`,
+      'data-bs-target=".hidden"',
+      `x-text="'.hidden'"`,
+      'href="/a.hidden"',
+      `id="'.block'"`,
+    ]) {
+      assert.deepStrictEqual(pageWarnings(page(attribute)), [], attribute);
     }
   });
 });

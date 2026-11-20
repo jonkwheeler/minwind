@@ -8,6 +8,9 @@ importers:
 
   .:
     dependencies:
+      '@jridgewell/sourcemap-codec':
+        specifier: ^1
+        version: 1.5.5
       '@tailwindcss/node':
         specifier: ^4.1.18
         version: 4.3.3
@@ -17,6 +20,9 @@ importers:
       css-tree:
         specifier: ^3.2.1
         version: 3.2.1
+      entities:
+        specifier: ^8
+        version: 8.0.0
       magic-string:
         specifier: ^1.1.0
         version: 1.1.0

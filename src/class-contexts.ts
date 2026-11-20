@@ -1,4 +1,5 @@
 import * as ts from "typescript";
+import { selectorClassReferences } from "./js-mask.js";
 
 // Shared KTD4 class-context detection. One AST walk classifies every
 // class-position node so the U2 pre-pass scan (which tokens exist) and the U3
@@ -35,13 +36,22 @@ export type ClassContextKind = RenameContextKind | RuntimeContextKind;
 // must verify it matches the raw bytes. shorthand marks a classList key like
 // `{ flex }`, where the identifier is both the class name and the value
 // binding. quoted is false exactly for those identifier keys, whose span
-// carries no surrounding quote bytes.
+// carries no surrounding quote bytes. htmlEncoded marks a class attribute of
+// built HTML, whose character references the DOM decodes (KTD6). objectKey
+// marks an identifier key of a JavaScript object literal, whose renamed name
+// is quoted when it is not an identifier (KTD15); a Svelte class: directive
+// name is unquoted too, but never flagged. attributeQuote is the quote of the
+// HTML attribute value holding the expression, "" for an unquoted value: a
+// quoted key there takes the other quote.
 export interface LiteralOccurrence {
   text: string;
   start: number;
   end: number;
   shorthand: boolean;
   quoted: boolean;
+  htmlEncoded?: boolean;
+  objectKey?: boolean;
+  attributeQuote?: string;
 }
 
 // Rename groups bracket the literals that form one logical class list: one
@@ -69,6 +79,14 @@ export interface ClassContextVisitor {
     literal: LiteralOccurrence,
     kind: RuntimeContextKind,
   ) => void;
+  // Every identifier key of every object literal in the parse, whether or
+  // not a class position consumed it (KTD15). Walks that leave it unset skip
+  // the collection.
+  objectLiteralKey?: (key: LiteralOccurrence) => void;
+  // Every class selector inside a string or template part of the parse,
+  // such as ".hidden" in querySelector(".hidden") (KTD16). Walks that leave
+  // it unset skip the scan.
+  selectorReference?: (reference: LiteralOccurrence) => void;
 }
 
 // HTML5 ASCII whitespace only — exactly the set the DOM classList splits on
@@ -120,12 +138,121 @@ export function parseSourceModule(
   );
 }
 
-export function walkClassContexts(
+export interface WalkClassContextsOptions {
+  // Astro expression markup: a namespaced class:list attribute gets cn()
+  // semantics, as the template walker gives it outside expressions. Off,
+  // namespaced attribute names are never class contexts.
+  astroClassList?: boolean;
+  // The parse is one expression in class position that the walker cannot
+  // prove, such as a Svelte or Astro class={...} run parsed alone: its
+  // string literals, template fragments, and object keys poison.
+  unprovable?: boolean;
+}
+
+// The identifier naming an object literal property, a shorthand, a method,
+// or an accessor; undefined for string, numeric, and computed names and for
+// spreads.
+function identifierKey(
+  property: ts.ObjectLiteralElementLike,
+): ts.Identifier | undefined {
+  if (ts.isShorthandPropertyAssignment(property)) return property.name;
+  if (
+    ts.isPropertyAssignment(property) ||
+    ts.isMethodDeclaration(property) ||
+    ts.isGetAccessorDeclaration(property) ||
+    ts.isSetAccessorDeclaration(property)
+  ) {
+    return ts.isIdentifier(property.name) ? property.name : undefined;
+  }
+  return undefined;
+}
+
+// An object literal that is the target of a destructuring assignment
+// (({ a } = b), for ({ a } of b), [{ a }] = b) is a pattern, not an object.
+function isDestructuringTarget(node: ts.Expression): boolean {
+  const parent = node.parent;
+  if (
+    ts.isBinaryExpression(parent) &&
+    parent.operatorToken.kind === ts.SyntaxKind.EqualsToken
+  ) {
+    return parent.left === node;
+  }
+  if (ts.isForOfStatement(parent) || ts.isForInStatement(parent)) {
+    return parent.initializer === node;
+  }
+  if (
+    ts.isArrayLiteralExpression(parent) ||
+    ts.isParenthesizedExpression(parent)
+  ) {
+    return isDestructuringTarget(parent);
+  }
+  if (ts.isSpreadElement(parent) || ts.isSpreadAssignment(parent)) {
+    return isDestructuringTarget(parent.parent as ts.Expression);
+  }
+  if (ts.isPropertyAssignment(parent) && parent.initializer === node) {
+    return isDestructuringTarget(parent.parent);
+  }
+  return false;
+}
+
+function keyOccurrence(
   sourceFile: ts.SourceFile,
-  visitor: ClassContextVisitor,
-): void {
-  // Identify cn by its import-traced binding; fall back to a bare-name match
-  // so an unimported global-style helper still counts (KTD4).
+  name: ts.Identifier,
+  shorthand: boolean,
+): LiteralOccurrence {
+  return {
+    text: name.text,
+    start: name.getStart(sourceFile),
+    end: name.getEnd(),
+    shorthand,
+    quoted: false,
+    objectKey: true,
+  };
+}
+
+// KTD15: the identifier keys of every object literal in the parse: property
+// names, shorthands, and method and accessor names. Type literals, binding
+// patterns, class members, and JSX attributes are other node kinds, and a
+// destructuring target is skipped. `skip` drops whole objects, such as a
+// proven CSS Modules export map, whose keys are module locals.
+export function objectLiteralKeys(
+  sourceFile: ts.SourceFile,
+  skip?: (node: ts.ObjectLiteralExpression) => boolean,
+): Array<LiteralOccurrence> {
+  const keys: Array<LiteralOccurrence> = [];
+  function visit(node: ts.Node): void {
+    if (
+      ts.isObjectLiteralExpression(node) &&
+      !isDestructuringTarget(node) &&
+      skip?.(node) !== true
+    ) {
+      for (const property of node.properties) {
+        const name = identifierKey(property);
+        if (name === undefined) continue;
+        keys.push(
+          keyOccurrence(
+            sourceFile,
+            name,
+            ts.isShorthandPropertyAssignment(property),
+          ),
+        );
+      }
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(sourceFile);
+  return keys;
+}
+
+export function isClassListDirective(name: ts.JsxAttributeName): boolean {
+  return (
+    ts.isJsxNamespacedName(name) &&
+    name.namespace.text === "class" &&
+    name.name.text === "list"
+  );
+}
+
+export function cnBindingNames(sourceFile: ts.SourceFile): Set<string> {
   const cnNames = new Set<string>();
   for (const statement of sourceFile.statements) {
     if (!ts.isImportDeclaration(statement)) continue;
@@ -138,6 +265,17 @@ export function walkClassContexts(
       if (imported === "cn") cnNames.add(element.name.text);
     }
   }
+  return cnNames;
+}
+
+export function walkClassContexts(
+  sourceFile: ts.SourceFile,
+  visitor: ClassContextVisitor,
+  options: WalkClassContextsOptions = {},
+): void {
+  // Identify cn by its import-traced binding; fall back to a bare-name match
+  // so an unimported global-style helper still counts (KTD4).
+  const cnNames = cnBindingNames(sourceFile);
 
   function isCnCall(node: ts.CallExpression): boolean {
     return (
@@ -151,13 +289,7 @@ export function walkClassContexts(
     shorthand: boolean,
   ): LiteralOccurrence {
     if (ts.isIdentifier(node)) {
-      return {
-        text: node.text,
-        start: node.getStart(sourceFile),
-        end: node.getEnd(),
-        shorthand,
-        quoted: false,
-      };
+      return keyOccurrence(sourceFile, node, shorthand);
     }
     return {
       text: node.text,
@@ -179,7 +311,9 @@ export function walkClassContexts(
 
   // Inside a provable class context, nested string literals are still class
   // tokens (e.g. cn(flag ? 'a' : 'b')); nested templates with expressions are
-  // unprovable.
+  // unprovable. A nested cn() call's arguments are composition positions,
+  // and any other object's keys poison (KTD15): an object passed to another
+  // call holds variant props or feeds a helper minwind cannot prove.
   function collectNested(node: ts.Node, kind: RenameContextKind): void {
     if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
       visitor.renameLiteral?.(occurrence(node, false), kind);
@@ -189,15 +323,128 @@ export function walkClassContexts(
       visitor.unprovableTemplate?.(node, kind);
       return;
     }
+    if (ts.isCallExpression(node) && isCnCall(node)) {
+      for (const argument of node.arguments) {
+        collectComposition(argument, kind);
+      }
+      return;
+    }
+    if (ts.isObjectLiteralExpression(node)) {
+      for (const property of node.properties) {
+        const name = identifierKey(property);
+        if (name !== undefined) {
+          visitor.runtimeLiteral?.(
+            occurrence(name, ts.isShorthandPropertyAssignment(property)),
+            "class-expression",
+          );
+        } else if (property.name !== undefined) {
+          collectUnprovable(property.name, "class-expression");
+        }
+        ts.forEachChild(property, function (child) {
+          if (child !== property.name) collectNested(child, kind);
+        });
+      }
+      return;
+    }
     ts.forEachChild(node, function (child) {
       collectNested(child, kind);
     });
   }
 
-  function handleCnCall(node: ts.CallExpression): void {
+  // KTD15: a composition position holds class values. It is a cn()
+  // argument, an element of an array there, a branch of ?:, the right
+  // operand of &&, either operand of || and ??, or the inner expression of
+  // parentheses, as, satisfies, !, or a spread there. An object literal
+  // there holds a class name in every key, and its values are conditions.
+  function collectComposition(node: ts.Node, kind: RenameContextKind): void {
+    if (
+      ts.isParenthesizedExpression(node) ||
+      ts.isAsExpression(node) ||
+      ts.isSatisfiesExpression(node) ||
+      ts.isNonNullExpression(node) ||
+      ts.isSpreadElement(node)
+    ) {
+      collectComposition(node.expression, kind);
+      return;
+    }
+    if (ts.isArrayLiteralExpression(node)) {
+      for (const element of node.elements) collectComposition(element, kind);
+      return;
+    }
+    if (ts.isConditionalExpression(node)) {
+      collectNested(node.condition, kind);
+      collectComposition(node.whenTrue, kind);
+      collectComposition(node.whenFalse, kind);
+      return;
+    }
+    if (ts.isBinaryExpression(node)) {
+      const operator = node.operatorToken.kind;
+      if (operator === ts.SyntaxKind.AmpersandAmpersandToken) {
+        collectNested(node.left, kind);
+        collectComposition(node.right, kind);
+        return;
+      }
+      if (
+        operator === ts.SyntaxKind.BarBarToken ||
+        operator === ts.SyntaxKind.QuestionQuestionToken
+      ) {
+        collectComposition(node.left, kind);
+        collectComposition(node.right, kind);
+        return;
+      }
+    }
+    if (ts.isObjectLiteralExpression(node)) {
+      collectCompositionObject(node, kind);
+      return;
+    }
+    collectNested(node, kind);
+  }
+
+  function collectCompositionObject(
+    node: ts.ObjectLiteralExpression,
+    kind: RenameContextKind,
+  ): void {
+    for (const property of node.properties) {
+      if (ts.isSpreadAssignment(property)) {
+        collectComposition(property.expression, kind);
+        continue;
+      }
+      if (ts.isShorthandPropertyAssignment(property)) {
+        visitor.renameLiteral?.(occurrence(property.name, true), kind);
+        continue;
+      }
+      const name = property.name;
+      if (!ts.isPropertyAssignment(property)) {
+        if (ts.isIdentifier(name)) {
+          visitor.runtimeLiteral?.(occurrence(name, false), "class-expression");
+        } else {
+          collectUnprovable(name, "class-expression");
+        }
+      } else if (
+        ts.isIdentifier(name) ||
+        ts.isStringLiteral(name) ||
+        ts.isNoSubstitutionTemplateLiteral(name)
+      ) {
+        visitor.renameLiteral?.(occurrence(name, false), kind);
+      } else if (
+        ts.isComputedPropertyName(name) &&
+        (ts.isStringLiteral(name.expression) ||
+          ts.isNoSubstitutionTemplateLiteral(name.expression))
+      ) {
+        visitor.renameLiteral?.(occurrence(name.expression, false), kind);
+      } else if (ts.isComputedPropertyName(name)) {
+        collectUnprovable(name.expression, "class-expression");
+      }
+      ts.forEachChild(property, function (child) {
+        if (child !== name) collectNested(child, kind);
+      });
+    }
+  }
+
+  function handleCnArguments(args: ReadonlyArray<ts.Expression>): void {
     visitor.enterRenameGroup?.("cn-argument");
-    let fullyLiteral = node.arguments.length > 0;
-    for (const argument of node.arguments) {
+    let fullyLiteral = args.length > 0;
+    for (const argument of args) {
       if (
         ts.isStringLiteral(argument) ||
         ts.isNoSubstitutionTemplateLiteral(argument)
@@ -205,7 +452,7 @@ export function walkClassContexts(
         visitor.renameLiteral?.(occurrence(argument, false), "cn-argument");
       } else {
         fullyLiteral = false;
-        collectNested(argument, "cn-argument");
+        collectComposition(argument, "cn-argument");
       }
     }
     visitor.exitRenameGroup?.("cn-argument", fullyLiteral, fullyLiteral);
@@ -245,7 +492,7 @@ export function walkClassContexts(
 
   function handleCall(node: ts.CallExpression): void {
     if (isCnCall(node)) {
-      handleCnCall(node);
+      handleCnArguments(node.arguments);
       return;
     }
     if (isClassListMethodCall(node)) reportClassListMethodArguments(node);
@@ -255,10 +502,11 @@ export function walkClassContexts(
   // like clsx(...), an identifier or member expression) still holds real
   // class tokens when it nests string literals; those tokens poison the
   // registry through the runtime channel (KTD4). The walk is conservative:
-  // only string literals contribute tokens — identifiers and member
-  // expressions contribute nothing — and a nested template with expressions
-  // keeps its existing unprovableTemplate path so its static fragments
-  // poison too.
+  // only string literals and object keys contribute tokens — identifiers
+  // and member expressions contribute nothing — and a nested template with
+  // expressions keeps its existing unprovableTemplate path so its static
+  // fragments poison too. An object's identifier keys are class names to
+  // clsx({ hidden: c }) (KTD15); string keys poison as string literals.
   function collectUnprovable(
     node: ts.Node,
     kind: "class-expression" | "classList-expression",
@@ -270,6 +518,16 @@ export function walkClassContexts(
     if (ts.isTemplateExpression(node)) {
       visitor.unprovableTemplate?.(node, kind);
       return;
+    }
+    if (ts.isObjectLiteralExpression(node) && !isDestructuringTarget(node)) {
+      for (const property of node.properties) {
+        const name = identifierKey(property);
+        if (name === undefined) continue;
+        visitor.runtimeLiteral?.(
+          occurrence(name, ts.isShorthandPropertyAssignment(property)),
+          kind,
+        );
+      }
     }
     ts.forEachChild(node, function (child) {
       collectUnprovable(child, kind);
@@ -290,7 +548,7 @@ export function walkClassContexts(
     }
     if (ts.isCallExpression(expression)) {
       if (isCnCall(expression)) {
-        handleCnCall(expression);
+        handleCnArguments(expression.arguments);
         return;
       }
       if (isClassListMethodCall(expression)) {
@@ -353,9 +611,22 @@ export function walkClassContexts(
 
   function visit(node: ts.Node): void {
     if (ts.isJsxAttribute(node)) {
-      // Namespaced attribute names (a:b) are never class contexts.
-      const attribute = ts.isIdentifier(node.name) ? node.name.text : "";
       const initializer = node.initializer;
+      if (
+        options.astroClassList === true &&
+        isClassListDirective(node.name) &&
+        initializer !== undefined &&
+        ts.isJsxExpression(initializer) &&
+        initializer.expression !== undefined
+      ) {
+        // The template walker wraps the expression in cn() and walks the
+        // call: one group for the expression, then a descent that gives
+        // nested cn() calls their own groups.
+        handleCnArguments([initializer.expression]);
+        visit(initializer.expression);
+        return;
+      }
+      const attribute = ts.isIdentifier(node.name) ? node.name.text : "";
       if (attribute === "class" && initializer !== undefined) {
         if (ts.isStringLiteral(initializer)) {
           emitLiteralList(initializer, "class-attribute");
@@ -405,5 +676,19 @@ export function walkClassContexts(
     ts.forEachChild(node, visit);
   }
 
-  visit(sourceFile);
+  if (visitor.objectLiteralKey !== undefined) {
+    for (const key of objectLiteralKeys(sourceFile)) {
+      visitor.objectLiteralKey(key);
+    }
+  }
+  if (visitor.selectorReference !== undefined) {
+    for (const reference of selectorClassReferences(sourceFile)) {
+      visitor.selectorReference(reference);
+    }
+  }
+  if (options.unprovable === true) {
+    collectUnprovable(sourceFile, "class-expression");
+  } else {
+    visit(sourceFile);
+  }
 }

@@ -20,9 +20,16 @@ export default defineConfig({
     // so the baseline pins "never" itself and only class names can differ.
     inlineStylesheets: baseline ? "never" : "always",
   },
+  // R10: fake-motion's mentions of block and absolute stop keeping those
+  // classes original; src/scripts/motion.ts's "relative" still counts.
   integrations: baseline
     ? []
-    : [minwind({ naming: { strategy: "words", vocabulary } })],
+    : [
+        minwind({
+          naming: { strategy: "words", vocabulary },
+          trustVendorModules: true,
+        }),
+      ],
   vite: {
     plugins: [tailwindcss()],
   },

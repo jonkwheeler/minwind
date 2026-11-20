@@ -140,30 +140,74 @@ function claimProven(
 
 const CSS_IDENT = /^-?(?:[_a-zA-Z]|\\[0-9a-fA-F]+)[_a-zA-Z0-9-]*$/;
 
-function proveObject(
+interface ModuleClaim {
+  bundlerName: string;
+  registryName: string;
+}
+
+// The remap's proof for one object: every property a key with a string
+// value, and the keys one module's locals. Each entry comes back as the
+// claim it proves (the value's first token, a CSS identifier, is the name
+// the bundler emitted for a local the registry names) or undefined.
+function exportMapClaims(
   node: ts.ObjectLiteralExpression,
   context: ModuleRemapContext,
   byFile: Map<string, Set<string>>,
-  proven: Map<string, string>,
-): void {
+): Array<ModuleClaim | undefined> | undefined {
   const values = readExportMap(node);
-  if (values === undefined) return;
+  if (values === undefined) return undefined;
   const file = owningFile(new Set(values.keys()), byFile);
-  if (file === undefined) return;
+  if (file === undefined) return undefined;
+  const claims: Array<ModuleClaim | undefined> = [];
   for (const [local, raw] of values) {
-    const tokens = raw.trim().split(/\s+/);
-    const bundlerName = tokens[0];
-    if (bundlerName === undefined || bundlerName === "") continue;
-    if (!CSS_IDENT.test(bundlerName)) continue;
+    const bundlerName = raw.trim().split(/\s+/)[0];
+    if (bundlerName === undefined || !CSS_IDENT.test(bundlerName)) {
+      claims.push(undefined);
+      continue;
+    }
     const key = moduleLocalKey(
       context.root,
       path.join(context.root, file),
       local,
     );
     const registryName = context.registry.nameFor(key);
-    if (registryName === undefined) continue;
-    claimProven(proven, bundlerName, registryName);
+    claims.push(
+      registryName === undefined ? undefined : { bundlerName, registryName },
+    );
   }
+  return claims;
+}
+
+function proveObject(
+  node: ts.ObjectLiteralExpression,
+  context: ModuleRemapContext,
+  byFile: Map<string, Set<string>>,
+  proven: Map<string, string>,
+): void {
+  for (const claim of exportMapClaims(node, context, byFile) ?? []) {
+    if (claim !== undefined) {
+      claimProven(proven, claim.bundlerName, claim.registryName);
+    }
+  }
+}
+
+// KTD15: an object whose every entry the remap claims is one CSS Module's
+// export map. Its keys are module locals, not class references, so the apply
+// leak scans skip it. An object the remap claims only in part, or not at
+// all, could be a runtime class list, and its keys stay in the scan.
+export function exportMapProof(
+  context: ModuleRemapContext,
+): (node: ts.ObjectLiteralExpression) => boolean {
+  const byFile = localsByFile(context.inventory);
+  return function (node) {
+    const claims = exportMapClaims(node, context, byFile);
+    return (
+      claims !== undefined &&
+      claims.every(function (claim) {
+        return claim !== undefined;
+      })
+    );
+  };
 }
 
 export function collectProvenModuleNames(

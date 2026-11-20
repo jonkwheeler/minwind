@@ -1,5 +1,12 @@
 import assert from "node:assert";
-import { readFileSync, rmSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -28,16 +35,16 @@ import { createCustomPropertyRegistry } from "../src/custom-properties.js";
 
 const TOKENS = ["flex", "items-center", "p-4"];
 
-function fakePrepass(): PrepassResult {
+function fakePrepass(tokens: ReadonlyArray<string> = TOKENS): PrepassResult {
   const registry = createNameRegistry({
-    universe: new Set(TOKENS),
-    sourceTokens: new Set(TOKENS),
+    universe: new Set(tokens),
+    sourceTokens: new Set(tokens),
   });
   return {
     registry,
-    universe: new Set(TOKENS),
-    sourceTokens: new Set(TOKENS),
-    renameTokens: new Set(TOKENS),
+    universe: new Set(tokens),
+    sourceTokens: new Set(tokens),
+    renameTokens: new Set(tokens),
     runtimeTokens: new Set(),
     listFrequencies: [],
     consolidationVerdicts: [],
@@ -217,6 +224,187 @@ describe("minwindLoader", function () {
     const call = runLoader(plugin, "/site/node_modules/pkg/a.tsx", source);
     assert.strictEqual(call.error, null);
     assert.strictEqual(call.content, source);
+  });
+});
+
+// R4 and R5 off the Astro route: in Vue, a row inside a component and
+// <noscript> markup both drop out of the template parse today.
+describe("minwindLoader on table-fragment and noscript markup (R4, R5)", function () {
+  it("renames a .vue row inside a component and its <noscript> markup", function () {
+    const plugin = new MinwindWebpackPlugin();
+    const prepass = fakePrepass(["border-b", "px-4", "text-sm"]);
+    plugin.prepass = prepass;
+    const call = runLoader(
+      plugin,
+      "/site/src/Rows.vue",
+      `<template>
+  <MyTable>
+    <tr class="border-b"><td class="px-4">x</td></tr>
+  </MyTable>
+  <noscript><p class="text-sm">Enable JavaScript</p></noscript>
+</template>
+`,
+    );
+    assert.strictEqual(call.error, null);
+    assert.ok(
+      call.content?.includes(
+        `<tr class="${nameOf(prepass, "border-b")}">` +
+          `<td class="${nameOf(prepass, "px-4")}">x</td></tr>`,
+      ),
+      call.content,
+    );
+    assert.ok(
+      call.content?.includes(
+        `<noscript><p class="${nameOf(prepass, "text-sm")}">`,
+      ),
+      call.content,
+    );
+  });
+});
+
+// R16 (KTD15) on the webpack route: the loader with a pre-pass the plugin
+// published in beforeCompile renames a cn() key like the static class and
+// keeps a React className object key original.
+describe("minwindLoader on class-composition object keys (R16, AE11)", function () {
+  it("renames a cn() key and keeps a clsx() key and its static class original", async function () {
+    const site = mkdtempSync(path.join(tmpdir(), "minwind-keys-"));
+    try {
+      mkdirSync(path.join(site, "src"));
+      writeFileSync(
+        path.join(site, "src", "app.css"),
+        ".hidden{display:none}.block{display:block}.p-4{padding:1rem}\n",
+      );
+      const toggleId = path.join(site, "src", "Toggle.tsx");
+      const toggle = `import { cn } from "./cn";
+export function Toggle(props) {
+  return <div class={cn("p-4", { hidden: props.open })}>x</div>;
+}
+export const Shown = <p class="hidden">y</p>;
+`;
+      const menuId = path.join(site, "src", "Menu.tsx");
+      const menu = `export function Menu(props) {
+  const c = clsx({ block: props.open });
+  return <div className={clsx({ block: props.open })}><span className={c} /><b class="block">z</b></div>;
+}
+`;
+      writeFileSync(toggleId, toggle);
+      writeFileSync(menuId, menu);
+      const plugin = new MinwindWebpackPlugin({ root: site });
+      let beforeCompile: (() => Promise<void>) | undefined;
+      plugin.apply({
+        context: site,
+        options: { plugins: [] },
+        webpack: {
+          Compilation: { PROCESS_ASSETS_STAGE_SUMMARIZE: 1000 },
+          sources: { RawSource: class {} },
+        },
+        hooks: {
+          beforeCompile: {
+            tapPromise(_name: string, fn: () => Promise<void>) {
+              beforeCompile = fn;
+            },
+          },
+          thisCompilation: { tap() {} },
+          afterEmit: { tapPromise() {} },
+        },
+      } as unknown as WebpackCompilerLike);
+      assert.ok(beforeCompile !== undefined);
+      await beforeCompile();
+      assert.ok(plugin.prepass !== undefined);
+      const hidden = hashClassName("hidden");
+      const toggled = runLoader(plugin, toggleId, toggle);
+      assert.strictEqual(toggled.error, null);
+      assert.ok(
+        toggled.content?.includes(
+          `cn("${hashClassName("p-4")}", { ${hidden}: props.open })`,
+        ),
+        toggled.content,
+      );
+      assert.ok(toggled.content?.includes(`<p class="${hidden}">`));
+      const menued = runLoader(plugin, menuId, menu);
+      assert.strictEqual(menued.error, null);
+      assert.strictEqual(menued.content, menu);
+      assert.strictEqual(plugin.prepass.registry.nameFor("block"), undefined);
+    } finally {
+      rmSync(site, { recursive: true, force: true });
+    }
+  });
+});
+
+// R17 (KTD16) on the webpack route: the loader with a pre-pass the plugin
+// published in beforeCompile keeps a class querySelector selects original,
+// and renames a class only property access names.
+describe("minwindLoader on selector strings (R17, AE12)", function () {
+  // The loader's output for a site holding the one module, and whether the
+  // published registry renames hidden.
+  async function loadModule(
+    code: string,
+  ): Promise<{ content?: string; renamesHidden: boolean }> {
+    const site = mkdtempSync(path.join(tmpdir(), "minwind-selectors-"));
+    try {
+      mkdirSync(path.join(site, "src"));
+      writeFileSync(
+        path.join(site, "src", "app.css"),
+        ".hidden{display:none}\n",
+      );
+      const id = path.join(site, "src", "Disclosure.tsx");
+      writeFileSync(id, code);
+      const plugin = new MinwindWebpackPlugin({ root: site });
+      let beforeCompile: (() => Promise<void>) | undefined;
+      plugin.apply({
+        context: site,
+        options: { plugins: [] },
+        webpack: {
+          Compilation: { PROCESS_ASSETS_STAGE_SUMMARIZE: 1000 },
+          sources: { RawSource: class {} },
+        },
+        hooks: {
+          beforeCompile: {
+            tapPromise(_name: string, fn: () => Promise<void>) {
+              beforeCompile = fn;
+            },
+          },
+          thisCompilation: { tap() {} },
+          afterEmit: { tapPromise() {} },
+        },
+      } as unknown as WebpackCompilerLike);
+      assert.ok(beforeCompile !== undefined);
+      await beforeCompile();
+      assert.ok(plugin.prepass !== undefined);
+      const result = runLoader(plugin, id, code);
+      assert.strictEqual(result.error, null);
+      return {
+        content: result.content,
+        renamesHidden: plugin.prepass.registry.nameFor("hidden") !== undefined,
+      };
+    } finally {
+      rmSync(site, { recursive: true, force: true });
+    }
+  }
+
+  it("keeps a class querySelector selects original (AE12)", async function () {
+    const code = `export const Panel = <p class="hidden">a</p>;
+export function reveal(root) {
+  root.querySelector("div > .hidden").dataset.open = "yes";
+}
+`;
+    const loaded = await loadModule(code);
+    assert.strictEqual(loaded.content, code);
+    assert.strictEqual(loaded.renamesHidden, false);
+  });
+
+  it("renames a class only el.hidden names (AE12)", async function () {
+    const code = `export const Panel = <p class="hidden">a</p>;
+export function reveal(el) {
+  el.hidden = true;
+}
+`;
+    const loaded = await loadModule(code);
+    assert.strictEqual(
+      loaded.content,
+      code.replace('class="hidden"', `class="${hashClassName("hidden")}"`),
+    );
+    assert.strictEqual(loaded.renamesHidden, true);
   });
 });
 

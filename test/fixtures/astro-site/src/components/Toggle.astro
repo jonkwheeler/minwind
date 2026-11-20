@@ -1,0 +1,14 @@
+---
+interface Props {
+  on: boolean;
+}
+
+// An identifier key in a class:list object. 1.1.0 read only string keys
+// there, so a class reached only through such a key kept its Tailwind name
+// (R16).
+const { on } = Astro.props;
+---
+
+<button type="button" data-toggle class:list={["px-2", { lowercase: on }]}>
+  <slot />
+</button>

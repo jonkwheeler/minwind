@@ -1,8 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { ConsolidationVerdict } from "./consolidate.js";
+import { dependentTokens } from "./dependents.js";
+import type * as ts from "typescript";
 import {
   applyModulesRemap,
+  exportMapProof,
   type ModuleRemapContext,
 } from "./engines/modules-remap.js";
 import type { ExclusionEntry, NameRegistry } from "./names.js";
@@ -12,7 +15,15 @@ import {
   type TransformSourceResult,
   type TransformWarning,
 } from "./transform-source.js";
-import type { CssTransformWarning } from "./transform-css.js";
+import {
+  selectorArmTokens,
+  type CssTransformWarning,
+} from "./transform-css.js";
+import {
+  vendorAttribution,
+  type VendorOccurrenceTest,
+  type VendorProvenance,
+} from "./vendor-provenance.js";
 import { rewriteCssAssets } from "./webpack.js";
 
 // The post-build rewriter behind `minwind apply` — the path for bundlers
@@ -32,6 +43,10 @@ export interface ApplyOptions {
   consolidate: boolean;
   dryRun?: boolean;
   modules?: ModuleRemapContext;
+  // trustVendorModules (R10): the recorded client chunks. A leak occurrence
+  // a chunk's map attributes to a trusted node_modules package stops
+  // counting; every other occurrence counts as before.
+  vendorProvenance?: VendorProvenance;
 }
 
 export interface ApplyResult {
@@ -43,9 +58,27 @@ export interface ApplyResult {
   consolidated: number;
   // Tokens that kept their original names because a whole-word occurrence
   // appeared in a position the post-build passes cannot rewrite (a minified
-  // call argument, an SSR payload in an inline script). Skip-and-warn: the
-  // conservative choice costs compression, never correctness.
+  // call argument, an SSR payload in an inline script), plus keptDependent.
+  // Skip-and-warn: the conservative choice costs compression, never
+  // correctness.
   keptOriginal: Array<string>;
+  // The subset of keptOriginal kept only because every selector arm it
+  // appears in compounds a class kept original (KTD7), such as a
+  // `group-hover:*` utility whose `group` marker leaked.
+  keptDependent: Array<string>;
+  // Renamed tokens that trusted vendor code mentions at an occurrence that
+  // stopped counting (R10): a page a class-toggling library breaks points
+  // here.
+  vendorMentions: Array<string>;
+}
+
+// The tokens kept original for an occurrence in an unrewritable position:
+// keptOriginal less keptDependent. Logged apart from the dependents.
+export function keptUnrewritable(result: ApplyResult): Array<string> {
+  const dependent = new Set(result.keptDependent);
+  return result.keptOriginal.filter(function (token) {
+    return !dependent.has(token);
+  });
 }
 
 const BUNDLE_PATTERN = /\.[cm]?js$/;
@@ -96,14 +129,36 @@ export function filterRegistry(
   };
 }
 
+// KTD10: a reverse-leak warning at an occurrence copied from trusted vendor
+// code. Filtering found occurrences by position covers every kind the scans
+// report.
+function atVendorOccurrence(
+  warning: TransformWarning,
+  isVendor: VendorOccurrenceTest | null,
+): boolean {
+  return (
+    isVendor !== null &&
+    warning.kind === "reverse-leak" &&
+    warning.token !== undefined &&
+    isVendor(warning.line, warning.column, warning.token)
+  );
+}
+
 // HTML through the SFC walker, JS bundles through the bundle pass.
 function transformOutput(
   file: string,
   code: string,
   registry: NameRegistry,
   consolidationVerdicts?: ReadonlyArray<ConsolidationVerdict>,
+  isExportMap?: (node: ts.ObjectLiteralExpression) => boolean,
 ): TransformSourceResult | null {
-  const options = { code, id: file, registry, consolidationVerdicts };
+  const options = {
+    code,
+    id: file,
+    registry,
+    consolidationVerdicts,
+    isExportMap,
+  };
   return file.endsWith(".html")
     ? transformModule(options)
     : transformBundle(options);
@@ -179,18 +234,61 @@ export function applyBuildOutput(options: ApplyOptions): ApplyResult {
   // against the full registry. A reverse-leak warning marks a registry
   // token in a position the post-build passes cannot rewrite — renaming it
   // in the stylesheet while the DOM keeps the original would break the
-  // page, so the token drops out of the rename set entirely.
+  // page, so the token drops out of the rename set entirely. With the
+  // Modules engine, a proven export map's keys are module locals and never
+  // leak (KTD15); the remap that renames its values runs last. With
+  // trustVendorModules, an occurrence from trusted vendor code does not leak
+  // (KTD10), and renaming still runs on the whole chunk.
+  const isExportMap =
+    options.modules === undefined ? undefined : exportMapProof(options.modules);
+  const vendorTest = vendorAttribution(options.vendorProvenance);
   const leaked = new Set<string>();
+  const vendorMentioned = new Set<string>();
   for (const file of classFiles) {
     const code = fs.readFileSync(file, "utf8");
-    const detected = transformOutput(file, code, options.registry);
+    const detected = transformOutput(
+      file,
+      code,
+      options.registry,
+      undefined,
+      isExportMap,
+    );
     if (detected === null) continue;
+    const leaks = detected.warnings.some(function (warning) {
+      return warning.kind === "reverse-leak";
+    });
+    const isVendor = leaks ? vendorTest(file, code) : null;
     for (const warning of detected.warnings) {
-      if (warning.kind === "reverse-leak" && warning.token !== undefined) {
+      if (warning.kind !== "reverse-leak" || warning.token === undefined) {
+        continue;
+      }
+      if (atVendorOccurrence(warning, isVendor)) {
+        vendorMentioned.add(warning.token);
+      } else {
         leaked.add(warning.token);
       }
     }
   }
+  const stylesheets: Record<string, string> = {};
+  const stylesheetPaths = new Map<string, string>();
+  for (const file of files) {
+    if (!file.endsWith(".css")) continue;
+    stylesheets[path.relative(dir, file)] = fs.readFileSync(file, "utf8");
+    stylesheetPaths.set(path.relative(dir, file), file);
+  }
+  // KTD7: a token whose every selector arm in the built stylesheets
+  // compounds a dropped or excluded class would have no selector left to
+  // rename, so it drops out too, and reports as runtime-context with the
+  // leaked tokens.
+  const keptDependent = dependentTokens(
+    Object.values(stylesheets).flatMap(selectorArmTokens),
+    function (token) {
+      return (
+        !leaked.has(token) && options.registry.nameFor(token) !== undefined
+      );
+    },
+  );
+  for (const token of keptDependent) leaked.add(token);
   const registry = filterRegistry(options.registry, leaked);
   // A consolidation verdict mentioning a dropped token can no longer merge:
   // its kept-original member rule must survive.
@@ -229,15 +327,13 @@ export function applyBuildOutput(options: ApplyOptions): ApplyResult {
     warnings: [],
     consolidated: 0,
     keptOriginal: Array.from(leaked).sort(),
+    keptDependent,
+    vendorMentions: Array.from(vendorMentioned)
+      .filter(function (token) {
+        return !leaked.has(token);
+      })
+      .sort(),
   };
-
-  const stylesheets: Record<string, string> = {};
-  const stylesheetPaths = new Map<string, string>();
-  for (const file of files) {
-    if (!file.endsWith(".css")) continue;
-    stylesheets[path.relative(dir, file)] = fs.readFileSync(file, "utf8");
-    stylesheetPaths.set(path.relative(dir, file), file);
-  }
 
   const css = rewriteCssAssets(
     stylesheets,
@@ -266,11 +362,16 @@ export function applyBuildOutput(options: ApplyOptions): ApplyResult {
       code,
       registry,
       consolidate ? consolidationVerdicts : undefined,
+      isExportMap,
     );
     if (isHtml) result.htmlFiles += 1;
     else result.jsFiles += 1;
     if (transformed === null) continue;
-    result.warnings.push(...transformed.warnings);
+    const isVendor =
+      transformed.warnings.length > 0 ? vendorTest(file, code) : null;
+    for (const warning of transformed.warnings) {
+      if (!atVendorOccurrence(warning, isVendor)) result.warnings.push(warning);
+    }
     if (transformed.code === code) continue;
     result.rewrittenFiles += 1;
     if (options.dryRun !== true) fs.writeFileSync(file, transformed.code);

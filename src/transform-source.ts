@@ -1,4 +1,5 @@
 import MagicString, { type SourceMap } from "magic-string";
+import * as ts from "typescript";
 import {
   DECLARATION_PATTERN,
   parseSourceModule,
@@ -12,11 +13,19 @@ import {
   type RuntimeContextKind,
 } from "./class-contexts.js";
 import { canonicalListKey, type ConsolidationVerdict } from "./consolidate.js";
+import {
+  decodeClassTokens,
+  escapeClassName,
+  leakViews,
+  type LeakView,
+} from "./html-entities.js";
+import { maskHtmlLeakText } from "./html-leak-mask.js";
 import type { NameRegistry } from "./names.js";
 import {
   isSfcModule,
   maskSfcStyleContent,
   SFC_PATTERN,
+  sfcFormatFor,
   walkSfcClassContexts,
 } from "./sfc.js";
 import {
@@ -54,6 +63,9 @@ export interface TransformSourceOptions {
   // groups never collapse and their tokens still rename per R1.
   consolidationVerdicts?: ReadonlyArray<ConsolidationVerdict>;
   customProperties?: CustomPropertyRegistry;
+  // Built HTML: objects proven to be CSS Modules export maps, whose keys are
+  // module locals and never count as leaks (KTD15).
+  isExportMap?: (node: ts.ObjectLiteralExpression) => boolean;
 }
 
 export interface TransformSourceResult {
@@ -134,6 +146,44 @@ export function applySourceEdits(
       hires: "boundary",
     }),
   };
+}
+
+function isIdentifierName(name: string): boolean {
+  let first = true;
+  for (const character of name) {
+    const code = character.codePointAt(0) ?? 0;
+    const valid = first
+      ? ts.isIdentifierStart(code, ts.ScriptTarget.Latest)
+      : ts.isIdentifierPart(code, ts.ScriptTarget.Latest);
+    if (!valid) return false;
+    first = false;
+  }
+  return !first;
+}
+
+// KTD15: a renamed object key stays bare when the name is an identifier,
+// and is quoted otherwise. In JavaScript the quote is `"`; in an HTML
+// attribute value it is the quote the attribute does not use, with that
+// quote and backslashes escaped. An unquoted attribute value can hold no
+// quote, so the build fails.
+function objectKeyText(
+  name: string,
+  literal: LiteralOccurrence,
+  id: string,
+): string {
+  if (isIdentifierName(name)) return name;
+  const attributeQuote = literal.attributeQuote;
+  if (attributeQuote === undefined) return JSON.stringify(name);
+  if (attributeQuote === "") {
+    throw new Error(
+      `minwind: ${id}: object key "${literal.text}" at offset` +
+        ` ${literal.start} renames to "${name}", which needs quotes, but` +
+        ` sits in an unquoted attribute value; quote the attribute`,
+    );
+  }
+  const quote = attributeQuote === '"' ? "'" : '"';
+  const escaped = name.replace(/\\/g, "\\\\").split(quote).join(`\\${quote}`);
+  return `${quote}${escaped}${quote}`;
 }
 
 // Whole-word convention shared with tools/minwind: an occurrence counts
@@ -252,6 +302,9 @@ export function transformModule(
   interface OpenGroup {
     kind: RenameContextKind;
     literals: Array<LiteralOccurrence>;
+    // The class tokens the literals hold, decoded in built HTML (KTD6);
+    // null once a literal's tokens cannot be told apart.
+    tokens: Array<string> | null;
     editKeys: Array<string>;
   }
   const groupStack: Array<OpenGroup> = [];
@@ -283,26 +336,26 @@ export function transformModule(
     for (const literal of group.literals) {
       if (!literal.quoted) return false;
     }
+    if (group.tokens === null) return false;
     const first = group.literals[0];
     const last = group.literals[group.literals.length - 1];
-    const name = collapseByKey.get(
-      canonicalListKey(
-        group.literals.flatMap(function (literal) {
-          return tokenize(literal.text);
-        }),
-      ),
-    );
+    const name = collapseByKey.get(canonicalListKey(group.tokens));
     if (name === undefined) return false;
     for (const key of group.editKeys) edits.delete(key);
     const start = single ? first.start : first.start - 1;
     const end = single ? last.end : last.end + 1;
-    const replacement = single ? name : `'${name}'`;
+    let replacement = `'${name}'`;
+    if (single) {
+      replacement = first.htmlEncoded === true ? escapeClassName(name) : name;
+    }
     const expected = code.slice(start, end);
     edits.set(`${start}:${end}`, { start, end, expected, replacement });
     return true;
   }
 
-  function handleLiteral(literal: LiteralOccurrence): void {
+  // Renames the literal's tokens and returns them, or null for a built-HTML
+  // value whose tokens cannot be told apart, which gets no edits (KTD6).
+  function handleLiteral(literal: LiteralOccurrence): Array<string> | null {
     const raw = code.slice(literal.start, literal.end);
     if (raw !== literal.text) {
       // An escape sequence desynchronizes the AST's cooked text from the raw
@@ -313,6 +366,25 @@ export function transformModule(
           ` escape sequences; refusing to span-edit`,
       );
     }
+    if (literal.htmlEncoded === true) {
+      // The decoded token is looked up; the edit covers its raw bytes.
+      const tokens = decodeClassTokens(raw);
+      if (tokens === null) return null;
+      for (const token of tokens) {
+        const name = registry.nameFor(token.token);
+        if (name === undefined) continue;
+        const start = literal.start + token.offset;
+        addEdit(
+          start,
+          start + token.raw.length,
+          token.raw,
+          escapeClassName(name),
+        );
+      }
+      return tokens.map(function (token) {
+        return token.token;
+      });
+    }
     for (const match of raw.matchAll(/[^ \t\n\f\r]+/g)) {
       const token = match[0];
       const name = registry.nameFor(token);
@@ -320,22 +392,63 @@ export function transformModule(
       // in the registry and stay byte-identical (R5).
       if (name === undefined) continue;
       const start = literal.start + match.index;
+      const written =
+        literal.objectKey === true ? objectKeyText(name, literal, id) : name;
       // A shorthand classList key ({ flex }) is both key and value binding:
       // expand it so only the class name is renamed ({ h4sh: flex }).
-      const replacement = literal.shorthand ? `${name}: ${token}` : name;
+      const replacement = literal.shorthand ? `${written}: ${token}` : written;
       addEdit(start, start + token.length, token, replacement);
     }
+    return tokenize(raw);
   }
 
+  let known: Set<string> | undefined;
+  function knownToken(token: string): boolean {
+    if (registry.nameFor(token) !== undefined) return true;
+    if (known === undefined) {
+      known = new Set(
+        registry.exclusions().map(function (entry) {
+          return entry.token;
+        }),
+      );
+    }
+    return known.has(token);
+  }
+
+  // KTD15: identifier object keys, which the whole-word scan below misses
+  // because `:` is a class-name character. Built HTML gathers them in its
+  // leak mask instead.
+  const builtHtml = sfcFormatFor(id) === "html";
+  const objectKeys: Array<LiteralOccurrence> = [];
+  // KTD16: class selectors inside strings, which the whole-word scan misses
+  // because `.` is a class-name character. Built HTML gathers those of its
+  // executable scripts and JavaScript attribute values in its leak mask
+  // instead.
+  const selectorReferences: Array<LiteralOccurrence> = [];
+
   const visitor: ClassContextVisitor = {
+    objectLiteralKey: builtHtml
+      ? undefined
+      : function (key: LiteralOccurrence): void {
+          objectKeys.push(key);
+        },
+    selectorReference: builtHtml
+      ? undefined
+      : function (reference: LiteralOccurrence): void {
+          selectorReferences.push(reference);
+        },
     enterRenameGroup: function (kind: RenameContextKind): void {
-      groupStack.push({ kind, literals: [], editKeys: [] });
+      groupStack.push({ kind, literals: [], tokens: [], editKeys: [] });
     },
     renameLiteral: function (literal: LiteralOccurrence): void {
       const open = groupStack[groupStack.length - 1];
-      handleLiteral(literal);
+      const tokens = handleLiteral(literal);
       if (open !== undefined) {
         open.literals.push(literal);
+        open.tokens =
+          open.tokens === null || tokens === null
+            ? null
+            : open.tokens.concat(tokens);
       }
     },
     exitRenameGroup: function (
@@ -375,6 +488,9 @@ export function transformModule(
       if (kind !== "class-expression" && kind !== "classList-expression") {
         return;
       }
+      // A poisoned object key is often a variant prop (button({ size })),
+      // so it warns only when the registry knows its token.
+      if (literal.objectKey === true && !knownToken(literal.text)) return;
       const at = location(literal.start);
       warnings.push({
         kind: "unprovable-expression",
@@ -388,34 +504,59 @@ export function transformModule(
       });
     },
   };
+  let template: ReturnType<typeof walkSfcClassContexts> = null;
   if (sourceFile !== null) {
     walkClassContexts(sourceFile, visitor);
   } else {
-    walkSfcClassContexts(id, code, visitor);
+    template = walkSfcClassContexts(id, code, visitor);
   }
 
   // Reverse-leak check (KTD7): whole-word occurrences of registry tokens in
-  // the original source that no edit consumed are class names the stylesheet
-  // renames but this module keeps — warn with locations, never fail. SFCs
-  // scan with <style> contents blanked: a utility word used as a CSS value
-  // (display: flex) is not a class reference.
-  const leakText = sfc ? maskSfcStyleContent(id, code) : code;
-  for (const entry of registry.entries()) {
-    let from = 0;
-    for (;;) {
-      const at = leakText.indexOf(entry.token, from);
-      if (at === -1) break;
-      from = at + entry.token.length;
-      if (!isWholeWord(leakText, at, entry.token.length)) continue;
-      let consumed = false;
+  // the original source that no edit consumed, identifier object keys
+  // (KTD15), and class selectors inside strings (KTD16) are class names the
+  // stylesheet renames but this module keeps — warn with locations, never
+  // fail. SFCs scan with <style> contents blanked: a utility word used as a
+  // CSS value (display: flex) is not a class reference. Built HTML also
+  // blanks the positions that never hold one (KTD8), then is scanned decoded
+  // as well (KTD6); an occurrence both scans find warns once.
+  const entries = registry.entries();
+  let views: Array<LeakView> = [];
+  if (entries.length > 0) {
+    let leakText = sfc ? maskSfcStyleContent(id, code) : code;
+    if (builtHtml && template !== null) {
+      const masked = maskHtmlLeakText(
+        id,
+        leakText,
+        template,
+        options.isExportMap,
+      );
+      leakText = masked.text;
+      objectKeys.push(...masked.objectKeys);
+      selectorReferences.push(...masked.selectorReferences);
+    }
+    views = leakViews(leakText, builtHtml);
+  }
+  const keysByToken = new Map<string, Array<LiteralOccurrence>>();
+  for (const key of objectKeys) {
+    const list = keysByToken.get(key.text);
+    if (list === undefined) keysByToken.set(key.text, [key]);
+    else list.push(key);
+  }
+  const selectorsByToken = new Map<string, Array<LiteralOccurrence>>();
+  for (const reference of selectorReferences) {
+    const list = selectorsByToken.get(reference.text);
+    if (list === undefined) selectorsByToken.set(reference.text, [reference]);
+    else list.push(reference);
+  }
+  for (const entry of entries) {
+    const reported = new Set<number>();
+    function report(span: { start: number; end: number }): void {
+      if (reported.has(span.start)) return;
       for (const edit of edits.values()) {
-        if (edit.start <= at && edit.end >= at + entry.token.length) {
-          consumed = true;
-          break;
-        }
+        if (edit.start <= span.start && edit.end >= span.end) return;
       }
-      if (consumed) continue;
-      const atLocation = location(at);
+      reported.add(span.start);
+      const atLocation = location(span.start);
       warnings.push({
         kind: "reverse-leak",
         id,
@@ -426,6 +567,20 @@ export function transformModule(
           `minwind: ${id}:${atLocation.line}:${atLocation.column} registry` +
           ` token "${entry.token}" remains outside a rename context`,
       });
+    }
+    for (const view of views) {
+      let from = 0;
+      for (;;) {
+        const at = view.text.indexOf(entry.token, from);
+        if (at === -1) break;
+        from = at + entry.token.length;
+        if (!isWholeWord(view.text, at, entry.token.length)) continue;
+        report(view.rawSpan(at, at + entry.token.length));
+      }
+    }
+    for (const key of keysByToken.get(entry.token) ?? []) report(key);
+    for (const reference of selectorsByToken.get(entry.token) ?? []) {
+      report(reference);
     }
   }
 

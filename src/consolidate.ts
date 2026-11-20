@@ -1,5 +1,10 @@
 import { generate, ident, parse, type CssNode } from "css-tree";
-import { applySpanEdits, childArray, type SpanEdit } from "./css-util.js";
+import {
+  applySpanEdits,
+  childArray,
+  classSelectorNodes,
+  type SpanEdit,
+} from "./css-util.js";
 import { hashClassName, NAME_PATTERN, type NameRegistry } from "./names.js";
 import { compareCodeUnits } from "./util.js";
 
@@ -83,18 +88,14 @@ export function canonicalListKey(tokens: ReadonlyArray<string>): string {
   return Array.from(new Set(tokens)).sort(compareCodeUnits).join(" ");
 }
 
+// Every class token in a selector arm, including one inside
+// `:nth-child(2n of .x)` (KTD12).
 function selectorClassTokens(selector: CssNode): Array<string> {
-  const tokens: Array<string> = [];
-  function descend(node: CssNode): void {
-    if (node.type === "ClassSelector" && node.name !== undefined) {
-      // ClassSelector.name keeps the source spelling, so `.focus\:underline`
-      // must be unescaped back to the candidate token `focus:underline`.
-      tokens.push(ident.decode(node.name));
-    }
-    for (const child of childArray(node)) descend(child);
-  }
-  descend(selector);
-  return tokens;
+  return classSelectorNodes(selector).map(function (node) {
+    // ClassSelector.name keeps the source spelling, so `.focus\:underline`
+    // must be unescaped back to the candidate token `focus:underline`.
+    return ident.decode(node.name ?? "");
+  });
 }
 
 // Parse a built stylesheet into the class universe (every class token seen in

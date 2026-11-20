@@ -1,6 +1,8 @@
 ---
 import Badge from "../components/Badge.astro";
 import Card from "../components/Card.astro";
+import ReplyList from "../components/ReplyList.astro";
+import Toggle from "../components/Toggle.astro";
 import Base from "../layouts/Base.astro";
 ---
 
@@ -28,6 +30,11 @@ import Base from "../layouts/Base.astro";
     <h2>Pinned</h2>
     <p>Follow up with the printer.</p>
   </Card>
+  <ReplyList replies={["Printer quote", "Venue deposit"]} />
+  <Toggle on={true}>Mute</Toggle>
+  <p class="relative mt-8 text-sm">
+    Motion <span class="absolute block">ready</span>
+  </p>
 </Base>
 
 <script>
@@ -37,4 +44,8 @@ import Base from "../layouts/Base.astro";
     status.dataset.ready = "yes";
     status.textContent = "Follow-up sent";
   }
+</script>
+
+<script>
+  import "../scripts/motion.ts";
 </script>
