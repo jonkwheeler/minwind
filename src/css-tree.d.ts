@@ -37,9 +37,27 @@ declare module "css-tree" {
     onParseError?: (error: CssParseError) => void;
   }
 
+  // An AttributeSelector's fields, which CssNode's string-typed name and
+  // value do not describe: `[class~="flex" i]`.
+  export interface AttributeSelector {
+    type: "AttributeSelector";
+    loc?: CssLocation;
+    name: { name: string };
+    matcher: string | null;
+    value: { type: string; name?: string; value?: string } | null;
+    flags: string | null;
+  }
+
+  export interface WalkOptions {
+    visit?: string;
+    enter?: (node: CssNode) => void;
+  }
+
   export function parse(css: string, options?: ParseOptions): CssNode;
 
   export function generate(node: CssNode): string;
+
+  export function walk(ast: CssNode, options: WalkOptions): void;
 
   export const ident: {
     decode(identifier: string): string;

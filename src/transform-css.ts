@@ -1,5 +1,11 @@
-import { ident, parse, type CssNode } from "css-tree";
-import { applySpanEdits, childArray, type SpanEdit } from "./css-util.js";
+import { generate, ident, parse, walk, type CssNode } from "css-tree";
+import {
+  applySpanEdits,
+  childArray,
+  classAttributeTokens,
+  classSelectorNodes,
+  type SpanEdit,
+} from "./css-util.js";
 import type { NameRegistry, RegistryEntry } from "./names.js";
 import { compareCodeUnits } from "./util.js";
 import {
@@ -94,14 +100,6 @@ function parseRawFragment(
   return ast;
 }
 
-// Deep class-selector collection in document order: an arm's class tokens
-// include marker references nested inside pseudo-class arguments (`.group`
-// inside `:where(...)`), which rename alongside the candidate (KTD2).
-function collectClassNodes(node: CssNode, out: Array<CssNode>): void {
-  if (node.type === "ClassSelector") out.push(node);
-  for (const child of childArray(node)) collectClassNodes(child, out);
-}
-
 // Qualification gate (R10): runs over the whole stylesheet before any edit
 // is applied. Requires fully decodable selectors: every rule has a
 // SelectorList prelude with positions, every class selector carries a
@@ -161,9 +159,7 @@ function assertQualified(
               ` not a decodable Selector`,
           );
         }
-        const classNodes: Array<CssNode> = [];
-        collectClassNodes(selector, classNodes);
-        for (const classNode of classNodes) {
+        for (const classNode of classSelectorNodes(selector)) {
           if (classNode.loc == null || typeof classNode.name !== "string") {
             throw divergence(
               fileName,
@@ -240,9 +236,12 @@ function armTokens(classNodes: ReadonlyArray<CssNode>): Array<string> {
   return tokens;
 }
 
+// An arm's class tokens are deep: they include marker references nested
+// inside pseudo-class arguments (`.group` inside `:where(...)`, `.x` inside
+// `:nth-child(2n of .x)`), which rename alongside the candidate (KTD2,
+// KTD12).
 function analyzeArm(selector: CssNode, registry: NameRegistry): ArmInfo {
-  const classNodes: Array<CssNode> = [];
-  collectClassNodes(selector, classNodes);
+  const classNodes = classSelectorNodes(selector);
   const tokens = armTokens(classNodes);
   const uniqueRegistryCount = tokens.filter(function (token) {
     return registry.nameFor(token) !== undefined;
@@ -510,9 +509,7 @@ export function selectorArmTokens(css: string): Array<Array<string>> {
     if (node.type === "Rule") {
       if (node.prelude != null && node.prelude.type === "SelectorList") {
         for (const selector of childArray(node.prelude)) {
-          const classNodes: Array<CssNode> = [];
-          collectClassNodes(selector, classNodes);
-          arms.push(armTokens(classNodes));
+          arms.push(armTokens(classSelectorNodes(selector)));
         }
       }
       if (node.block != null) {
@@ -579,21 +576,31 @@ export function assertPresence(
 // appear in positions that are not class references: inside another class's
 // escaped arbitrary value (`.content-\[\'flex\'\]`, harvested by Tailwind's
 // automatic content detection from any file in the repo), inside declaration
-// values (`content:"flex"`), or in at-rule preludes. An arm carrying a class
-// outside the registry's vocabulary — neither a renamed token nor a
-// generated name — kept its original bytes by design (mixed-compound skip,
-// or a css-only utility), so only all-registry arms can be survivors.
+// values (`content:"flex"`), or in at-rule preludes other than @scope. An
+// arm carrying a class outside the registry's vocabulary — neither a renamed
+// token nor a generated name — kept its original bytes by design
+// (mixed-compound skip, or a css-only utility), so only all-registry arms
+// can be survivors.
+//
+// KTD12: minwind renames neither class attribute selectors
+// (`[class~="flex"]`) nor @scope preludes, so a renamed original in either
+// survives whatever else its selector holds. A class that appears only in
+// attribute selectors, such as Typography's `[class~="not-prose"]`, is never
+// in the universe, so it never renames and never trips this.
 export function assertNoSurvivingTokens(
   registry: NameRegistry,
   css: string,
   fileName: string,
 ): void {
   const ast = parseStylesheet(css, fileName);
+  const originals = registry.entries().map(function (entry) {
+    return entry.token;
+  });
   const survivors: Array<string> = [];
+  const unrenamed: Array<string> = [];
 
   function visitArm(selector: CssNode, base: number): void {
-    const classNodes: Array<CssNode> = [];
-    collectClassNodes(selector, classNodes);
+    const classNodes = classSelectorNodes(selector);
     const tokens = classNodes.map(function (node) {
       return ident.decode(node.name ?? "");
     });
@@ -614,10 +621,36 @@ export function assertNoSurvivingTokens(
     }
   }
 
+  // Class attribute selectors under `node`, plus its class selectors when
+  // `node` is an @scope prelude.
+  function visitUnrenamed(node: CssNode, base: number, scope: boolean): void {
+    walk(node, {
+      enter: function (child) {
+        const offset = base + (child.loc?.start.offset ?? 0);
+        for (const token of classAttributeTokens(child, originals)) {
+          unrenamed.push(
+            `"${token}" in ${generate(child)} at offset ${offset}`,
+          );
+        }
+        if (scope && child.type === "ClassSelector") {
+          const token = ident.decode(child.name ?? "");
+          if (registry.nameFor(token) !== undefined) {
+            unrenamed.push(
+              `"${token}" in an @scope prelude at offset ${offset}`,
+            );
+          }
+        }
+      },
+    });
+  }
+
   function visit(node: CssNode, base: number): void {
     if (node.type === "Atrule") {
       // Keyframe blocks hold percentage rules, not class selectors.
       if ((node.name ?? "").endsWith("keyframes")) return;
+      if (node.name === "scope" && node.prelude != null) {
+        visitUnrenamed(node.prelude, base, true);
+      }
       if (node.block != null) {
         for (const child of childArray(node.block)) visit(child, base);
       }
@@ -627,6 +660,7 @@ export function assertNoSurvivingTokens(
       if (node.prelude != null && node.prelude.type === "SelectorList") {
         for (const selector of childArray(node.prelude))
           visitArm(selector, base);
+        visitUnrenamed(node.prelude, base, false);
       }
       if (node.block != null) {
         for (const child of childArray(node.block)) visit(child, base);
@@ -645,14 +679,27 @@ export function assertNoSurvivingTokens(
 
   for (const child of childArray(ast)) visit(child, 0);
 
+  const problems: Array<string> = [];
   if (survivors.length > 0) {
-    throw new Error(
-      `minwind: ${fileName}: registry token${
-        survivors.length === 1 ? "" : "s"
-      } ${survivors.join(", ")} survive${
-        survivors.length === 1 ? "s" : ""
-      } as a class selector in the final CSS (R10)`,
+    problems.push(
+      `registry token${survivors.length === 1 ? "" : "s"} ${survivors.join(
+        ", ",
+      )} survive${survivors.length === 1 ? "s" : ""} as a class selector in` +
+        " the final CSS (R10)",
     );
+  }
+  if (unrenamed.length > 0) {
+    const one = unrenamed.length === 1;
+    problems.push(
+      `registry token${one ? "" : "s"} ${unrenamed.join(", ")} survive${
+        one ? "s" : ""
+      } where minwind does not rename classes; add ${
+        one ? "it" : "them"
+      } to exclusions.names to keep the original name everywhere (R12)`,
+    );
+  }
+  if (problems.length > 0) {
+    throw new Error(`minwind: ${fileName}: ${problems.join("; ")}`);
   }
 }
 

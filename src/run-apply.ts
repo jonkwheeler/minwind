@@ -1,10 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
-import { ident, parse, type CssNode } from "css-tree";
+import { generate, ident, parse, walk, type CssNode } from "css-tree";
 import { applyBuildOutput, filterRegistry, type ApplyResult } from "./apply.js";
 import { assertConsolidatedNames } from "./consolidate.js";
-import { childArray } from "./css-util.js";
+import { classAttributeTokens } from "./css-util.js";
 import {
   assertSharedCollision,
   prepareModulesNaming,
@@ -81,50 +81,68 @@ export type RunApplyResult =
 // matching without a warning. This is the span the mask blanks.
 const STYLE_CONTENT = /<style\b[^>]*>([\s\S]*?)<\/style\s*>/gi;
 
-// Decoded class names in a stylesheet's selectors. css-tree 3.2.1 leaves a
-// nested rule whose selector does not start with `&` as a Raw node (see
-// transform-css.ts), so Raw text reparses as rules. A Raw value is a slice
-// of the text it came from and only a strictly shorter one reparses, so the
-// recursion ends.
-function collectSelectorClasses(css: string, out: Set<string>): void {
-  function visit(node: CssNode): void {
-    if (node.type === "ClassSelector" && node.name !== undefined) {
-      out.add(ident.decode(node.name));
-    } else if (
-      node.type === "Raw" &&
-      node.value !== undefined &&
-      node.value.length < css.length
-    ) {
-      collectSelectorClasses(node.value, out);
-    }
-    for (const child of [node.prelude, node.block, ...childArray(node)]) {
-      if (child != null) visit(child);
-    }
-  }
-  visit(parse(css, { onParseError: function () {} }));
+// Decoded class names in a stylesheet's selectors, and its attribute
+// selectors. walk() follows the structure fields that children lists miss:
+// the selector list in `:nth-child(2n of .x)` and both preludes of
+// `@scope (.a) to (.b)` (KTD12). css-tree 3.2.1 leaves a nested rule whose
+// selector does not start with `&` as a Raw node (see transform-css.ts), so
+// Raw text reparses as rules. A Raw value is a slice of the text it came
+// from and only a strictly shorter one reparses, so the recursion ends.
+function collectSelectorReferences(
+  css: string,
+  classes: Set<string>,
+  attributes: Array<CssNode>,
+): void {
+  walk(parse(css, { onParseError: function () {} }), {
+    enter: function (node) {
+      if (node.type === "ClassSelector" && node.name !== undefined) {
+        classes.add(ident.decode(node.name));
+      } else if (node.type === "AttributeSelector") {
+        attributes.push(node);
+      } else if (
+        node.type === "Raw" &&
+        node.value !== undefined &&
+        node.value.length < css.length
+      ) {
+        collectSelectorReferences(node.value, classes, attributes);
+      }
+    },
+  });
 }
 
 function assertInlineStylesUnrenamed(
   dir: string,
   registry: NameRegistry,
 ): void {
+  const originals = registry.entries().map(function (entry) {
+    return entry.token;
+  });
   const matches: Array<string> = [];
   for (const file of walkHtmlFiles(dir).sort(compareCodeUnits)) {
     const classes = new Set<string>();
+    const attributes: Array<CssNode> = [];
     for (const match of fs.readFileSync(file, "utf8").matchAll(STYLE_CONTENT)) {
-      collectSelectorClasses(match[1], classes);
+      collectSelectorReferences(match[1], classes, attributes);
     }
-    for (const token of Array.from(classes).sort(compareCodeUnits)) {
-      if (registry.nameFor(token) !== undefined) {
-        matches.push(`  ${file}: .${token}`);
+    const references = new Set<string>();
+    for (const token of classes) {
+      if (registry.nameFor(token) !== undefined) references.add(`.${token}`);
+    }
+    // KTD12: a class attribute selector names the originals it could match.
+    for (const attribute of attributes) {
+      for (const token of classAttributeTokens(attribute, originals)) {
+        references.add(`.${token} in ${generate(attribute)}`);
       }
+    }
+    for (const reference of Array.from(references).sort(compareCodeUnits)) {
+      matches.push(`  ${file}: ${reference}`);
     }
   }
   if (matches.length > 0) {
     throw new Error(
       "minwind: HTML <style> blocks reference renamed classes. minwind" +
-        " does not rewrite inline styles, so these rules would match" +
-        ` nothing:\n${matches.join("\n")}`,
+        " does not rewrite inline styles, so these selectors would stop" +
+        ` matching them:\n${matches.join("\n")}`,
     );
   }
 }

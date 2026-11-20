@@ -1,7 +1,9 @@
-import type { CssNode } from "css-tree";
+import { ident, walk, type AttributeSelector, type CssNode } from "css-tree";
+import { tokenize } from "./class-contexts.js";
 
-// Shared css-tree helpers and the span-edit applicator used by both the U4
-// stylesheet transform and the U5 consolidation kernel.
+// Shared css-tree helpers and the span-edit applicator used by the U4
+// stylesheet transform, the U5 consolidation kernel, and the apply
+// inline-style tripwire.
 
 export interface SpanEdit {
   start: number;
@@ -15,6 +17,75 @@ export function childArray(node: CssNode | null | undefined): Array<CssNode> {
     return [];
   }
   return node.children.toArray();
+}
+
+// Every class selector under a node, in document order. walk() follows the
+// structure fields that children lists miss, such as the selector list in
+// `:nth-child(2n of .x)` (KTD12).
+export function classSelectorNodes(node: CssNode): Array<CssNode> {
+  const nodes: Array<CssNode> = [];
+  walk(node, {
+    visit: "ClassSelector",
+    enter: function (classNode) {
+      nodes.push(classNode);
+    },
+  });
+  return nodes;
+}
+
+// Could `[class<matcher>"…"]` match an element carrying `original`, going by
+// one whitespace-separated piece of the selector's value? `=` and `~=`
+// compare whole tokens. The substring matchers test the whole class
+// attribute, so a piece may cover part of a token: holding each piece to the
+// matcher against each original keeps every original the selector could
+// match.
+function matchesPiece(
+  matcher: string,
+  original: string,
+  piece: string,
+): boolean {
+  switch (matcher) {
+    case "=":
+    case "~=":
+      return original === piece;
+    case "*=":
+      return original.includes(piece);
+    case "^=":
+      return original.startsWith(piece);
+    case "$=":
+      return original.endsWith(piece);
+    case "|=":
+      return original === piece || original.startsWith(`${piece}-`);
+    default:
+      return false;
+  }
+}
+
+// KTD12: the originals a class attribute selector references, such as
+// `[class~="flex"]` or `[class*="fle"]`. minwind renames neither the
+// selector nor its value, so a renamed original among them stops matching.
+// Empty for any other node, for other attributes, and for a bare `[class]`.
+export function classAttributeTokens(
+  node: CssNode,
+  originals: ReadonlyArray<string>,
+): Array<string> {
+  if (node.type !== "AttributeSelector") return [];
+  const attribute = node as unknown as AttributeSelector;
+  const { matcher, value } = attribute;
+  if (attribute.name.name !== "class" || matcher === null || value === null) {
+    return [];
+  }
+  // A String value arrives decoded; an Identifier keeps its escapes.
+  const pieces = tokenize(
+    value.type === "String"
+      ? (value.value ?? "")
+      : ident.decode(value.name ?? ""),
+  );
+  return originals.filter(function (original) {
+    return pieces.some(function (piece) {
+      return matchesPiece(matcher, original, piece);
+    });
+  });
 }
 
 // Applies verified, non-overlapping span edits against the original bytes.

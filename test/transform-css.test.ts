@@ -533,6 +533,78 @@ describe("transformStylesheet dialect names", function () {
   });
 });
 
+describe("selector forms outside children lists (R12, KTD12)", function () {
+  it("renames a class inside :nth-child(… of …) with the rest of its arm", function () {
+    const registry = registryFor(["flex"]);
+    const result = transform(
+      "@layer utilities{li:nth-child(2n of .flex){color:red}}",
+      registry,
+    );
+    assert.strictEqual(
+      result.css,
+      `@layer utilities{li:nth-child(2n of .${nameOf(registry, "flex")}){color:red}}`,
+    );
+    assert.doesNotThrow(function () {
+      assertPresence(registry, [result.css]);
+    });
+  });
+
+  it("counts a class inside :nth-child(… of …) in its selector arm", function () {
+    assert.deepStrictEqual(
+      selectorArmTokens(
+        "li:nth-child(2n of .flex){color:red}" +
+          ".a:nth-last-child(odd of .b.c){color:red}",
+      ),
+      [["flex"], ["a", "b", "c"]],
+    );
+  });
+
+  it("fails when a renamed class survives inside :nth-child(… of …)", function () {
+    const registry = registryFor(["flex"]);
+    assert.throws(function () {
+      assertNoSurvivingTokens(
+        registry,
+        "@layer utilities{li:nth-child(2n of .flex){color:red}}",
+        "app.css",
+      );
+    }, /"flex" at offset \d+ survives as a class selector/);
+  });
+
+  it("fails naming a renamed class left in an @scope prelude", function () {
+    const registry = registryFor(["flex"]);
+    assert.throws(function () {
+      transform(
+        "@layer utilities{.flex{display:flex}}@scope (.flex){li{color:red}}",
+        registry,
+      );
+    }, /app\.css: .*"flex" in an @scope prelude/);
+  });
+
+  it("fails naming a renamed class left in a class attribute selector", function () {
+    const registry = registryFor(["flex"]);
+    assert.throws(function () {
+      transform(
+        '@layer utilities{.flex{display:flex}}[class~="flex"]{gap:1rem}',
+        registry,
+      );
+    }, /app\.css: .*"flex" in \[class~="flex"\]/);
+  });
+
+  it("passes Typography's not-prose selector when not-prose is outside the registry", function () {
+    const registry = registryFor(["prose"]);
+    const notProse =
+      ':not(:where([class~="not-prose"],[class~="not-prose"] *))';
+    const result = transform(
+      `@layer utilities{.prose :where(p)${notProse}{margin:0}}`,
+      registry,
+    );
+    assert.strictEqual(
+      result.css,
+      `@layer utilities{.${nameOf(registry, "prose")} :where(p)${notProse}{margin:0}}`,
+    );
+  });
+});
+
 describe("selectorArmTokens (KTD7)", function () {
   it("lists each selector arm's class tokens, as the transform decides them", function () {
     const css =

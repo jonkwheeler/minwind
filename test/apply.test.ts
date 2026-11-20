@@ -1427,6 +1427,87 @@ describe("inline-style tripwire (R7)", function () {
   });
 });
 
+describe("inline-style tripwire selector forms (R11, KTD12)", function () {
+  // Fails runApply on index.html carrying `css` in a <style> block, and
+  // checks the error names each `page: reference` line.
+  async function assertTripwireNames(
+    css: string,
+    references: ReadonlyArray<string>,
+  ): Promise<void> {
+    const dir = await copyApplySiteOut();
+    cleanArtifacts();
+    try {
+      addInlineStyle(dir, "index.html", css);
+      await assert.rejects(
+        runApply({ dir, root: APPLY_SITE }),
+        function (error: Error) {
+          for (const reference of references) {
+            assert.ok(
+              error.message.includes(
+                `${path.join(dir, "index.html")}: ${reference}`,
+              ),
+              error.message,
+            );
+          }
+          return true;
+        },
+      );
+      assert.ok(!fs.existsSync(artifactsDir()));
+    } finally {
+      cleanArtifacts();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  for (const selector of [
+    '[class~="flex"]',
+    '[class="flex"]',
+    '[class*="fle"]',
+    '[class^="fl"]',
+  ]) {
+    it(`fails naming flex and the page for ${selector}`, async function () {
+      await assertTripwireNames(`${selector}{gap:1rem}`, [
+        `.flex in ${selector}`,
+      ]);
+    });
+  }
+
+  it("fails naming a renamed class inside :nth-child(… of …)", async function () {
+    await assertTripwireNames("li:nth-child(2n of .flex){color:red}", [
+      ".flex",
+    ]);
+  });
+
+  it("fails naming both renamed classes of an @scope prelude", async function () {
+    await assertTripwireNames("@scope (.flex) to (.p-4){li{color:red}}", [
+      ".flex",
+      ".p-4",
+    ]);
+  });
+
+  async function assertTripwirePasses(css: string): Promise<void> {
+    const dir = await copyApplySiteOut();
+    cleanArtifacts();
+    try {
+      addInlineStyle(dir, "index.html", css);
+      const outcome = await runApply({ dir, root: APPLY_SITE });
+      assert.ok(outcome.enabled);
+      assert.ok(readTree(dir)["index.html"].includes(`<style>${css}</style>`));
+    } finally {
+      cleanArtifacts();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  it("passes attribute selectors that reference no renamed class", async function () {
+    await assertTripwirePasses(
+      "[data-state=open]{color:red}" +
+        '[class~="keep-me"]{color:red}' +
+        '[class*="zzz"]{color:red}',
+    );
+  });
+});
+
 describe("apply --prominence", function () {
   it("auto deals the first word to the first class-bearing element", async function () {
     const vocabulary = writeVocabulary();
