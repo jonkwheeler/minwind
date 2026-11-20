@@ -3104,3 +3104,74 @@ describe("Module export maps the remap does not claim (KTD15)", function () {
     }
   });
 });
+
+describe("inline-style tripwire spellings CSS matches case-insensitively (R11, KTD12)", function () {
+  // Runs apply on index.html carrying `css` in a <style> block. Returns the
+  // error's `page: reference` lines, or null when apply passed and left the
+  // block untouched.
+  async function tripwireLines(css: string): Promise<Array<string> | null> {
+    const dir = await copyApplySiteOut();
+    cleanArtifacts();
+    try {
+      addInlineStyle(dir, "index.html", css);
+      try {
+        await runApply({ dir, root: APPLY_SITE });
+      } catch (error) {
+        assert.ok(error instanceof Error);
+        assert.ok(!fs.existsSync(artifactsDir()));
+        const prefix = `  ${path.join(dir, "index.html")}: `;
+        return error.message
+          .split("\n")
+          .filter(function (line) {
+            return line.startsWith(prefix);
+          })
+          .map(function (line) {
+            return line.slice(prefix.length);
+          });
+      }
+      assert.ok(readTree(dir)["index.html"].includes(`<style>${css}</style>`));
+      return null;
+    } finally {
+      cleanArtifacts();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  it("fails naming flex for the i flag and uppercase or escaped class names, and p-4 for @SCOPE", async function () {
+    const selectors = [
+      '[class~="FLEX"i]',
+      '[class*="FLE"I]',
+      '[CLASS~="flex"]',
+      '[cl\\61ss~="flex"]',
+      '[*|class~="flex"]',
+    ];
+    const css =
+      selectors
+        .map(function (selector) {
+          return `${selector}{gap:1rem}`;
+        })
+        .join("") + "@SCOPE (.p-4){li{color:red}}";
+    const lines = await tripwireLines(css);
+    assert.ok(lines !== null, "apply must fail");
+    for (const reference of [
+      ...selectors.map(function (selector) {
+        return `.flex in ${selector}`;
+      }),
+      ".p-4",
+    ]) {
+      assert.ok(lines.includes(reference), `${reference} not in ${lines}`);
+    }
+  });
+
+  it("passes selectors CSS matches case-sensitively or never against class", async function () {
+    assert.strictEqual(
+      await tripwireLines(
+        '[class~="FLEX"]{gap:1rem}' +
+          '[class~="FLEX"s]{gap:1rem}' +
+          '[class~="zzz"i]{gap:1rem}' +
+          '[svg|class~="flex"]{gap:1rem}',
+      ),
+      null,
+    );
+  });
+});

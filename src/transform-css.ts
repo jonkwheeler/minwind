@@ -1,6 +1,7 @@
 import { generate, ident, parse, walk, type CssNode } from "css-tree";
 import {
   applySpanEdits,
+  asciiLowerCase,
   childArray,
   classAttributeTokens,
   classSelectorNodes,
@@ -647,7 +648,7 @@ export function assertNoSurvivingTokens(
     if (node.type === "Atrule") {
       // Keyframe blocks hold percentage rules, not class selectors.
       if ((node.name ?? "").endsWith("keyframes")) return;
-      if (node.name === "scope" && node.prelude != null) {
+      if (asciiLowerCase(node.name ?? "") === "scope" && node.prelude != null) {
         visitUnrenamed(node.prelude, base, true);
       }
       if (node.block != null) {

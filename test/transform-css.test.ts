@@ -627,3 +627,46 @@ describe("selectorArmTokens (KTD7)", function () {
     ]);
   });
 });
+
+describe("tripwire spellings that CSS matches case-insensitively (R12, KTD12)", function () {
+  const RULE = "@layer utilities{.flex{display:flex}}";
+
+  for (const selector of [
+    '[class~="FLEX" i]',
+    '[class*="FLE" I]',
+    '[class^="Fl" \\69]',
+    '[CLASS~="flex"]',
+    '[cl\\61ss~="flex"]',
+    '[*|class~="flex"]',
+    '[|class~="flex"]',
+  ]) {
+    it(`fails naming flex in ${selector}`, function () {
+      const registry = registryFor(["flex"]);
+      assert.throws(function () {
+        transform(`${RULE}${selector}{gap:1rem}`, registry);
+      }, /app\.css: .*"flex" in \[.*\] at offset \d+ survives where minwind does not rename/);
+    });
+  }
+
+  it("fails naming a renamed class in an uppercase @SCOPE prelude", function () {
+    const registry = registryFor(["flex"]);
+    assert.throws(function () {
+      transform(`${RULE}@SCOPE (.flex){li{color:red}}`, registry);
+    }, /app\.css: .*"flex" in an @scope prelude/);
+  });
+
+  it("passes selectors CSS matches case-sensitively or never against class", function () {
+    const registry = registryFor(["flex"]);
+    const css =
+      '[class~="FLEX"]{gap:1rem}' +
+      '[class~="FLEX" s]{gap:1rem}' +
+      '[class~="zzz" i]{gap:1rem}' +
+      '[data-class~="flex"]{gap:1rem}' +
+      '[svg|class~="flex"]{gap:1rem}';
+    const result = transform(`${RULE}${css}`, registry);
+    assert.strictEqual(
+      result.css,
+      `@layer utilities{.${nameOf(registry, "flex")}{display:flex}}${css}`,
+    );
+  });
+});
