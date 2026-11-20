@@ -1152,6 +1152,97 @@ describe("minwind per-context tripwire (KTD1)", function () {
   });
 });
 
+// R4 and R5 off the Astro route. minwind's transform runs before any Svelte
+// compiler (enforce: "pre"), so the hook sees the raw .svelte source.
+describe("minwind:source on table-fragment and noscript markup (R4, R5)", function () {
+  it("renames a .svelte root <tr> and its <noscript> markup, and the pre-pass sees them", async function () {
+    await withFlags({}, async function () {
+      const site = await mkdtemp(path.join(tmpdir(), "minwind-svelte-"));
+      try {
+        await mkdir(path.join(site, "src"), { recursive: true });
+        // Plain CSS: the pre-pass compiles it without resolving tailwindcss.
+        await writeFile(
+          path.join(site, "src", "app.css"),
+          ".border-b{border-bottom-width:1px}" +
+            ".px-4{padding-inline:1rem}" +
+            ".text-sm{font-size:.875rem}\n",
+        );
+        // border-b also sits on a <nav>, so the stylesheet renames it
+        // whether or not the row is read.
+        await writeFile(
+          path.join(site, "src", "Nav.svelte"),
+          `<nav class="border-b">x</nav>\n`,
+        );
+        const rowId = path.join(site, "src", "Row.svelte");
+        const row = `<script>
+  export let label
+</script>
+<tr class="border-b"><td class="px-4">{label}</td></tr>
+<noscript><p class="text-sm">Enable JavaScript</p></noscript>
+`;
+        await writeFile(rowId, row);
+
+        const plugins = minwind({
+          root: site,
+          cssEntry: path.join(site, "src", "app.css"),
+        });
+        const source = findHook(plugins, "minwind:source");
+        const mock = mockContext();
+        const buildStart = source.buildStart as (
+          this: unknown,
+          options: unknown,
+        ) => Promise<void>;
+        await buildStart.call(mock.context, {});
+        const transform = source.transform as (
+          this: unknown,
+          code: string,
+          id: string,
+        ) => unknown;
+        const result = (await transform.call(mock.context, row, rowId)) as {
+          code: string;
+        } | null;
+        assert.ok(result !== null, mock.warnings.join("\n"));
+        assert.ok(
+          result.code.includes(
+            `<tr class="${hashClassName("border-b")}">` +
+              `<td class="${hashClassName("px-4")}">{label}</td></tr>`,
+          ),
+          result.code,
+        );
+        assert.ok(
+          result.code.includes(
+            `<noscript><p class="${hashClassName("text-sm")}">`,
+          ),
+          result.code,
+        );
+        assert.deepStrictEqual(mock.warnings, []);
+
+        for (const plugin of [source, findHook(plugins, "minwind:css")]) {
+          const closeBundle = plugin.closeBundle as
+            ((this: unknown) => unknown) | undefined;
+          if (closeBundle !== undefined) await closeBundle.call(mock.context);
+        }
+        const report = JSON.parse(
+          await readFile(
+            path.join(site, ".output", "minwind", "report.json"),
+            "utf8",
+          ),
+        ) as TransformReport;
+        assert.deepStrictEqual(
+          report.renames
+            .map(function (entry) {
+              return entry.token;
+            })
+            .sort(),
+          ["border-b", "px-4", "text-sm"],
+        );
+      } finally {
+        await rm(site, { recursive: true, force: true });
+      }
+    });
+  });
+});
+
 describe("writeArtifacts (R11, KTD9)", function () {
   function makeReport(warningCount: number): TransformReport {
     return {

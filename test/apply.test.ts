@@ -511,6 +511,38 @@ describe("transformModule on emitted HTML", function () {
   });
 });
 
+// R4 and R5 in built HTML: parse5 drops markup inside <option> and reads
+// <noscript> content as raw text, so both leaked their tokens in 1.1.0.
+describe("transformModule on emitted <select> and <noscript> markup (R4, R5)", function () {
+  it("renames classes inside <option> and <noscript> without a leak", function () {
+    const result = transformModule({
+      code:
+        `<!doctype html><html><head>` +
+        `<noscript><link rel="stylesheet" href="/nojs.css"></noscript>` +
+        `</head><body>` +
+        `<select class="flex"><option class="p-4">` +
+        `<span class="items-center">One</span></option></select>` +
+        `<noscript><p class="mb-16">Enable JavaScript</p></noscript>` +
+        `</body></html>`,
+      id: "/out/index.html",
+      registry: REGISTRY,
+    });
+    assert.ok(result !== null);
+    assert.deepStrictEqual(result.warnings, []);
+    assert.ok(
+      result.code.includes(
+        `<select class="${nameOf("flex")}"><option class="${nameOf("p-4")}">` +
+          `<span class="${nameOf("items-center")}">One</span>`,
+      ),
+      result.code,
+    );
+    assert.ok(
+      result.code.includes(`<noscript><p class="${nameOf("mb-16")}">`),
+      result.code,
+    );
+  });
+});
+
 describe("transformBundle", function () {
   it("renames class spans inside markup template strings", function () {
     // Solid-style compiled output: markup lives in template literals.

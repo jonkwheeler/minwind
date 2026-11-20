@@ -1,0 +1,15 @@
+---
+interface Props {
+  label: string;
+  value: string;
+}
+
+// A table-fragment root: parse5 drops a <tr> start tag outside a <table>,
+// so 1.1.0 never read these classes from the source (R4).
+const { label, value } = Astro.props;
+---
+
+<tr class="border-t border-stone-100">
+  <th class="py-2 pr-4 text-left font-medium">{label}</th>
+  <td class="py-2 text-stone-600">{value}</td>
+</tr>

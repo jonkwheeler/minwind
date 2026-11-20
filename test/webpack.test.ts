@@ -28,16 +28,16 @@ import { createCustomPropertyRegistry } from "../src/custom-properties.js";
 
 const TOKENS = ["flex", "items-center", "p-4"];
 
-function fakePrepass(): PrepassResult {
+function fakePrepass(tokens: ReadonlyArray<string> = TOKENS): PrepassResult {
   const registry = createNameRegistry({
-    universe: new Set(TOKENS),
-    sourceTokens: new Set(TOKENS),
+    universe: new Set(tokens),
+    sourceTokens: new Set(tokens),
   });
   return {
     registry,
-    universe: new Set(TOKENS),
-    sourceTokens: new Set(TOKENS),
-    renameTokens: new Set(TOKENS),
+    universe: new Set(tokens),
+    sourceTokens: new Set(tokens),
+    renameTokens: new Set(tokens),
     runtimeTokens: new Set(),
     listFrequencies: [],
     consolidationVerdicts: [],
@@ -217,6 +217,41 @@ describe("minwindLoader", function () {
     const call = runLoader(plugin, "/site/node_modules/pkg/a.tsx", source);
     assert.strictEqual(call.error, null);
     assert.strictEqual(call.content, source);
+  });
+});
+
+// R4 and R5 off the Astro route: in Vue, a row inside a component and
+// <noscript> markup both drop out of the template parse today.
+describe("minwindLoader on table-fragment and noscript markup (R4, R5)", function () {
+  it("renames a .vue row inside a component and its <noscript> markup", function () {
+    const plugin = new MinwindWebpackPlugin();
+    const prepass = fakePrepass(["border-b", "px-4", "text-sm"]);
+    plugin.prepass = prepass;
+    const call = runLoader(
+      plugin,
+      "/site/src/Rows.vue",
+      `<template>
+  <MyTable>
+    <tr class="border-b"><td class="px-4">x</td></tr>
+  </MyTable>
+  <noscript><p class="text-sm">Enable JavaScript</p></noscript>
+</template>
+`,
+    );
+    assert.strictEqual(call.error, null);
+    assert.ok(
+      call.content?.includes(
+        `<tr class="${nameOf(prepass, "border-b")}">` +
+          `<td class="${nameOf(prepass, "px-4")}">x</td></tr>`,
+      ),
+      call.content,
+    );
+    assert.ok(
+      call.content?.includes(
+        `<noscript><p class="${nameOf(prepass, "text-sm")}">`,
+      ),
+      call.content,
+    );
   });
 });
 

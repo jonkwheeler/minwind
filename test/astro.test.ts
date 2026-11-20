@@ -791,6 +791,110 @@ describe(
       );
     }
 
+    describe("table rows, <noscript>, and the stale-class guard (R4, R5)", function () {
+      const ABOUT = "about/index.html";
+
+      function renamedTokens(): Set<string> {
+        return new Set(
+          report.renames.map(function (entry) {
+            return entry.token;
+          }),
+        );
+      }
+
+      // The source classes behind built names, a merged name's members
+      // included.
+      function originalsOf(names: Array<string>): Array<string> {
+        return names.flatMap(function (name) {
+          if (Object.hasOwn(map.consolidated, name)) {
+            return map.consolidated[name];
+          }
+          return Object.hasOwn(map.names, name) ? [map.names[name]] : [name];
+        });
+      }
+
+      function decodeEntities(value: string): string {
+        return value
+          .replace(/&#x([0-9a-f]+);/gi, function (_match, hex: string) {
+            return String.fromCodePoint(parseInt(hex, 16));
+          })
+          .replace(/&#(\d+);/g, function (_match, decimal: string) {
+            return String.fromCodePoint(Number(decimal));
+          })
+          .replace(/&quot;/g, '"')
+          .replace(/&apos;/g, "'")
+          .replace(/&lt;/g, "<")
+          .replace(/&gt;/g, ">")
+          .replace(/&amp;/g, "&");
+      }
+
+      // KTD14's stale-class guard, mirroring GTM Frontier's check 7: the
+      // classes an element still wears under an original name the build
+      // renamed. The CSS selector carries the new name, so such an element
+      // loses its rule. Every start tag counts, including tags a parser
+      // would drop or read as text (<noscript> content).
+      function staleClasses(html: string): Array<string> {
+        const renamed = renamedTokens();
+        const stale = new Set<string>();
+        const markup = html.replace(
+          /<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi,
+          "",
+        );
+        for (const tag of markup.matchAll(
+          /<[a-z][a-z0-9-]*\b(?:"[^"]*"|'[^']*'|[^"'>])*>/gi,
+        )) {
+          const value = /\sclass=(["'])(.*?)\1/is.exec(tag[0])?.[2];
+          if (value === undefined) continue;
+          for (const token of splitClasses(decodeEntities(value))) {
+            if (renamed.has(token) && !isRenamed(token)) stale.add(token);
+          }
+        }
+        return sorted(stale);
+      }
+
+      it("finds no element wearing a renamed class's original name", function () {
+        for (const page of pagesOf(builds.on)) {
+          assert.deepStrictEqual(staleClasses(builds.on[page]), [], page);
+        }
+        // The guard can fire: the no-integration build wears every original.
+        assert.ok(
+          staleClasses(builds.baseline["index.html"]).includes("scroll-smooth"),
+        );
+      });
+
+      it("renames a table-row component's classes (AE4)", function () {
+        const renamed = renamedTokens();
+        for (const tag of ["tr", "th", "td"]) {
+          const source = classesOf(builds.baseline[ABOUT], tag);
+          const built = classesOf(builds.on[ABOUT], tag);
+          for (const name of built) {
+            assert.ok(isRenamed(name), `<${tag}> kept ${name}`);
+          }
+          assert.deepStrictEqual(
+            sorted(originalsOf(built)),
+            sorted(source),
+            tag,
+          );
+          for (const token of source) {
+            assert.ok(renamed.has(token), `${token} is not a rename`);
+          }
+        }
+      });
+
+      it("gives <noscript> markup the name the class has elsewhere (AE5)", function () {
+        const textSm = report.renames.find(function (entry) {
+          return entry.token === "text-sm";
+        });
+        assert.ok(textSm !== undefined, "text-sm kept its original name");
+        const noscript = /<noscript>([\s\S]*?)<\/noscript>/.exec(
+          builds.on[ABOUT],
+        );
+        assert.ok(noscript !== null, builds.on[ABOUT]);
+        assert.deepStrictEqual(classesOf(noscript[1], "p"), [textSm.name]);
+        assert.ok(classesOf(builds.on[ABOUT], "nav").includes(textSm.name));
+      });
+    });
+
     it("pins the astro version whose Node floor gates this suite", function () {
       const fixture = readJson<{ dependencies: Record<string, string> }>(
         path.join(FIXTURE, "package.json"),

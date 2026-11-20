@@ -360,3 +360,53 @@ import BaseHead from "../components/BaseHead.astro";
     }
   });
 });
+
+describe("runPrepass table-fragment and noscript markup (R4, R5)", function () {
+  it("renames a table row component's root classes and <noscript> classes (AE4, AE5)", async function () {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "minwind-astro-"));
+    try {
+      fs.mkdirSync(path.join(root, "src", "components"), { recursive: true });
+      fs.mkdirSync(path.join(root, "src", "pages"), { recursive: true });
+      const css = path.join(root, "src", "app.css");
+      fs.writeFileSync(
+        css,
+        `.border-b { border-bottom-width: 1px; }
+.px-4 { padding-inline: 1rem; }
+.text-sm { font-size: 0.875rem; }
+`,
+      );
+      fs.writeFileSync(
+        path.join(root, "src", "components", "Row.astro"),
+        `---
+const { label } = Astro.props;
+---
+<tr class="border-b"><td class="px-4">{label}</td></tr>
+`,
+      );
+      fs.writeFileSync(
+        path.join(root, "src", "pages", "index.astro"),
+        `---
+import Row from "../components/Row.astro";
+---
+<table><tbody><Row label="One" /></tbody></table>
+<noscript><p class="text-sm">Enable JavaScript</p></noscript>
+`,
+      );
+      const result = await runPrepass({ root, cssEntry: css });
+      const reasons = exclusionReasons(result);
+      for (const token of ["border-b", "px-4", "text-sm"]) {
+        assert.ok(
+          result.renameTokens.has(token),
+          `${token} must be a rename token`,
+        );
+        assert.strictEqual(reasons.get(token), undefined);
+        assert.strictEqual(
+          result.registry.nameFor(token),
+          hashClassName(token),
+        );
+      }
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});

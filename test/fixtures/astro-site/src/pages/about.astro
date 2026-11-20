@@ -1,5 +1,6 @@
 ---
 import Badge from "../components/Badge.astro";
+import TableRow from "../components/TableRow.astro";
 import Base from "../layouts/Base.astro";
 ---
 
@@ -16,4 +17,13 @@ import Base from "../layouts/Base.astro";
       <Badge label="No adapter" tone="warn" />
     </li>
   </ul>
+  <table class="mt-8 w-full">
+    <tbody>
+      <TableRow label="Output" value="Static HTML" />
+      <TableRow label="Adapter" value="None" />
+    </tbody>
+  </table>
+  <noscript>
+    <p class="text-sm">Enable JavaScript to see live follow-up status.</p>
+  </noscript>
 </Base>

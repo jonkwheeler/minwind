@@ -877,3 +877,196 @@ describe("SFC leak-check masking", function () {
     );
   });
 });
+
+// R4 and R5: parse5 drops table-fragment and in-select start tags with their
+// attributes, lowercases component names onto those same paths, and reads
+// <noscript> content as raw text. Each list below is sliced from the file,
+// so a wrong offset shows up as the wrong text.
+function classAttributesIn(filePath: string, code: string): Array<string> {
+  const lists: Array<string> = [];
+  walkSfcClassContexts(filePath, code, {
+    renameLiteral: function (literal, kind) {
+      assert.strictEqual(kind, "class-attribute");
+      lists.push(code.slice(literal.start, literal.end));
+    },
+    runtimeLiteral: function (literal) {
+      assert.fail(`runtime literal ${code.slice(literal.start, literal.end)}`);
+    },
+  });
+  return lists;
+}
+
+describe("table, select, look-alike component, and noscript markup (R4, R5)", function () {
+  it("reports a table row component's root classes (AE4)", function () {
+    assert.deepStrictEqual(
+      classAttributesIn(
+        "/site/src/components/Row.astro",
+        `---
+const { label } = Astro.props;
+---
+<tr class="border-b"><td class="px-4">{label}</td></tr>
+`,
+      ),
+      ["border-b", "px-4"],
+    );
+  });
+
+  it("reports the classes on every table-fragment root", function () {
+    for (const [markup, expected] of [
+      [
+        `<tbody class="divide-y"><tr class="h-8"><td>x</td></tr></tbody>`,
+        ["divide-y", "h-8"],
+      ],
+      [
+        `<thead class="bg-stone-50"><tr><th>x</th></tr></thead>`,
+        ["bg-stone-50"],
+      ],
+      [`<tfoot class="font-bold"><tr><td>x</td></tr></tfoot>`, ["font-bold"]],
+      [`<th class="text-left">x</th>`, ["text-left"]],
+      [`<caption class="sr-only">x</caption>`, ["sr-only"]],
+      [`<colgroup><col class="w-1/3" /><col /></colgroup>`, ["w-1/3"]],
+      [`<col class="w-1/3">`, ["w-1/3"]],
+    ] as const) {
+      assert.deepStrictEqual(
+        classAttributesIn("/site/src/components/Part.astro", `${markup}\n`),
+        expected,
+        markup,
+      );
+    }
+  });
+
+  it("reports a row wrapped in a component", function () {
+    for (const filePath of [
+      "/site/src/components/Rows.astro",
+      "/site/src/Rows.svelte",
+    ]) {
+      assert.deepStrictEqual(
+        classAttributesIn(
+          filePath,
+          `<MyTable><tr class="h-8"><td>x</td></tr></MyTable>\n`,
+        ),
+        ["h-8"],
+        filePath,
+      );
+    }
+    assert.deepStrictEqual(
+      classAttributesIn(
+        "/site/src/Rows.vue",
+        `<template><MyTable><tr class="h-8"><td>x</td></tr></MyTable></template>\n`,
+      ),
+      ["h-8"],
+    );
+  });
+
+  it("reports markup inside <select> and <option>", function () {
+    const markup = `<select class="w-full"><option class="p-2"><span class="font-bold">x</span></option></select>`;
+    for (const [filePath, code] of [
+      ["/site/src/components/Picker.astro", `${markup}\n`],
+      ["/site/src/Picker.svelte", `${markup}\n`],
+      ["/site/src/Picker.vue", `<template>${markup}</template>\n`],
+      ["/out/index.html", `<!doctype html><html><body>${markup}</body></html>`],
+    ]) {
+      assert.deepStrictEqual(
+        classAttributesIn(filePath, code),
+        ["w-full", "p-2", "font-bold"],
+        filePath,
+      );
+    }
+  });
+
+  it("reports a component named like <select> and its children", function () {
+    for (const filePath of [
+      "/site/src/components/Field.astro",
+      "/site/src/Field.svelte",
+    ]) {
+      assert.deepStrictEqual(
+        classAttributesIn(
+          filePath,
+          `<Select class="w-full"><span class="ml-2">x</span></Select>\n`,
+        ),
+        ["w-full", "ml-2"],
+        filePath,
+      );
+    }
+  });
+
+  it("reads a component named like a raw-text element as an element", function () {
+    assert.deepStrictEqual(
+      classAttributesIn(
+        "/site/src/components/Heading.astro",
+        `<Title class="text-xl"><b class="font-bold">x</b></Title>\n`,
+      ),
+      ["text-xl", "font-bold"],
+    );
+  });
+
+  it("reports classes on markup inside <noscript> (AE5)", function () {
+    const markup = `<noscript><p class="text-sm">Enable JavaScript</p></noscript>`;
+    assert.deepStrictEqual(
+      classAttributesIn(
+        "/site/src/pages/about.astro",
+        `<main class="mx-auto">${markup}</main>\n`,
+      ),
+      ["mx-auto", "text-sm"],
+    );
+    assert.deepStrictEqual(
+      classAttributesIn(
+        "/out/about/index.html",
+        `<!doctype html><html><body><main class="mx-auto">${markup}</main></body></html>`,
+      ),
+      ["mx-auto", "text-sm"],
+    );
+  });
+
+  it("recovers the body class after a <noscript> in <head> implies <body>", function () {
+    // With scripting off, the <img> ends <head> and implies <body>, so the
+    // real <body> start tag only adds its attributes, without a location.
+    // The walk is in tree order: the implied <body> holds the <img>.
+    assert.deepStrictEqual(
+      classContexts(`---
+const title = "x";
+---
+<!doctype html>
+<html lang="en">
+  <head>
+    <title>{title}</title>
+    <noscript><img class="h-0" src="/pixel.gif" alt="" /></noscript>
+  </head>
+  <body class="min-h-screen">
+    <slot />
+  </body>
+</html>
+`),
+      { renamed: ["min-h-screen", "h-0"], runtime: [] },
+    );
+    assert.deepStrictEqual(
+      classAttributesIn(
+        "/out/index.html",
+        `<!doctype html><html lang="en"><head><title>x</title>` +
+          `<noscript><img class="h-0" src="/pixel.gif" alt=""></noscript>` +
+          `</head><body class="min-h-screen"><main>x</main></body></html>`,
+      ),
+      ["min-h-screen", "h-0"],
+    );
+  });
+
+  it("never reads a literal <body inside a <textarea> as a tag", function () {
+    assert.deepStrictEqual(
+      classContexts(`---
+import BaseHead from "../components/BaseHead.astro";
+---
+<!doctype html>
+<html lang="en">
+  <head>
+    <BaseHead />
+    <textarea><body class="antialiased"></textarea>
+  </head>
+  <body class="min-h-screen">
+    <slot />
+  </body>
+</html>
+`),
+      { renamed: ["min-h-screen"], runtime: [] },
+    );
+  });
+});

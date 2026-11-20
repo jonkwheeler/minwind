@@ -491,12 +491,12 @@ function attributeValueSpan(
 // literal tag.
 const HTML_OR_BODY_START_TAG = /<(html|body)(?=[\t\n\f\r />])/gi;
 
-// HTML elements whose content the tokenizer reads as text.
+// HTML elements whose content the tokenizer reads as text. The template
+// parse runs with scripting off, so <noscript> content is markup.
 const RAW_TEXT_ELEMENTS = new Set([
   "iframe",
   "noembed",
   "noframes",
-  "noscript",
   "plaintext",
   "script",
   "style",
@@ -626,6 +626,45 @@ function adoptedAttributeSpan(
   return null;
 }
 
+// parse5's in-body and in-select modes drop table-fragment and nested
+// <select> start tags with their attributes, and lowercased component names
+// (<Select>, <Table>, <Title>) land on those paths or on raw-text elements.
+// The parse copy renames such tags so every element reaches the tree:
+// parser-special names get an `x` first letter (tr -> xr), and in the
+// component formats every capitalized name also gets `-` second (Select ->
+// x-lect), which no HTML element name has. The rename keeps every length,
+// so no offset moves. Lowercase html, head, and body and the lowercase
+// raw-text elements never match: the adoption recovery depends on them.
+const PARSER_SPECIAL_TAGS = new Set([
+  "table",
+  "caption",
+  "colgroup",
+  "col",
+  "thead",
+  "tbody",
+  "tfoot",
+  "tr",
+  "td",
+  "th",
+  "select",
+]);
+
+const TAG_NAME = /(<\/?)([A-Za-z][^\t\n\f\r />]*)(?=[\t\n\f\r />])/g;
+
+function renameParserSpecialTags(format: SfcFormat, text: string): string {
+  const components = format !== "html";
+  return text.replace(TAG_NAME, function (match, open: string, name: string) {
+    const first = name[0];
+    if (components && first >= "A" && first <= "Z") {
+      return name.length === 1 ? `${open}x` : `${open}x-${name.slice(2)}`;
+    }
+    if (PARSER_SPECIAL_TAGS.has(name.toLowerCase())) {
+      return `${open}x${name.slice(1)}`;
+    }
+    return match;
+  });
+}
+
 function walkTemplateElements(
   node: TreeNode,
   visit: (element: TreeElement) => void,
@@ -691,8 +730,12 @@ export function walkSfcClassContexts(
   if (format === "svelte" || format === "astro") {
     templateText = maskBraceExpressions(templateText);
   }
+  templateText = renameParserSpecialTags(format, templateText);
+  // Scripting off makes <noscript> content elements with locations instead
+  // of one raw text node. nonTagSpans mirrors it through RAW_TEXT_ELEMENTS.
   const document = parse5.parse(templateText, {
     sourceCodeLocationInfo: true,
+    scriptingEnabled: false,
   });
 
   let nonTags: Array<SourceSpan> | null = null;
