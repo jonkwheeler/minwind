@@ -2,12 +2,14 @@ import * as parse5 from "parse5";
 import type { DefaultTreeAdapterMap } from "parse5";
 import * as ts from "typescript";
 import {
+  objectLiteralKeys,
   parseSourceModule,
   tokenize,
   walkClassContexts,
   type ClassContextVisitor,
   type LiteralOccurrence,
 } from "./class-contexts.js";
+import { leakViews } from "./html-entities.js";
 import { maskCommentsAndReservedWords } from "./js-mask.js";
 
 // Single-file-component support (Vue, Svelte, Astro). One walker feeds both
@@ -155,7 +157,11 @@ function maskSpans(
 // offsets in the original. Vue needs no masking: its attributes are always
 // quoted and its bindings always expressions. An unterminated run (a stray
 // brace in text) is left alone.
-function maskBraceExpressions(text: string): string {
+function maskBraceExpressions(text: string): {
+  masked: string;
+  runs: Array<SourceSpan>;
+} {
+  const runs: Array<SourceSpan> = [];
   const chars = text.split("");
   let i = 0;
   while (i < chars.length) {
@@ -192,9 +198,10 @@ function maskBraceExpressions(text: string): string {
       continue;
     }
     for (let k = i + 1; k < end; k += 1) chars[k] = "x";
+    runs.push({ start: i, end: end + 1 });
     i = end + 1;
   }
-  return chars.join("");
+  return { masked: chars.join(""), runs };
 }
 
 // An Astro brace run: `start` at its `{`, `end` just past its `}`. markup
@@ -466,19 +473,30 @@ export function maskSfcStyleContent(filePath: string, text: string): string {
 // the original file. unprovableTemplate cannot be mapped — the node belongs
 // to the synthetic parse — so its static fragments are re-emitted as runtime
 // literals, which poison (pre-pass) and warn (transform) exactly like the
-// template path.
+// template path. attributeQuote marks every literal as sitting in an HTML
+// attribute value with that quote (KTD15).
 function offsetVisitor(
   visitor: ClassContextVisitor,
   toOriginal: (position: number) => number,
+  attributeQuote?: string,
 ): ClassContextVisitor {
   function shift(literal: LiteralOccurrence): LiteralOccurrence {
-    return {
+    const shifted = {
       ...literal,
       start: toOriginal(literal.start),
       end: toOriginal(literal.end),
     };
+    if (attributeQuote !== undefined) shifted.attributeQuote = attributeQuote;
+    return shifted;
   }
+  const objectLiteralKey = visitor.objectLiteralKey;
   return {
+    objectLiteralKey:
+      objectLiteralKey === undefined
+        ? undefined
+        : function (key) {
+            objectLiteralKey(shift(key));
+          },
     enterRenameGroup: function (kind) {
       visitor.enterRenameGroup?.(kind);
     },
@@ -531,16 +549,50 @@ function walkBindingExpression(
   expression: string,
   expressionStart: number,
   visitor: ClassContextVisitor,
+  attributeQuote?: string,
 ): void {
   const wrapped = `cn(${expression})`;
   const sourceFile = parseSourceModule(`${filePath}::binding.ts`, wrapped);
   const offset = expressionStart - "cn(".length;
   walkClassContexts(
     sourceFile,
-    offsetVisitor(visitor, function (position) {
-      return position + offset;
-    }),
+    offsetVisitor(
+      visitor,
+      function (position) {
+        return position + offset;
+      },
+      attributeQuote,
+    ),
   );
+}
+
+// parseDiagnostics is internal in the TypeScript typings.
+function parsesCleanly(sourceFile: ts.SourceFile): boolean {
+  const parsed = sourceFile as unknown as {
+    parseDiagnostics: ReadonlyArray<ts.Diagnostic>;
+  };
+  return parsed.parseDiagnostics.length === 0;
+}
+
+// An expression parsed alone, wrapped in parentheses, or null when it does
+// not parse. Positions map back by the wrapper's one byte.
+function parseExpression(
+  filePath: string,
+  expression: string,
+  expressionStart: number,
+  kind: "ts" | "tsx",
+): ParsedRun | null {
+  const sourceFile = parseSourceModule(
+    `${filePath}::expression.${kind}`,
+    `(${expression})`,
+  );
+  if (!parsesCleanly(sourceFile)) return null;
+  return {
+    sourceFile,
+    toOriginal: function (position) {
+      return position + expressionStart - 1;
+    },
+  };
 }
 
 // An Astro brace run parsed alone as TSX. toOriginal maps a position in the
@@ -572,11 +624,7 @@ function parseBraceRun(
   }
   copy += `${templateText.slice(cursor, run.end - 1)})`;
   const sourceFile = parseSourceModule(`${filePath}::expression.tsx`, copy);
-  // parseDiagnostics is internal in the TypeScript typings.
-  const parsed = sourceFile as unknown as {
-    parseDiagnostics: ReadonlyArray<ts.Diagnostic>;
-  };
-  if (parsed.parseDiagnostics.length > 0) return null;
+  if (!parsesCleanly(sourceFile)) return null;
   return {
     sourceFile,
     toOriginal: function (position) {
@@ -804,12 +852,45 @@ function emitExpressionLiterals(
 // Svelte/Astro class="static {expr}" attributes: the static runs are real
 // class tokens co-mingled with runtime output, so the whole attribute is
 // unprovable and every static run poisons its tokens (the template-literal
-// rule). Expression runs contribute their nested string literals.
+// rule). Each expression run is parsed alone and poisons its string
+// literals, template fragments, and object keys (KTD15); a run that does not
+// parse poisons its quoted literals.
 function emitMixedTemplate(
+  filePath: string,
+  format: SfcFormat,
   value: string,
   contentStart: number,
   visitor: ClassContextVisitor,
 ): void {
+  function emitRun(from: number, to: number): void {
+    const run = value.slice(from, to);
+    const parsed =
+      run.endsWith("}") && to - from >= 2
+        ? parseExpression(
+            filePath,
+            run.slice(1, -1),
+            contentStart + from + 1,
+            format === "astro" ? "tsx" : "ts",
+          )
+        : null;
+    if (parsed === null) {
+      emitExpressionLiterals(run, contentStart + from, visitor);
+      return;
+    }
+    const shifted = offsetVisitor(visitor, parsed.toOriginal);
+    walkClassContexts(
+      parsed.sourceFile,
+      {
+        ...shifted,
+        // As the quoted-literal fallback does, skip literals with no token.
+        runtimeLiteral: function (literal, kind) {
+          if (tokenize(literal.text).length === 0) return;
+          shifted.runtimeLiteral?.(literal, kind);
+        },
+      },
+      { unprovable: true },
+    );
+  }
   function emitStatic(from: number, to: number): void {
     if (to <= from) return;
     const text = value.slice(from, to);
@@ -861,11 +942,7 @@ function emitMixedTemplate(
       }
       end += 1;
     }
-    emitExpressionLiterals(
-      value.slice(cursor, end),
-      contentStart + cursor,
-      visitor,
-    );
+    emitRun(cursor, end);
     cursor = end;
     staticStart = end;
   }
@@ -904,6 +981,7 @@ interface SourceSpan {
 // and Astro interpolate {}. Only plain HTML is built output, whose values
 // the transform decodes (KTD6).
 function emitClassAttribute(
+  filePath: string,
   format: SfcFormat,
   text: string,
   span: SourceSpan,
@@ -911,7 +989,7 @@ function emitClassAttribute(
 ): void {
   const value = text.slice(span.start, span.end);
   if ((format === "svelte" || format === "astro") && value.includes("{")) {
-    emitMixedTemplate(value, span.start, visitor);
+    emitMixedTemplate(filePath, format, value, span.start, visitor);
   } else {
     emitStaticClassAttribute(
       value,
@@ -976,6 +1054,12 @@ function attributeValueSpan(
     return { start: i + 1, end: close };
   }
   return { start: i, end };
+}
+
+// The quote around an attribute value span, or "" for an unquoted value.
+function attributeQuoteOf(source: string, span: SourceSpan): string {
+  const quote = source[span.start - 1];
+  return quote === '"' || quote === "'" ? quote : "";
 }
 
 // parse5 implies <body> as soon as <head> holds anything but head elements
@@ -1160,6 +1244,68 @@ function renameParserSpecialTags(format: SfcFormat, text: string): string {
   });
 }
 
+// A Vue directive whose value is an expression or a handler. The class
+// bindings are walked as compositions, and v-for, v-slot, and # values
+// hold patterns.
+function isVueExpressionDirective(name: string): boolean {
+  if (name === ":class" || name === "v-bind:class") return false;
+  if (name === "v-for" || name === "v-slot" || name.startsWith("v-slot:")) {
+    return false;
+  }
+  return name.startsWith(":") || name.startsWith("@") || name.startsWith("v-");
+}
+
+// Template spans whose braces are never expressions: <style> contents and
+// comments.
+const TEMPLATE_COMMENT = /<!--[\s\S]*?-->/g;
+
+function nonExpressionSpans(text: string): Array<SourceSpan> {
+  const spans: Array<SourceSpan> = [];
+  for (const pattern of [STYLE_TAG, TEMPLATE_COMMENT]) {
+    pattern.lastIndex = 0;
+    for (const match of text.matchAll(pattern)) {
+      spans.push({ start: match.index, end: match.index + match[0].length });
+    }
+  }
+  return spans;
+}
+
+// The expression a Svelte brace run holds, as a range of its content:
+// a plain run is one, {#if x}, {:else if x}, {#key x}, {@html x}, and
+// {@render x} hold one after the tag, {#each x as ...} and
+// {#await x then ...} hold one before the pattern, and {@const ...} is a
+// declaration. Other tags ({:then v}, {/if}, {#snippet f(v)}) hold patterns
+// or nothing, and are null.
+const SVELTE_EXPRESSION_TAG =
+  /^\s*(#if|:else\s+if|#key|@html|@render|#each|#await|@const)(?=\s)/;
+
+function svelteTagExpression(
+  content: string,
+): { from: number; to: number; declaration: boolean } | null {
+  const first = /\S/.exec(content)?.[0];
+  if (first !== "#" && first !== ":" && first !== "@" && first !== "/") {
+    return { from: 0, to: content.length, declaration: false };
+  }
+  const match = SVELTE_EXPRESSION_TAG.exec(content);
+  if (match === null) return null;
+  const from = match[0].length;
+  if (match[1] === "@const") {
+    return { from, to: content.length, declaration: true };
+  }
+  let to = content.length;
+  const pattern =
+    match[1] === "#each"
+      ? /\sas\s/
+      : match[1] === "#await"
+        ? /\s(?:then|catch)\b/
+        : null;
+  if (pattern !== null) {
+    const at = content.slice(from).search(pattern);
+    if (at !== -1) to = from + at;
+  }
+  return { from, to, declaration: false };
+}
+
 function walkTemplateElements(
   node: TreeNode,
   visit: (element: TreeElement) => void,
@@ -1241,6 +1387,7 @@ export function walkSfcClassContexts(
   // Svelte expressions cannot hold markup, so its runs stay JavaScript only.
   let runs: Array<BraceRun> = [];
   let markupRuns: Array<BraceRun> = [];
+  let svelteRuns: Array<SourceSpan> = [];
   if (format === "astro") {
     const found = findAstroBraceRuns(templateText);
     runs = found.runs;
@@ -1249,7 +1396,9 @@ export function walkSfcClassContexts(
     });
     templateText = found.masked;
   } else if (format === "svelte") {
-    templateText = maskBraceExpressions(templateText);
+    const found = maskBraceExpressions(templateText);
+    templateText = found.masked;
+    svelteRuns = found.runs;
   }
   templateText = renameParserSpecialTags(format, templateText);
   // Scripting off makes <noscript> content elements with locations instead
@@ -1313,6 +1462,9 @@ export function walkSfcClassContexts(
     runRoles.set(run, role);
   }
 
+  // KTD15: Vue directives outside the class bindings, read for object keys.
+  const vueDirectives: Array<{ span: SourceSpan; handler: boolean }> = [];
+
   walkTemplateElements(document, function (element) {
     const elementStart = element.sourceCodeLocation?.startOffset;
     if (elementStart !== undefined) walkContentRunsBefore(elementStart);
@@ -1335,9 +1487,20 @@ export function walkSfcClassContexts(
           emitClassListAttribute(filePath, text, span, visitor);
           noteAttributeRun(span, "class-list");
         } else {
-          emitClassAttribute(format, text, span, visitor);
+          emitClassAttribute(filePath, format, text, span, visitor);
           noteAttributeRun(span, "class");
         }
+        continue;
+      }
+      if (format === "vue" && isVueExpressionDirective(attr.name)) {
+        vueDirectives.push({
+          span: attributeValueSpan(
+            text,
+            location.startOffset,
+            location.endOffset,
+          ),
+          handler: attr.name.startsWith("@") || attr.name.startsWith("v-on:"),
+        });
         continue;
       }
       if (attr.name === "class") {
@@ -1346,7 +1509,7 @@ export function walkSfcClassContexts(
           location.startOffset,
           location.endOffset,
         );
-        emitClassAttribute(format, text, span, visitor);
+        emitClassAttribute(filePath, format, text, span, visitor);
         noteAttributeRun(span, "class");
         continue;
       }
@@ -1365,6 +1528,7 @@ export function walkSfcClassContexts(
           text.slice(span.start, span.end),
           span.start,
           visitor,
+          attributeQuoteOf(text, span),
         );
         continue;
       }
@@ -1406,6 +1570,80 @@ export function walkSfcClassContexts(
     }
   });
   walkContentRunsBefore(Infinity);
+
+  // KTD15: the identifier keys of every object in the template's other
+  // expressions, which the class walk above never parses.
+  const objectLiteralKey = visitor.objectLiteralKey;
+  if (objectLiteralKey !== undefined) {
+    const reportKeys = function (parsed: ParsedRun | null): void {
+      if (parsed === null) return;
+      for (const key of objectLiteralKeys(parsed.sourceFile)) {
+        objectLiteralKey({
+          ...key,
+          start: parsed.toOriginal(key.start),
+          end: parsed.toOriginal(key.end),
+        });
+      }
+    };
+    for (const directive of vueDirectives) {
+      const { span } = directive;
+      if (span.end <= span.start) continue;
+      const value = text.slice(span.start, span.end);
+      if (!directive.handler) {
+        reportKeys(parseExpression(filePath, value, span.start, "ts"));
+        continue;
+      }
+      // A handler is an expression or statements.
+      const sourceFile = parseSourceModule(`${filePath}::handler.ts`, value);
+      if (!parsesCleanly(sourceFile)) continue;
+      reportKeys({
+        sourceFile,
+        toOriginal: function (position) {
+          return position + span.start;
+        },
+      });
+    }
+    const skipped = nonExpressionSpans(templateText);
+    function isExpression(run: SourceSpan): boolean {
+      return !skipped.some(function (span) {
+        return span.start <= run.start && run.start < span.end;
+      });
+    }
+    for (const run of svelteRuns) {
+      if (!isExpression(run)) continue;
+      const content = text.slice(run.start + 1, run.end - 1);
+      const tag = svelteTagExpression(content);
+      if (tag === null) continue;
+      const contentStart = run.start + 1;
+      if (!tag.declaration) {
+        reportKeys(
+          parseExpression(
+            filePath,
+            content.slice(tag.from, tag.to),
+            contentStart + tag.from,
+            "ts",
+          ),
+        );
+        continue;
+      }
+      const declaration = parseSourceModule(
+        `${filePath}::const.ts`,
+        `const${content.slice(tag.from)}`,
+      );
+      if (!parsesCleanly(declaration)) continue;
+      reportKeys({
+        sourceFile: declaration,
+        toOriginal: function (position) {
+          return position + contentStart + tag.from - "const".length;
+        },
+      });
+    }
+    const walked = new Set(contentRuns);
+    for (const run of runs) {
+      if (walked.has(run) || !isExpression(run)) continue;
+      reportKeys(parsedRun(run));
+    }
+  }
 
   if (constants.size === 0) return document;
   // KTD5: every brace run is code, wherever it sits. A run that names a
@@ -1516,6 +1754,12 @@ function scriptContent(element: TreeElement): ScriptContent {
   return essence === "application/ld+json" ? "json-ld" : "other";
 }
 
+// The leak text of a built page, and the object keys it holds.
+export interface HtmlLeakText {
+  text: string;
+  objectKeys: Array<LiteralOccurrence>;
+}
+
 // KTD8: the leak text of a built page, with the positions that never hold a
 // class reference blanked: text, comments, JSON-LD, and the values of
 // NON_CLASS_ATTRIBUTES. Executable scripts keep everything but comments and
@@ -1523,14 +1767,39 @@ function scriptContent(element: TreeElement): ScriptContent {
 // (data-*, value, on* handlers, island props), and attributes the parser
 // adopted without a location stay scanned. `document` is the tree
 // walkSfcClassContexts parsed from the same file, so its offsets index
-// `text`.
+// `text`. KTD15: objectKeys are the identifier object keys of executable
+// scripts and of scanned attribute values that parse as a JavaScript
+// expression once decoded (Alpine :class and x-data), less the objects
+// `skipObject` drops.
 export function maskHtmlLeakText(
   filePath: string,
   text: string,
   document: TreeDocument,
-): string {
+  skipObject?: (node: ts.ObjectLiteralExpression) => boolean,
+): HtmlLeakText {
   const blank: Array<SourceSpan> = [];
   const scripts: Array<SourceSpan> = [];
+  const objectKeys: Array<LiteralOccurrence> = [];
+
+  function readAttributeKeys(span: SourceSpan): void {
+    const raw = text.slice(span.start, span.end);
+    if (!raw.includes("{")) return;
+    const views = leakViews(raw, true);
+    const view = views[views.length - 1];
+    const parsed = parseExpression(filePath, view.text, 0, "ts");
+    if (parsed === null) return;
+    for (const key of objectLiteralKeys(parsed.sourceFile, skipObject)) {
+      const at = view.rawSpan(
+        parsed.toOriginal(key.start),
+        parsed.toOriginal(key.end),
+      );
+      objectKeys.push({
+        ...key,
+        start: span.start + at.start,
+        end: span.start + at.end,
+      });
+    }
+  }
   function visit(node: TreeNode): void {
     const location = node.sourceCodeLocation;
     if (node.nodeName === "#comment" || node.nodeName === "#text") {
@@ -1555,8 +1824,10 @@ export function maskHtmlLeakText(
     const attributes = node.sourceCodeLocation?.attrs;
     for (const attr of node.attrs) {
       const at = attributes?.[attr.name];
-      if (at === undefined || !isNonClassAttribute(node, attr.name)) continue;
-      blank.push(attributeValueSpan(text, at.startOffset, at.endOffset));
+      if (at === undefined) continue;
+      const span = attributeValueSpan(text, at.startOffset, at.endOffset);
+      if (isNonClassAttribute(node, attr.name)) blank.push(span);
+      else if (attr.name !== "class") readAttributeKeys(span);
     }
     if (node.tagName === "script") {
       // Script data, never text.
@@ -1586,8 +1857,15 @@ export function maskHtmlLeakText(
     for (let i = 0; i < masked.length; i += 1) {
       chars[span.start + i] = masked[i];
     }
+    for (const key of objectLiteralKeys(script, skipObject)) {
+      objectKeys.push({
+        ...key,
+        start: span.start + key.start,
+        end: span.start + key.end,
+      });
+    }
   }
-  return chars.join("");
+  return { text: chars.join(""), objectKeys };
 }
 
 // One entry point for modules of every supported flavor: SFCs get the

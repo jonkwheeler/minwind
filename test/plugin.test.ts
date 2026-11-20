@@ -1243,6 +1243,93 @@ describe("minwind:source on table-fragment and noscript markup (R4, R5)", functi
   });
 });
 
+// R16 (KTD15) on the Vite route: a cn() key renames with its class, and a
+// React className object key keeps its class original in the module, the
+// markup, and the stylesheet alike.
+describe("minwind:source on class-composition object keys (R16, AE11)", function () {
+  it("renames a cn() key like the static class and keeps a clsx() key original everywhere", async function () {
+    await withFlags({}, async function () {
+      const site = await mkdtemp(path.join(tmpdir(), "minwind-keys-"));
+      try {
+        await mkdir(path.join(site, "src"), { recursive: true });
+        // Plain CSS: the pre-pass compiles it without resolving tailwindcss.
+        const css =
+          ".hidden{display:none}.block{display:block}.p-4{padding:1rem}\n";
+        await writeFile(path.join(site, "src", "app.css"), css);
+        const toggleId = path.join(site, "src", "Toggle.tsx");
+        const toggle = `import { cn } from "./cn";
+export function Toggle(props) {
+  return <div class={cn("p-4", { hidden: props.open })}>x</div>;
+}
+export const Shown = <p class="hidden">y</p>;
+`;
+        const menuId = path.join(site, "src", "Menu.tsx");
+        const menu = `export function Menu(props) {
+  const c = clsx({ block: props.open });
+  return <div className={clsx({ block: props.open })}><span className={c} /><b class="block">z</b></div>;
+}
+`;
+        await writeFile(toggleId, toggle);
+        await writeFile(menuId, menu);
+
+        const plugins = minwind({
+          root: site,
+          cssEntry: path.join(site, "src", "app.css"),
+        });
+        const source = findHook(plugins, "minwind:source");
+        const mock = mockContext();
+        const buildStart = source.buildStart as (
+          this: unknown,
+          options: unknown,
+        ) => Promise<void>;
+        await buildStart.call(mock.context, {});
+        const transform = source.transform as (
+          this: unknown,
+          code: string,
+          id: string,
+        ) => unknown;
+        const hidden = hashClassName("hidden");
+        const toggled = (await transform.call(
+          mock.context,
+          toggle,
+          toggleId,
+        )) as { code: string } | null;
+        assert.ok(toggled !== null, mock.warnings.join("\n"));
+        assert.ok(
+          toggled.code.includes(
+            `cn("${hashClassName("p-4")}", { ${hidden}: props.open })`,
+          ),
+          toggled.code,
+        );
+        assert.ok(toggled.code.includes(`<p class="${hidden}">`));
+        const menued = await transform.call(mock.context, menu, menuId);
+        assert.strictEqual(menued, null);
+        assert.deepStrictEqual(mock.warnings, []);
+
+        const cssPlugin = findHook(plugins, "minwind:css");
+        const generateBundle = cssPlugin.generateBundle as (
+          this: unknown,
+          options: unknown,
+          bundle: Record<string, unknown>,
+        ) => unknown;
+        const bundle: Record<string, unknown> = {
+          "assets/app.css": {
+            type: "asset",
+            fileName: "assets/app.css",
+            source: `@layer utilities{${css.trim()}}`,
+          },
+        };
+        await generateBundle.call(mock.context, {}, bundle);
+        const emitted = (bundle["assets/app.css"] as { source: string }).source;
+        assert.ok(emitted.includes(`.${hidden}{display:none}`), emitted);
+        assert.ok(emitted.includes(".block{display:block}"), emitted);
+      } finally {
+        await rm(site, { recursive: true, force: true });
+      }
+    });
+  });
+});
+
 describe("writeArtifacts (R11, KTD9)", function () {
   function makeReport(warningCount: number): TransformReport {
     return {

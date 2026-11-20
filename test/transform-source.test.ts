@@ -7,6 +7,7 @@ import {
   type RuntimeContextKind,
 } from "../src/class-contexts.js";
 import { type ConsolidationVerdict } from "../src/consolidate.js";
+import { createDialectHasher } from "../src/dialect.js";
 import { createNameRegistry, type NameRegistry } from "../src/names.js";
 import {
   applySourceEdits,
@@ -741,5 +742,257 @@ describe("transformModule leak scan over decoded built HTML (R6, KTD6)", functio
       }),
     });
     assert.strictEqual(result, null);
+  });
+});
+
+// R16 (KTD15): an object literal at a class-composition position (a cn()
+// argument, an array element, a conditional branch, or a logical operand
+// there) holds class names in its keys. Identifier and shorthand keys rename
+// like classList keys; a key minwind cannot prove poisons its tokens.
+describe("transformSource class-composition object keys (R16, KTD15)", function () {
+  const KEY_TOKENS = [
+    "hidden",
+    "block",
+    "flex",
+    "p-4",
+    "ring-2",
+    "ring-4",
+    "w-full",
+    "shadow",
+  ];
+  const KEY_REGISTRY = createNameRegistry({
+    universe: new Set(KEY_TOKENS),
+    sourceTokens: new Set(KEY_TOKENS),
+  });
+
+  function keyName(token: string): string {
+    const name = KEY_REGISTRY.nameFor(token);
+    assert.ok(name !== undefined, `${token} must be renamed`);
+    return name;
+  }
+
+  function transformKeys(
+    code: string,
+    registry: NameRegistry = KEY_REGISTRY,
+  ): TransformSourceResult | null {
+    return transformSource({
+      code,
+      id: "/site/src/routes/keys.tsx",
+      registry,
+    });
+  }
+
+  function walkKeys(code: string): {
+    renamed: Array<string>;
+    poisoned: Array<string>;
+    kinds: Array<RuntimeContextKind>;
+  } {
+    const sourceFile = parseSourceModule("/site/src/routes/keys.tsx", code);
+    const renamed: Array<string> = [];
+    const poisoned: Array<string> = [];
+    const kinds: Array<RuntimeContextKind> = [];
+    walkClassContexts(sourceFile, {
+      renameLiteral: function (literal) {
+        renamed.push(code.slice(literal.start, literal.end));
+      },
+      runtimeLiteral: function (literal, kind) {
+        poisoned.push(code.slice(literal.start, literal.end));
+        kinds.push(kind);
+      },
+    });
+    return { renamed, poisoned, kinds };
+  }
+
+  it("renames an identifier key beside a string argument and leaves the value alone (AE11)", function () {
+    const code = `const el = <div class={cn("p-4", { hidden: open })}>x</div>\n`;
+    const result = transformKeys(code);
+    assert.ok(result !== null);
+    assert.strictEqual(
+      result.code,
+      `const el = <div class={cn("${keyName("p-4")}", { ${keyName(
+        "hidden",
+      )}: open })}>x</div>\n`,
+    );
+    assert.deepStrictEqual(result.warnings, []);
+  });
+
+  it("expands a shorthand key so the value binding survives", function () {
+    const result = transformKeys(`const c = cn({ hidden })\n`);
+    assert.ok(result !== null);
+    assert.strictEqual(
+      result.code,
+      `const c = cn({ ${keyName("hidden")}: hidden })\n`,
+    );
+  });
+
+  it("renames keys in array elements, && operands, and ?: branches", function () {
+    const code = `const c = cn([{ hidden: a }, b && { block: c }], d ? { flex: 1 } : null)\n`;
+    const result = transformKeys(code);
+    assert.ok(result !== null);
+    assert.strictEqual(
+      result.code,
+      `const c = cn([{ ${keyName("hidden")}: a }, b && { ${keyName(
+        "block",
+      )}: c }], d ? { ${keyName("flex")}: 1 } : null)\n`,
+    );
+  });
+
+  it("renames || and ?? operands and keys behind parentheses, as, satisfies, and !", function () {
+    const code =
+      `const c = cn(a || { hidden: 1 }, b ?? ({ block: 1 }),` +
+      ` { flex: 1 } as Classes, { "p-4": 1 } satisfies Classes, x!)\n`;
+    assert.deepStrictEqual(walkKeys(code), {
+      renamed: ["hidden", "block", "flex", "p-4"],
+      poisoned: [],
+      kinds: [],
+    });
+  });
+
+  it("renames a string key and a computed string-literal key", function () {
+    const result = transformKeys(
+      `const c = cn({ "ring-2": on, ["ring-4"]: off })\n`,
+    );
+    assert.ok(result !== null);
+    assert.strictEqual(
+      result.code,
+      `const c = cn({ "${keyName("ring-2")}": on, ["${keyName(
+        "ring-4",
+      )}"]: off })\n`,
+    );
+  });
+
+  it("emits nothing for a computed identifier key and poisons a computed expression's literals", function () {
+    assert.deepStrictEqual(walkKeys(`const c = cn({ [size]: on })\n`), {
+      renamed: [],
+      poisoned: [],
+      kinds: [],
+    });
+    const scan = walkKeys(`const c = cn({ [base + " shadow"]: on })\n`);
+    assert.deepStrictEqual(scan.renamed, []);
+    assert.deepStrictEqual(scan.poisoned, [" shadow"]);
+  });
+
+  it("recurses into a spread at a composition position", function () {
+    const result = transformKeys(
+      `const c = cn({ ...(wide ? { "w-full": true } : {}) })\n`,
+    );
+    assert.ok(result !== null);
+    assert.strictEqual(
+      result.code,
+      `const c = cn({ ...(wide ? { "${keyName("w-full")}": true } : {}) })\n`,
+    );
+  });
+
+  it("poisons the keys of an object passed to another call inside cn()", function () {
+    const scan = walkKeys(`const c = cn(button({ size, block }))\n`);
+    assert.deepStrictEqual(scan.renamed, []);
+    assert.deepStrictEqual(scan.poisoned, ["size", "block"]);
+    assert.deepStrictEqual(scan.kinds, [
+      "class-expression",
+      "class-expression",
+    ]);
+    const code = `const c = cn(button({ size, block }))\n`;
+    const result = transformKeys(code);
+    assert.ok(result !== null);
+    assert.strictEqual(result.code, code);
+    // A poisoned key warns only when it names a class the registry knows.
+    assert.deepStrictEqual(
+      result.warnings
+        .map(function (warning) {
+          return [warning.kind, warning.column];
+        })
+        .sort(),
+      [
+        ["reverse-leak", code.indexOf("block") + 1],
+        ["unprovable-expression", code.indexOf("block") + 1],
+      ],
+    );
+  });
+
+  it("poisons a getter's name", function () {
+    const scan = walkKeys(`const c = cn({ get hidden() { return x } })\n`);
+    assert.deepStrictEqual(scan.renamed, []);
+    assert.deepStrictEqual(scan.poisoned, ["hidden"]);
+  });
+
+  it("poisons the keys of a clsx() object in class position (AE11)", function () {
+    const code = `const el = <div class={clsx({ hidden: open, "p-4": wide })}>x</div>\n`;
+    const scan = walkKeys(code);
+    assert.deepStrictEqual(scan.renamed, []);
+    assert.deepStrictEqual(scan.poisoned, ["hidden", "p-4"]);
+    assert.deepStrictEqual(scan.kinds, [
+      "class-expression",
+      "class-expression",
+    ]);
+    const result = transformKeys(code);
+    assert.ok(result !== null);
+    assert.strictEqual(result.code, code);
+    assert.ok(
+      result.warnings.some(function (warning) {
+        return (
+          warning.kind === "unprovable-expression" &&
+          warning.message.includes(`"hidden"`)
+        );
+      }),
+    );
+  });
+
+  it("poisons identifier keys of an object a classList conditional holds", function () {
+    const scan = walkKeys(
+      `const el = <div classList={cond ? { hidden: true } : fallback}>x</div>\n`,
+    );
+    assert.deepStrictEqual(scan.poisoned, ["hidden"]);
+    assert.deepStrictEqual(scan.kinds, ["classList-expression"]);
+  });
+
+  it("quotes a dialect key holding ' in cn() and classList, and the output parses", function () {
+    const dialect = createNameRegistry({
+      universe: new Set(KEY_TOKENS),
+      sourceTokens: new Set(KEY_TOKENS),
+      hash: createDialectHasher("england"),
+    });
+    const hidden = dialect.nameFor("hidden");
+    assert.strictEqual(hidden, "'idden");
+    const code =
+      `const c = cn({ hidden: on }, { hidden })\n` +
+      `const el = <div classList={{ hidden: on, block: on }}>x</div>\n`;
+    const result = transformKeys(code, dialect);
+    assert.ok(result !== null);
+    assert.strictEqual(
+      result.code,
+      `const c = cn({ "'idden": on }, { "'idden": hidden })\n` +
+        `const el = <div classList={{ "'idden": on, block: on }}>x</div>\n`,
+    );
+    const parsed = parseSourceModule(
+      "/site/src/out.tsx",
+      result.code,
+    ) as unknown as {
+      parseDiagnostics: ReadonlyArray<unknown>;
+    };
+    assert.deepStrictEqual(parsed.parseDiagnostics, []);
+  });
+
+  it("keeps every byte of objects outside a composition and warns on their registry-token keys", function () {
+    const code =
+      `const options = { hidden: true, block: 1 }\n` +
+      `type P = { flex: boolean }\n` +
+      `const { shadow: s } = props\n`;
+    const result = transformKeys(code);
+    assert.ok(result !== null);
+    assert.strictEqual(result.code, code);
+    assert.deepStrictEqual(
+      result.warnings.map(function (warning) {
+        return [warning.kind, warning.token, warning.column];
+      }),
+      [
+        ["reverse-leak", "block", code.indexOf("block") + 1],
+        ["reverse-leak", "hidden", code.indexOf("hidden") + 1],
+      ],
+    );
+  });
+
+  it("returns null for a module with no class contexts and no registry-token keys", function () {
+    const code = `const options = { size: "lg" }\nexport default options\n`;
+    assert.strictEqual(transformKeys(code), null);
   });
 });

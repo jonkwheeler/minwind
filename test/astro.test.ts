@@ -1440,6 +1440,52 @@ describe(
         }
       });
     });
+
+    // R16 (KTD15): Toggle reaches lowercase only through an identifier key
+    // in its class:list object, which 1.1.0 never read.
+    describe("class-composition object keys (R16)", function () {
+      function toggleClasses(html: string): Array<string> {
+        const tag = /<button\b[^>]*\sdata-toggle\b[^>]*>/.exec(html);
+        assert.ok(tag !== null, "no <button data-toggle>");
+        const value = /\sclass="([^"]*)"/.exec(tag[0]);
+        assert.ok(value !== null, tag[0]);
+        return splitClasses(value[1]);
+      }
+
+      it("renames Toggle's class:list key, with a selector in _astro/*.css", function () {
+        assert.deepStrictEqual(toggleClasses(builds.baseline["index.html"]), [
+          "px-2",
+          "lowercase",
+        ]);
+        const built = toggleClasses(builds.on["index.html"]);
+        const selectors = selectorClasses(stylesheetOf(builds.on));
+        for (const name of built) {
+          assert.ok(isRenamed(name), `<button> kept ${name}`);
+          assert.ok(selectors.has(name), `no .${name} selector`);
+        }
+        assert.deepStrictEqual(sorted(built.map(decode)), [
+          "lowercase",
+          "px-2",
+        ]);
+        assert.ok(
+          report.renames.some(function (entry) {
+            return entry.token === "lowercase";
+          }),
+        );
+      });
+
+      it("reaches lowercase only through Toggle's object key", function () {
+        const sources = readTree(path.join(FIXTURE, "src"));
+        const uses = Object.keys(sources).filter(function (file) {
+          return /\blowercase\b/.test(sources[file]);
+        });
+        assert.deepStrictEqual(uses, ["components/Toggle.astro"]);
+        assert.match(
+          sources["components/Toggle.astro"],
+          /class:list=\{\["px-2", \{ lowercase: on \}\]\}/,
+        );
+      });
+    });
   },
 );
 

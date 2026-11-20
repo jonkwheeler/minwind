@@ -1,6 +1,12 @@
 import assert from "node:assert";
 import { describe, it } from "node:test";
-import { createNameRegistry, type NameRegistry } from "../src/names.js";
+import { parseSourceModule } from "../src/class-contexts.js";
+import { createDialectHasher } from "../src/dialect.js";
+import {
+  createHasher,
+  createNameRegistry,
+  type NameRegistry,
+} from "../src/names.js";
 import {
   transformSource,
   type TransformSourceResult,
@@ -1633,5 +1639,198 @@ describe("source formats keep the whole leak scan (R8, KTD8)", function () {
         id,
       );
     }
+  });
+});
+
+// R16 (KTD15): an object at a composition position of Vue :class or Astro
+// class:list holds class names in its identifier keys too. A key inside an
+// HTML attribute that must be quoted takes the quote the attribute does not
+// use. Svelte and Astro class={...} runs poison object keys they cannot
+// prove, as they poison string literals.
+describe("class-composition object keys in SFC templates (R16, KTD15)", function () {
+  const KEY_TOKENS = ["hidden", "uppercase", "p-4", "px-2", "block"];
+  const KEY_REGISTRY = createNameRegistry({
+    universe: new Set(KEY_TOKENS),
+    sourceTokens: new Set(KEY_TOKENS),
+  });
+  const PREFIXED_REGISTRY = createNameRegistry({
+    universe: new Set(KEY_TOKENS),
+    sourceTokens: new Set(KEY_TOKENS),
+    hash: createHasher(undefined, "tw-"),
+  });
+
+  function keyName(token: string, registry = KEY_REGISTRY): string {
+    const name = registry.nameFor(token);
+    assert.ok(name !== undefined, `${token} must be renamed`);
+    return name;
+  }
+
+  function transformKeys(
+    code: string,
+    id: string,
+    registry: NameRegistry = KEY_REGISTRY,
+  ): TransformSourceResult {
+    const result = transformSource({ code, id, registry });
+    assert.ok(result !== null);
+    return result;
+  }
+
+  function contexts(
+    filePath: string,
+    code: string,
+  ): { renamed: Array<string>; runtime: Array<string> } {
+    const renamed: Array<string> = [];
+    const runtime: Array<string> = [];
+    walkSfcClassContexts(filePath, code, {
+      renameLiteral: function (literal) {
+        renamed.push(code.slice(literal.start, literal.end));
+      },
+      runtimeLiteral: function (literal) {
+        runtime.push(code.slice(literal.start, literal.end));
+      },
+    });
+    return { renamed, runtime };
+  }
+
+  it("renames identifier keys in Vue :class objects and arrays", function () {
+    const result = transformKeys(
+      `<template>
+  <div :class="{ hidden: open }">x</div>
+  <div :class="[{ hidden: open }, 'p-4']">y</div>
+</template>
+`,
+      "/site/src/Card.vue",
+    );
+    assert.strictEqual(
+      result.code,
+      `<template>
+  <div :class="{ ${keyName("hidden")}: open }">x</div>
+  <div :class="[{ ${keyName("hidden")}: open }, '${keyName("p-4")}']">y</div>
+</template>
+`,
+    );
+    assert.deepStrictEqual(result.warnings, []);
+  });
+
+  it("renames identifier keys in Astro class:list objects, in and out of expression markup", function () {
+    const result = transformKeys(
+      `<span class:list={{ uppercase: on }}>a</span>
+{show && <b class:list={["px-2", { uppercase: on }]}>b</b>}
+`,
+      "/site/src/components/Toggle.astro",
+    );
+    assert.strictEqual(
+      result.code,
+      `<span class:list={{ ${keyName("uppercase")}: on }}>a</span>
+{show && <b class:list={["${keyName("px-2")}", { ${keyName(
+        "uppercase",
+      )}: on }]}>b</b>}
+`,
+    );
+    assert.deepStrictEqual(result.warnings, []);
+  });
+
+  it("poisons a Svelte 5 class={{ ... }} object's keys", function () {
+    assert.deepStrictEqual(
+      contexts(
+        "/site/src/Card.svelte",
+        `<div class={{ hidden: open, "p-4": wide }}>x</div>\n`,
+      ),
+      { renamed: [], runtime: ["hidden", "p-4"] },
+    );
+  });
+
+  it("poisons a clsx() object's keys in an Astro class={...}", function () {
+    assert.deepStrictEqual(
+      contexts(
+        "/site/src/Card.astro",
+        `<div class={clsx({ hidden: open })}>x</div>\n`,
+      ),
+      { renamed: [], runtime: ["hidden"] },
+    );
+  });
+
+  it("keeps the quoted-literal poison of mixed class values", function () {
+    for (const filePath of ["/site/src/Card.svelte", "/site/src/Card.astro"]) {
+      assert.deepStrictEqual(
+        contexts(
+          filePath,
+          `<div class="p-4 {cond ? 'block' : ''} px-2">x</div>\n`,
+        ),
+        { renamed: [], runtime: ["p-4 ", "block", " px-2"] },
+        filePath,
+      );
+    }
+  });
+
+  it("quotes a prefixed key in a Vue attribute with the other quote", function () {
+    const result = transformKeys(
+      `<template>
+  <div :class="{ hidden }">x</div>
+  <div :class='{ block: on }'>y</div>
+</template>
+`,
+      "/site/src/Card.vue",
+      PREFIXED_REGISTRY,
+    );
+    const hidden = keyName("hidden", PREFIXED_REGISTRY);
+    const block = keyName("block", PREFIXED_REGISTRY);
+    assert.ok(hidden.startsWith("tw-"));
+    assert.strictEqual(
+      result.code,
+      `<template>
+  <div :class="{ '${hidden}': hidden }">x</div>
+  <div :class='{ "${block}": on }'>y</div>
+</template>
+`,
+    );
+    // Each binding still parses as the JavaScript expression Vue compiles.
+    for (const match of result.code.matchAll(/:class=(["'])(.*?)\1/g)) {
+      const parsed = parseSourceModule(
+        "/site/src/binding.ts",
+        `(${match[2]})`,
+      ) as unknown as { parseDiagnostics: ReadonlyArray<unknown> };
+      assert.deepStrictEqual(parsed.parseDiagnostics, [], match[2]);
+    }
+  });
+
+  it("keeps a prefixed Svelte class: directive name bare", function () {
+    const result = transformKeys(
+      `<div class:hidden={x}>x</div>\n`,
+      "/site/src/Card.svelte",
+      PREFIXED_REGISTRY,
+    );
+    assert.strictEqual(
+      result.code,
+      `<div class:${keyName("hidden", PREFIXED_REGISTRY)}={x}>x</div>\n`,
+    );
+  });
+
+  it("escapes the other quote in a dialect key inside a Vue attribute", function () {
+    const dialect = createNameRegistry({
+      universe: new Set(KEY_TOKENS),
+      sourceTokens: new Set(KEY_TOKENS),
+      hash: createDialectHasher("england"),
+    });
+    assert.strictEqual(dialect.nameFor("hidden"), "'idden");
+    const result = transformKeys(
+      `<template><div :class="{ hidden: open }">x</div></template>\n`,
+      "/site/src/Card.vue",
+      dialect,
+    );
+    assert.strictEqual(
+      result.code,
+      `<template><div :class="{ '\\'idden': open }">x</div></template>\n`,
+    );
+  });
+
+  it("fails when a key needing quotes sits in an unquoted attribute value", function () {
+    assert.throws(function () {
+      transformSource({
+        code: `<template><div :class={hidden:open}>x</div></template>\n`,
+        id: "/site/src/Card.vue",
+        registry: PREFIXED_REGISTRY,
+      });
+    }, /^Error: minwind: .*unquoted/);
   });
 });

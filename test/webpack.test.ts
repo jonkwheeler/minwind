@@ -1,5 +1,12 @@
 import assert from "node:assert";
-import { readFileSync, rmSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -252,6 +259,75 @@ describe("minwindLoader on table-fragment and noscript markup (R4, R5)", functio
       ),
       call.content,
     );
+  });
+});
+
+// R16 (KTD15) on the webpack route: the loader with a pre-pass the plugin
+// published in beforeCompile renames a cn() key like the static class and
+// keeps a React className object key original.
+describe("minwindLoader on class-composition object keys (R16, AE11)", function () {
+  it("renames a cn() key and keeps a clsx() key and its static class original", async function () {
+    const site = mkdtempSync(path.join(tmpdir(), "minwind-keys-"));
+    try {
+      mkdirSync(path.join(site, "src"));
+      writeFileSync(
+        path.join(site, "src", "app.css"),
+        ".hidden{display:none}.block{display:block}.p-4{padding:1rem}\n",
+      );
+      const toggleId = path.join(site, "src", "Toggle.tsx");
+      const toggle = `import { cn } from "./cn";
+export function Toggle(props) {
+  return <div class={cn("p-4", { hidden: props.open })}>x</div>;
+}
+export const Shown = <p class="hidden">y</p>;
+`;
+      const menuId = path.join(site, "src", "Menu.tsx");
+      const menu = `export function Menu(props) {
+  const c = clsx({ block: props.open });
+  return <div className={clsx({ block: props.open })}><span className={c} /><b class="block">z</b></div>;
+}
+`;
+      writeFileSync(toggleId, toggle);
+      writeFileSync(menuId, menu);
+      const plugin = new MinwindWebpackPlugin({ root: site });
+      let beforeCompile: (() => Promise<void>) | undefined;
+      plugin.apply({
+        context: site,
+        options: { plugins: [] },
+        webpack: {
+          Compilation: { PROCESS_ASSETS_STAGE_SUMMARIZE: 1000 },
+          sources: { RawSource: class {} },
+        },
+        hooks: {
+          beforeCompile: {
+            tapPromise(_name: string, fn: () => Promise<void>) {
+              beforeCompile = fn;
+            },
+          },
+          thisCompilation: { tap() {} },
+          afterEmit: { tapPromise() {} },
+        },
+      } as unknown as WebpackCompilerLike);
+      assert.ok(beforeCompile !== undefined);
+      await beforeCompile();
+      assert.ok(plugin.prepass !== undefined);
+      const hidden = hashClassName("hidden");
+      const toggled = runLoader(plugin, toggleId, toggle);
+      assert.strictEqual(toggled.error, null);
+      assert.ok(
+        toggled.content?.includes(
+          `cn("${hashClassName("p-4")}", { ${hidden}: props.open })`,
+        ),
+        toggled.content,
+      );
+      assert.ok(toggled.content?.includes(`<p class="${hidden}">`));
+      const menued = runLoader(plugin, menuId, menu);
+      assert.strictEqual(menued.error, null);
+      assert.strictEqual(menued.content, menu);
+      assert.strictEqual(plugin.prepass.registry.nameFor("block"), undefined);
+    } finally {
+      rmSync(site, { recursive: true, force: true });
+    }
   });
 });
 

@@ -1,4 +1,5 @@
 import MagicString, { type SourceMap } from "magic-string";
+import * as ts from "typescript";
 import {
   DECLARATION_PATTERN,
   parseSourceModule,
@@ -62,6 +63,9 @@ export interface TransformSourceOptions {
   // groups never collapse and their tokens still rename per R1.
   consolidationVerdicts?: ReadonlyArray<ConsolidationVerdict>;
   customProperties?: CustomPropertyRegistry;
+  // Built HTML: objects proven to be CSS Modules export maps, whose keys are
+  // module locals and never count as leaks (KTD15).
+  isExportMap?: (node: ts.ObjectLiteralExpression) => boolean;
 }
 
 export interface TransformSourceResult {
@@ -142,6 +146,44 @@ export function applySourceEdits(
       hires: "boundary",
     }),
   };
+}
+
+function isIdentifierName(name: string): boolean {
+  let first = true;
+  for (const character of name) {
+    const code = character.codePointAt(0) ?? 0;
+    const valid = first
+      ? ts.isIdentifierStart(code, ts.ScriptTarget.Latest)
+      : ts.isIdentifierPart(code, ts.ScriptTarget.Latest);
+    if (!valid) return false;
+    first = false;
+  }
+  return !first;
+}
+
+// KTD15: a renamed object key stays bare when the name is an identifier,
+// and is quoted otherwise. In JavaScript the quote is `"`; in an HTML
+// attribute value it is the quote the attribute does not use, with that
+// quote and backslashes escaped. An unquoted attribute value can hold no
+// quote, so the build fails.
+function objectKeyText(
+  name: string,
+  literal: LiteralOccurrence,
+  id: string,
+): string {
+  if (isIdentifierName(name)) return name;
+  const attributeQuote = literal.attributeQuote;
+  if (attributeQuote === undefined) return JSON.stringify(name);
+  if (attributeQuote === "") {
+    throw new Error(
+      `minwind: ${id}: object key "${literal.text}" at offset` +
+        ` ${literal.start} renames to "${name}", which needs quotes, but` +
+        ` sits in an unquoted attribute value; quote the attribute`,
+    );
+  }
+  const quote = attributeQuote === '"' ? "'" : '"';
+  const escaped = name.replace(/\\/g, "\\\\").split(quote).join(`\\${quote}`);
+  return `${quote}${escaped}${quote}`;
 }
 
 // Whole-word convention shared with tools/minwind: an occurrence counts
@@ -350,15 +392,41 @@ export function transformModule(
       // in the registry and stay byte-identical (R5).
       if (name === undefined) continue;
       const start = literal.start + match.index;
+      const written =
+        literal.objectKey === true ? objectKeyText(name, literal, id) : name;
       // A shorthand classList key ({ flex }) is both key and value binding:
       // expand it so only the class name is renamed ({ h4sh: flex }).
-      const replacement = literal.shorthand ? `${name}: ${token}` : name;
+      const replacement = literal.shorthand ? `${written}: ${token}` : written;
       addEdit(start, start + token.length, token, replacement);
     }
     return tokenize(raw);
   }
 
+  let known: Set<string> | undefined;
+  function knownToken(token: string): boolean {
+    if (registry.nameFor(token) !== undefined) return true;
+    if (known === undefined) {
+      known = new Set(
+        registry.exclusions().map(function (entry) {
+          return entry.token;
+        }),
+      );
+    }
+    return known.has(token);
+  }
+
+  // KTD15: identifier object keys, which the whole-word scan below misses
+  // because `:` is a class-name character. Built HTML gathers them in its
+  // leak mask instead.
+  const builtHtml = sfcFormatFor(id) === "html";
+  const objectKeys: Array<LiteralOccurrence> = [];
+
   const visitor: ClassContextVisitor = {
+    objectLiteralKey: builtHtml
+      ? undefined
+      : function (key: LiteralOccurrence): void {
+          objectKeys.push(key);
+        },
     enterRenameGroup: function (kind: RenameContextKind): void {
       groupStack.push({ kind, literals: [], tokens: [], editKeys: [] });
     },
@@ -410,6 +478,9 @@ export function transformModule(
       if (kind !== "class-expression" && kind !== "classList-expression") {
         return;
       }
+      // A poisoned object key is often a variant prop (button({ size })),
+      // so it warns only when the registry knows its token.
+      if (literal.objectKey === true && !knownToken(literal.text)) return;
       const at = location(literal.start);
       warnings.push({
         kind: "unprovable-expression",
@@ -438,17 +509,47 @@ export function transformModule(
   // positions that never hold one (KTD8), then is scanned decoded as well
   // (KTD6); an occurrence both scans find warns once.
   const entries = registry.entries();
-  const builtHtml = sfcFormatFor(id) === "html";
   let views: Array<LeakView> = [];
   if (entries.length > 0) {
     let leakText = sfc ? maskSfcStyleContent(id, code) : code;
     if (builtHtml && template !== null) {
-      leakText = maskHtmlLeakText(id, leakText, template);
+      const masked = maskHtmlLeakText(
+        id,
+        leakText,
+        template,
+        options.isExportMap,
+      );
+      leakText = masked.text;
+      objectKeys.push(...masked.objectKeys);
     }
     views = leakViews(leakText, builtHtml);
   }
+  const keysByToken = new Map<string, Array<LiteralOccurrence>>();
+  for (const key of objectKeys) {
+    const list = keysByToken.get(key.text);
+    if (list === undefined) keysByToken.set(key.text, [key]);
+    else list.push(key);
+  }
   for (const entry of entries) {
     const reported = new Set<number>();
+    function report(span: { start: number; end: number }): void {
+      if (reported.has(span.start)) return;
+      for (const edit of edits.values()) {
+        if (edit.start <= span.start && edit.end >= span.end) return;
+      }
+      reported.add(span.start);
+      const atLocation = location(span.start);
+      warnings.push({
+        kind: "reverse-leak",
+        id,
+        line: atLocation.line,
+        column: atLocation.column,
+        token: entry.token,
+        message:
+          `minwind: ${id}:${atLocation.line}:${atLocation.column} registry` +
+          ` token "${entry.token}" remains outside a rename context`,
+      });
+    }
     for (const view of views) {
       let from = 0;
       for (;;) {
@@ -456,30 +557,10 @@ export function transformModule(
         if (at === -1) break;
         from = at + entry.token.length;
         if (!isWholeWord(view.text, at, entry.token.length)) continue;
-        const span = view.rawSpan(at, at + entry.token.length);
-        if (reported.has(span.start)) continue;
-        let consumed = false;
-        for (const edit of edits.values()) {
-          if (edit.start <= span.start && edit.end >= span.end) {
-            consumed = true;
-            break;
-          }
-        }
-        if (consumed) continue;
-        reported.add(span.start);
-        const atLocation = location(span.start);
-        warnings.push({
-          kind: "reverse-leak",
-          id,
-          line: atLocation.line,
-          column: atLocation.column,
-          token: entry.token,
-          message:
-            `minwind: ${id}:${atLocation.line}:${atLocation.column} registry` +
-            ` token "${entry.token}" remains outside a rename context`,
-        });
+        report(view.rawSpan(at, at + entry.token.length));
       }
     }
+    for (const key of keysByToken.get(entry.token) ?? []) report(key);
   }
 
   // Unchanged means no edits AND nothing to report; a warnings-only module

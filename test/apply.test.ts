@@ -2318,3 +2318,241 @@ describe("leak scan narrowing in built HTML and JS (R8, R9, KTD8, KTD9)", functi
     }
   });
 });
+
+// R16 (KTD15) on the apply route: an identifier object key in a bundle, an
+// inline script, or a built HTML attribute value that parses as JavaScript
+// names a class the post-build passes cannot rename, so its token keeps its
+// original name everywhere. The whole-word scan misses these keys because
+// `:` is a class-name character.
+describe("object keys in built output (R16, KTD15)", function () {
+  const registry = registryOf(["hidden", "block", "flex", "p-4"]);
+  const CSS =
+    "@layer utilities{.hidden{display:none}.block{display:block}" +
+    ".flex{display:flex}.p-4{padding:1rem}}";
+
+  function leaks(result: TransformSourceResult | null): Array<string> {
+    if (result === null) return [];
+    return result.warnings
+      .filter(function (warning) {
+        return warning.kind === "reverse-leak";
+      })
+      .map(function (warning) {
+        return warning.token ?? "";
+      })
+      .sort();
+  }
+
+  function bundleLeaks(code: string): Array<string> {
+    return leaks(transformBundle({ code, id: "/out/assets/app.js", registry }));
+  }
+
+  function pageLeaks(code: string): Array<string> {
+    return leaks(transformModule({ code, id: "/out/index.html", registry }));
+  }
+
+  it("counts identifier, shorthand, and method keys in a bundle (AE11)", function () {
+    for (const code of [
+      "e({hidden:t});\n",
+      "const o={hidden};\n",
+      "const o={hidden(){return 1}};\n",
+      "const o={get hidden(){return 1}};\n",
+      'const o={"hidden":t};\n',
+    ]) {
+      assert.deepStrictEqual(bundleLeaks(code), ["hidden"], code);
+    }
+  });
+
+  it("never counts member access, binding patterns, class members, or destructuring assignments", function () {
+    for (const code of [
+      "a.hidden=1;\n",
+      "const {hidden:a}=b;\n",
+      "function f({hidden:a}){return a}\n",
+      "({hidden:a}=b);\n",
+      "for(const {hidden:a} of b);\n",
+      "[{hidden:a}]=b;\n",
+    ]) {
+      assert.deepStrictEqual(bundleLeaks(code), [], code);
+    }
+  });
+
+  it("keeps a bundle key's class original everywhere (AE11)", function () {
+    const dir = writeOutput({
+      "index.html": '<!doctype html><div class="hidden p-4">x</div>',
+      "app.css": CSS,
+      "app.js": "e({hidden:t});\n",
+    });
+    try {
+      const result = applyBuildOutput({
+        dir,
+        registry,
+        consolidationVerdicts: [],
+        consolidate: false,
+      });
+      assert.deepStrictEqual(result.keptOriginal, ["hidden"]);
+      const html = fs.readFileSync(path.join(dir, "index.html"), "utf8");
+      assert.ok(
+        html.includes(`class="hidden ${registry.nameFor("p-4")}"`),
+        html,
+      );
+      const css = fs.readFileSync(path.join(dir, "app.css"), "utf8");
+      assert.ok(css.includes(".hidden{display:none}"), css);
+      assert.strictEqual(
+        fs.readFileSync(path.join(dir, "app.js"), "utf8"),
+        "e({hidden:t});\n",
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("counts keys in an executable inline script", function () {
+    assert.deepStrictEqual(
+      pageLeaks(
+        '<!doctype html><html><body><p class="block">x</p>' +
+          "<script>init({block:!0})</script></body></html>",
+      ),
+      ["block"],
+    );
+    assert.deepStrictEqual(
+      pageLeaks(
+        "<!doctype html><html><body>" +
+          '<script type="text/x-template">{block:!0}</script>' +
+          "</body></html>",
+      ),
+      [],
+    );
+  });
+
+  it("counts keys in Alpine and Vue-in-DOM attribute values (AE11)", function () {
+    for (const [markup, token] of [
+      ['<div :class="{ hidden: !open }" class="hidden"></div>', "hidden"],
+      ['<div x-bind:class="{ block: on }" class="block"></div>', "block"],
+      ['<div x-data="{ flex: true }" class="flex"></div>', "flex"],
+      ['<div x-data="{ flex: a &amp;&amp; b }" class="flex"></div>', "flex"],
+    ]) {
+      assert.deepStrictEqual(
+        pageLeaks(`<!doctype html><html><body>${markup}</body></html>`),
+        [token],
+        markup,
+      );
+    }
+  });
+
+  it("ignores attribute values that never hold class names or do not parse", function () {
+    for (const markup of [
+      '<a title="{ flex: true }" href="/">x</a>',
+      '<div data-x="{ flex: true" class="p-4"></div>',
+      '<div x-init="a = 1; b({ flex: 1 })"></div>',
+    ]) {
+      assert.deepStrictEqual(
+        pageLeaks(`<!doctype html><html><body>${markup}</body></html>`),
+        [],
+        markup,
+      );
+    }
+  });
+
+  it("keeps Alpine-bound classes original through applyBuildOutput", function () {
+    const dir = writeOutput({
+      "index.html":
+        "<!doctype html><html><body>" +
+        '<div :class="{ hidden: !open }" class="hidden"></div>' +
+        '<div x-bind:class="{ block: on }" class="block"></div>' +
+        '<div x-data="{ flex: true }" class="flex p-4"></div>' +
+        "</body></html>",
+      "app.css": CSS,
+    });
+    try {
+      const result = applyBuildOutput({
+        dir,
+        registry,
+        consolidationVerdicts: [],
+        consolidate: false,
+      });
+      assert.deepStrictEqual(result.keptOriginal, ["block", "flex", "hidden"]);
+      const css = fs.readFileSync(path.join(dir, "app.css"), "utf8");
+      for (const token of ["hidden", "block", "flex"]) {
+        assert.ok(css.includes(`.${token}{`), token);
+      }
+      assert.ok(css.includes(`.${registry.nameFor("p-4")}{`), css);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("leaves a source key the build never ships to the output scan (runApply)", async function () {
+    // The pre-pass behind runApply counts no key outside a composition: the
+    // output scan counts the keys that ship, and a frontmatter object never
+    // reaches the built page.
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "minwind-keys-"));
+    function write(relative: string, text: string): void {
+      const file = path.join(root, relative);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, text);
+    }
+    try {
+      write(
+        path.join("src", "app.css"),
+        "@layer utilities {\n  .flex { display: flex; }\n}\n",
+      );
+      write(
+        path.join("src", "pages", "index.astro"),
+        '---\nconst layout = { flex: true };\n---\n<section class="flex">a</section>\n',
+      );
+      const compiled = await compileTailwindStylesheet({
+        cssEntry: path.join(root, "src", "app.css"),
+        root,
+      });
+      write(path.join("dist", "_astro", "index.css"), compiled.stylesheet);
+      write(
+        path.join("dist", "index.html"),
+        '<!DOCTYPE html><html><head><link rel="stylesheet"' +
+          ' href="/_astro/index.css"></head><body>' +
+          '<section class="flex">a</section></body></html>',
+      );
+      const outcome = await runApply({ dir: path.join(root, "dist"), root });
+      assert.ok(outcome.enabled);
+      assert.deepStrictEqual(outcome.result.keptOriginal, []);
+      const html = fs.readFileSync(
+        path.join(root, "dist", "index.html"),
+        "utf8",
+      );
+      assert.ok(
+        html.includes(`<section class="${hashClassName("flex")}">`),
+        html,
+      );
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a Module export map's Tailwind-named key original without the Modules engine", function () {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minwind-dual-out-"));
+    try {
+      const bundler = "Card-module__abc__flex";
+      fs.writeFileSync(
+        path.join(dir, "index.html"),
+        `<div class="flex ${bundler}">x</div>`,
+      );
+      fs.writeFileSync(path.join(dir, "app.css"), LAYERED_CSS);
+      fs.writeFileSync(path.join(dir, "card.css"), `.${bundler}{gap:4px}`);
+      fs.writeFileSync(
+        path.join(dir, "app.js"),
+        `const styles = { flex: "${bundler}" };\n`,
+      );
+      const result = applyBuildOutput({
+        dir,
+        registry: REGISTRY,
+        consolidationVerdicts: [],
+        consolidate: false,
+      });
+      assert.deepStrictEqual(result.keptOriginal, ["flex"]);
+      const html = fs.readFileSync(path.join(dir, "index.html"), "utf8");
+      assert.ok(html.includes(`class="flex ${bundler}"`), html);
+      const app = fs.readFileSync(path.join(dir, "app.css"), "utf8");
+      assert.ok(app.includes(".flex{display:flex}"), app);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

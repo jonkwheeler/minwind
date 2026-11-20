@@ -1,5 +1,5 @@
 import * as ts from "typescript";
-import { parseSourceModule } from "./class-contexts.js";
+import { objectLiteralKeys, parseSourceModule } from "./class-contexts.js";
 import { canonicalListKey, type ConsolidationVerdict } from "./consolidate.js";
 import {
   decodeClassTokens,
@@ -28,14 +28,18 @@ import {
 //
 // Everything else keeps its bytes. Consolidation collapses full-list spans
 // exactly as in the source transform; whole-word registry-token occurrences
-// no edit consumed warn (the KTD7 leak posture) rather than failing. Markup
-// is HTML, so its class values decode as built HTML does (KTD6).
+// and identifier object keys no edit consumed warn (the KTD7 leak posture)
+// rather than failing. Markup is HTML, so its class values decode as built
+// HTML does (KTD6).
 
 export interface TransformBundleOptions {
   code: string;
   id: string;
   registry: NameRegistry;
   consolidationVerdicts?: ReadonlyArray<ConsolidationVerdict>;
+  // Objects proven to be CSS Modules export maps, whose keys are module
+  // locals and never count as leaks (KTD15).
+  isExportMap?: (node: ts.ObjectLiteralExpression) => boolean;
 }
 
 // htmlEncoded marks a class="..." span of markup, whose character
@@ -236,14 +240,42 @@ export function transformBundle(
   // KTD7 leak check: whole-word registry tokens no edit consumed — class
   // names the stylesheet renames but this bundle keeps. Comments and
   // reserved words are blanked first (KTD9). The bundle is also scanned
-  // decoded (KTD6), and an occurrence both scans find warns once.
+  // decoded (KTD6), and an occurrence both scans find warns once. An
+  // identifier object key counts too (KTD15): a minifier renames cn(), so no
+  // object in a bundle can be told apart from a class list.
   const entries = registry.entries();
   const views =
     entries.length === 0
       ? []
       : leakViews(maskCommentsAndReservedWords(sourceFile), true);
+  const keysByToken = new Map<string, Array<{ start: number; end: number }>>();
+  if (entries.length > 0) {
+    for (const key of objectLiteralKeys(sourceFile, options.isExportMap)) {
+      const list = keysByToken.get(key.text);
+      if (list === undefined) keysByToken.set(key.text, [key]);
+      else list.push(key);
+    }
+  }
   for (const entry of entries) {
     const reported = new Set<number>();
+    function report(span: { start: number; end: number }): void {
+      if (reported.has(span.start)) return;
+      for (const edit of edits.values()) {
+        if (edit.start <= span.start && edit.end >= span.end) return;
+      }
+      reported.add(span.start);
+      const atLocation = location(span.start);
+      warnings.push({
+        kind: "reverse-leak",
+        id,
+        line: atLocation.line,
+        column: atLocation.column,
+        token: entry.token,
+        message:
+          `minwind: ${id}:${atLocation.line}:${atLocation.column} registry` +
+          ` token "${entry.token}" remains outside a rename context`,
+      });
+    }
     for (const view of views) {
       let from = 0;
       for (;;) {
@@ -251,30 +283,10 @@ export function transformBundle(
         if (at === -1) break;
         from = at + entry.token.length;
         if (!isWholeWord(view.text, at, entry.token.length)) continue;
-        const span = view.rawSpan(at, at + entry.token.length);
-        if (reported.has(span.start)) continue;
-        let consumed = false;
-        for (const edit of edits.values()) {
-          if (edit.start <= span.start && edit.end >= span.end) {
-            consumed = true;
-            break;
-          }
-        }
-        if (consumed) continue;
-        reported.add(span.start);
-        const atLocation = location(span.start);
-        warnings.push({
-          kind: "reverse-leak",
-          id,
-          line: atLocation.line,
-          column: atLocation.column,
-          token: entry.token,
-          message:
-            `minwind: ${id}:${atLocation.line}:${atLocation.column} registry` +
-            ` token "${entry.token}" remains outside a rename context`,
-        });
+        report(view.rawSpan(at, at + entry.token.length));
       }
     }
+    for (const key of keysByToken.get(entry.token) ?? []) report(key);
   }
 
   if (edits.size === 0 && warnings.length === 0) return null;

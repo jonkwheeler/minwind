@@ -166,6 +166,23 @@ function proveObject(
   }
 }
 
+// KTD15: an object the remap proves to be one CSS Module's export map, by
+// the same proof proveObject starts from: every property a key with a string
+// value, and the keys one module's locals. Its keys are module locals, not
+// class references, so the apply leak scans skip it.
+export function exportMapProof(
+  context: ModuleRemapContext,
+): (node: ts.ObjectLiteralExpression) => boolean {
+  const byFile = localsByFile(context.inventory);
+  return function (node) {
+    const values = readExportMap(node);
+    return (
+      values !== undefined &&
+      owningFile(new Set(values.keys()), byFile) !== undefined
+    );
+  };
+}
+
 export function collectProvenModuleNames(
   jsSources: ReadonlyArray<string>,
   context: ModuleRemapContext,

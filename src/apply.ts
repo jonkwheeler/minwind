@@ -2,8 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import type { ConsolidationVerdict } from "./consolidate.js";
 import { dependentTokens } from "./dependents.js";
+import type * as ts from "typescript";
 import {
   applyModulesRemap,
+  exportMapProof,
   type ModuleRemapContext,
 } from "./engines/modules-remap.js";
 import type { ExclusionEntry, NameRegistry } from "./names.js";
@@ -115,13 +117,21 @@ export function filterRegistry(
 }
 
 // HTML through the SFC walker, JS bundles through the bundle pass.
+// isExportMap drops proven CSS Modules export maps from the leak scans.
 function transformOutput(
   file: string,
   code: string,
   registry: NameRegistry,
   consolidationVerdicts?: ReadonlyArray<ConsolidationVerdict>,
+  isExportMap?: (node: ts.ObjectLiteralExpression) => boolean,
 ): TransformSourceResult | null {
-  const options = { code, id: file, registry, consolidationVerdicts };
+  const options = {
+    code,
+    id: file,
+    registry,
+    consolidationVerdicts,
+    isExportMap,
+  };
   return file.endsWith(".html")
     ? transformModule(options)
     : transformBundle(options);
@@ -197,11 +207,21 @@ export function applyBuildOutput(options: ApplyOptions): ApplyResult {
   // against the full registry. A reverse-leak warning marks a registry
   // token in a position the post-build passes cannot rewrite — renaming it
   // in the stylesheet while the DOM keeps the original would break the
-  // page, so the token drops out of the rename set entirely.
+  // page, so the token drops out of the rename set entirely. With the
+  // Modules engine, a proven export map's keys are module locals and never
+  // leak (KTD15); the remap that renames its values runs last.
+  const isExportMap =
+    options.modules === undefined ? undefined : exportMapProof(options.modules);
   const leaked = new Set<string>();
   for (const file of classFiles) {
     const code = fs.readFileSync(file, "utf8");
-    const detected = transformOutput(file, code, options.registry);
+    const detected = transformOutput(
+      file,
+      code,
+      options.registry,
+      undefined,
+      isExportMap,
+    );
     if (detected === null) continue;
     for (const warning of detected.warnings) {
       if (warning.kind === "reverse-leak" && warning.token !== undefined) {
@@ -297,6 +317,7 @@ export function applyBuildOutput(options: ApplyOptions): ApplyResult {
       code,
       registry,
       consolidate ? consolidationVerdicts : undefined,
+      isExportMap,
     );
     if (isHtml) result.htmlFiles += 1;
     else result.jsFiles += 1;

@@ -681,3 +681,196 @@ describe("runPrepass Astro frontmatter class constants (R3)", function () {
     }
   });
 });
+
+// R16 (KTD15): a key in a class composition renames with its class, and
+// every other identifier object key in a module keeps its token original,
+// wherever the walker descends. React className objects are the common
+// case: the source walker never reads className.
+describe("runPrepass class-composition object keys (R16, KTD15)", function () {
+  const KEY_TOKENS = [
+    "hidden",
+    "block",
+    "flex",
+    "grid",
+    "p-4",
+    "ring",
+    "border",
+    "italic",
+  ];
+
+  async function withKeySite<T>(
+    files: Record<string, string>,
+    run: (root: string) => Promise<T>,
+  ): Promise<T> {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "minwind-keys-"));
+    try {
+      fs.mkdirSync(path.join(root, "src"), { recursive: true });
+      fs.writeFileSync(
+        path.join(root, "src", "app.css"),
+        KEY_TOKENS.map(function (token) {
+          return `.${token} { color: red; }\n`;
+        }).join(""),
+      );
+      for (const [name, text] of Object.entries(files)) {
+        fs.writeFileSync(path.join(root, "src", name), text);
+      }
+      return await run(root);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }
+
+  const TOGGLE = `import { cn } from "./cn";
+export function Toggle(props) {
+  return <div class={cn("p-4", { hidden: props.open })}>x</div>;
+}
+export const Static = <p class="hidden p-4">y</p>;
+`;
+
+  const REACT = `export function Menu(props) {
+  const c = clsx({ flex: props.open });
+  return (
+    <>
+      <div className={clsx({ block: props.open })} />
+      <span className={c} />
+      <b class="block flex">z</b>
+    </>
+  );
+}
+`;
+
+  const SHAPES = `type P = { grid: boolean };
+export function Shape(props: P) {
+  const { grid } = props;
+  return <input grid={grid} class="grid" />;
+}
+export class Model {
+  grid = false;
+}
+`;
+
+  it("records a cn() key as a rename token and never lists its group (AE11)", async function () {
+    const only = `import { cn } from "./cn";
+export function Toggle(props) {
+  return <div class={cn("p-4", { hidden: props.open })}>x</div>;
+}
+`;
+    await withKeySite({ "Toggle.tsx": only }, async function (root) {
+      const result = await runPrepass({
+        root,
+        cssEntry: path.join(root, "src", "app.css"),
+      });
+      assert.ok(result.renameTokens.has("hidden"));
+      assert.strictEqual(
+        result.registry.nameFor("hidden"),
+        hashClassName("hidden"),
+      );
+      assert.deepStrictEqual(result.listFrequencies, []);
+    });
+  });
+
+  it("keeps React className object keys original, through clsx() and a variable (AE11)", async function () {
+    await withKeySite({ "Menu.tsx": REACT }, async function (root) {
+      const result = await runPrepass({
+        root,
+        cssEntry: path.join(root, "src", "app.css"),
+      });
+      const reasons = exclusionReasons(result);
+      assert.strictEqual(reasons.get("block"), "runtime-context");
+      assert.strictEqual(reasons.get("flex"), "runtime-context");
+      assert.strictEqual(result.registry.nameFor("block"), undefined);
+      assert.strictEqual(result.registry.nameFor("flex"), undefined);
+    });
+  });
+
+  it("never counts a type literal, a binding pattern, a class field, or a JSX attribute", async function () {
+    await withKeySite({ "Shape.tsx": SHAPES }, async function (root) {
+      const result = await runPrepass({
+        root,
+        cssEntry: path.join(root, "src", "app.css"),
+      });
+      assert.strictEqual(exclusionReasons(result).get("grid"), undefined);
+      assert.strictEqual(
+        result.registry.nameFor("grid"),
+        hashClassName("grid"),
+      );
+    });
+  });
+
+  it("reports a clsx() key in class position as runtime-context on every route (AE11)", async function () {
+    const solid = `export const Item = (props) => (
+  <div class={clsx({ italic: props.on })}><b class="italic">x</b></div>
+);
+`;
+    await withKeySite({ "Item.tsx": solid }, async function (root) {
+      for (const scansBuiltOutput of [false, true]) {
+        const result = await runPrepass({
+          root,
+          cssEntry: path.join(root, "src", "app.css"),
+          scansBuiltOutput,
+        });
+        assert.strictEqual(
+          exclusionReasons(result).get("italic"),
+          "runtime-context",
+          String(scansBuiltOutput),
+        );
+      }
+    });
+  });
+
+  it("keeps keys of Vue and Svelte template objects outside a composition original", async function () {
+    await withKeySite(
+      {
+        "Card.vue": `<template>
+  <Child :item-class="{ ring: on }" @click="pick({ italic: true })" />
+  <div :class="{ border: on }" class="ring italic">x</div>
+</template>
+`,
+        "Row.svelte": `<Child opts={{ border: on }} />
+<div class:border={on} class="border">y</div>
+`,
+      },
+      async function (root) {
+        const result = await runPrepass({
+          root,
+          cssEntry: path.join(root, "src", "app.css"),
+        });
+        const reasons = exclusionReasons(result);
+        assert.strictEqual(reasons.get("ring"), "runtime-context");
+        assert.strictEqual(reasons.get("italic"), "runtime-context");
+        assert.strictEqual(reasons.get("border"), "runtime-context");
+      },
+    );
+  });
+
+  it("agrees with the transform: renamed keys rename, kept keys stay, nothing warns", async function () {
+    await withKeySite(
+      { "Toggle.tsx": TOGGLE, "Menu.tsx": REACT, "Shape.tsx": SHAPES },
+      async function (root) {
+        const result = await runPrepass({
+          root,
+          cssEntry: path.join(root, "src", "app.css"),
+        });
+        const toggle = transformSource({
+          code: TOGGLE,
+          id: path.join(root, "src", "Toggle.tsx"),
+          registry: result.registry,
+        });
+        assert.ok(toggle !== null);
+        const hidden = hashClassName("hidden");
+        const p4 = hashClassName("p-4");
+        assert.ok(
+          toggle.code.includes(`cn("${p4}", { ${hidden}: props.open })`),
+        );
+        assert.ok(toggle.code.includes(`<p class="${hidden} ${p4}">`));
+        assert.deepStrictEqual(toggle.warnings, []);
+        const menu = transformSource({
+          code: REACT,
+          id: path.join(root, "src", "Menu.tsx"),
+          registry: result.registry,
+        });
+        assert.strictEqual(menu, null);
+      },
+    );
+  });
+});

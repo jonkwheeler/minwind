@@ -177,6 +177,7 @@ export async function runApply(
         cssEntry: options.cssEntry ?? path.join(sourceDir, "app.css"),
         naming,
         exclusions: options.exclusions,
+        scansBuiltOutput: true,
       });
   const prominent = prepass.naming?.prominent ?? 0;
   const notices: Array<string> = [];

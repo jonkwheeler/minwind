@@ -2,6 +2,7 @@
 import Badge from "../components/Badge.astro";
 import Card from "../components/Card.astro";
 import ReplyList from "../components/ReplyList.astro";
+import Toggle from "../components/Toggle.astro";
 import Base from "../layouts/Base.astro";
 ---
 
@@ -30,6 +31,7 @@ import Base from "../layouts/Base.astro";
     <p>Follow up with the printer.</p>
   </Card>
   <ReplyList replies={["Printer quote", "Venue deposit"]} />
+  <Toggle on={true}>Mute</Toggle>
 </Base>
 
 <script>
