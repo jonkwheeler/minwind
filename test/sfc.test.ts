@@ -1603,3 +1603,35 @@ describe("source formats read class text without decoding (R6, KTD6)", function 
     }
   });
 });
+
+// KTD8 narrows the leak scan of built HTML only. A source format's
+// reverse-leak finding only warns, so its scan keeps prose and keyword
+// attributes.
+describe("source formats keep the whole leak scan (R8, KTD8)", function () {
+  it("still warns on prose and a role value in .astro, .vue, and .svelte", function () {
+    for (const [id, open, close] of [
+      ["/site/src/components/Note.astro", "", ""],
+      ["/site/src/components/Note.vue", "<template>", "</template>"],
+      ["/site/src/components/Note.svelte", "", ""],
+    ]) {
+      const result = transform(
+        `${open}<div class="flex"><p>a flex row</p>` +
+          `<div role="mb-16"></div><!-- p-4 --></div>${close}\n`,
+        id,
+      );
+      assert.ok(result !== null, id);
+      assert.deepStrictEqual(
+        result.warnings
+          .filter(function (warning) {
+            return warning.kind === "reverse-leak";
+          })
+          .map(function (warning) {
+            return warning.token;
+          })
+          .sort(),
+        ["flex", "mb-16", "p-4"],
+        id,
+      );
+    }
+  });
+});

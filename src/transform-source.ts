@@ -16,10 +16,12 @@ import {
   decodeClassTokens,
   escapeClassName,
   leakViews,
+  type LeakView,
 } from "./html-entities.js";
 import type { NameRegistry } from "./names.js";
 import {
   isSfcModule,
+  maskHtmlLeakText,
   maskSfcStyleContent,
   SFC_PATTERN,
   sfcFormatFor,
@@ -421,21 +423,31 @@ export function transformModule(
       });
     },
   };
+  let template: ReturnType<typeof walkSfcClassContexts> = null;
   if (sourceFile !== null) {
     walkClassContexts(sourceFile, visitor);
   } else {
-    walkSfcClassContexts(id, code, visitor);
+    template = walkSfcClassContexts(id, code, visitor);
   }
 
   // Reverse-leak check (KTD7): whole-word occurrences of registry tokens in
   // the original source that no edit consumed are class names the stylesheet
   // renames but this module keeps — warn with locations, never fail. SFCs
   // scan with <style> contents blanked: a utility word used as a CSS value
-  // (display: flex) is not a class reference. Built HTML is also scanned
-  // decoded (KTD6); an occurrence both scans find warns once.
-  const leakText = sfc ? maskSfcStyleContent(id, code) : code;
-  const views = leakViews(leakText, sfcFormatFor(id) === "html");
-  for (const entry of registry.entries()) {
+  // (display: flex) is not a class reference. Built HTML also blanks the
+  // positions that never hold one (KTD8), then is scanned decoded as well
+  // (KTD6); an occurrence both scans find warns once.
+  const entries = registry.entries();
+  const builtHtml = sfcFormatFor(id) === "html";
+  let views: Array<LeakView> = [];
+  if (entries.length > 0) {
+    let leakText = sfc ? maskSfcStyleContent(id, code) : code;
+    if (builtHtml && template !== null) {
+      leakText = maskHtmlLeakText(id, leakText, template);
+    }
+    views = leakViews(leakText, builtHtml);
+  }
+  for (const entry of entries) {
     const reported = new Set<number>();
     for (const view of views) {
       let from = 0;

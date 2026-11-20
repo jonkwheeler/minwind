@@ -7,6 +7,7 @@ import {
   leakViews,
   type EncodedClassToken,
 } from "./html-entities.js";
+import { maskCommentsAndReservedWords } from "./js-mask.js";
 import type { NameRegistry } from "./names.js";
 import {
   applySourceEdits,
@@ -233,10 +234,15 @@ export function transformBundle(
   }
 
   // KTD7 leak check: whole-word registry tokens no edit consumed — class
-  // names the stylesheet renames but this bundle keeps. The bundle is also
-  // scanned decoded (KTD6), and an occurrence both scans find warns once.
-  const views = leakViews(code, true);
-  for (const entry of registry.entries()) {
+  // names the stylesheet renames but this bundle keeps. Comments and
+  // reserved words are blanked first (KTD9). The bundle is also scanned
+  // decoded (KTD6), and an occurrence both scans find warns once.
+  const entries = registry.entries();
+  const views =
+    entries.length === 0
+      ? []
+      : leakViews(maskCommentsAndReservedWords(sourceFile), true);
+  for (const entry of entries) {
     const reported = new Set<number>();
     for (const view of views) {
       let from = 0;

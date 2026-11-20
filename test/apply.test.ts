@@ -2120,3 +2120,201 @@ describe("entity-encoded classes in built output (R6, KTD6)", function () {
     assert.deepStrictEqual(leakedTokens(result), [token]);
   });
 });
+
+// R8 and R9: built HTML positions that never hold class names, and
+// JavaScript comments and reserved words, no longer keep a class original.
+// Every position a script can read a class list from still does.
+describe("leak scan narrowing in built HTML and JS (R8, R9, KTD8, KTD9)", function () {
+  const registry = registryOf([
+    "grid",
+    "group",
+    "flex",
+    "hidden",
+    "block",
+    "static",
+    "dark",
+    "opacity-0",
+  ]);
+
+  function leaks(result: TransformSourceResult | null): Array<string> {
+    if (result === null) return [];
+    return result.warnings
+      .filter(function (warning) {
+        return warning.kind === "reverse-leak";
+      })
+      .map(function (warning) {
+        return warning.token ?? "";
+      })
+      .sort();
+  }
+
+  function pageLeaks(code: string): Array<string> {
+    return leaks(transformModule({ code, id: "/out/index.html", registry }));
+  }
+
+  function bundleLeaks(code: string): Array<string> {
+    return leaks(transformBundle({ code, id: "/out/assets/app.js", registry }));
+  }
+
+  it("ignores prose and a role value that spell utilities (AE8)", function () {
+    assert.deepStrictEqual(
+      pageLeaks(
+        '<!doctype html><html><body><div class="grid">' +
+          "<p>the grid layout</p>" +
+          '<div role="group"><a class="group" href="/">x</a></div>' +
+          "</div></body></html>",
+      ),
+      [],
+    );
+  });
+
+  it("ignores the values of attributes that never hold class names", function () {
+    for (const markup of [
+      '<img alt="flex" src="/a.png">',
+      '<input type="hidden">',
+      '<span style="display:block">x</span>',
+      '<meta name="x" content="grid">',
+      '<a href="/" title="grid">x</a>',
+      '<input placeholder="flex">',
+      '<p lang="flex" dir="block">x</p>',
+      '<link rel="block" href="/a.css">',
+      '<input autocomplete="hidden">',
+      '<img loading="block" decoding="flex" fetchpriority="grid" src="/a.png">',
+      '<button aria-label="hidden" aria-describedby="flex">x</button>',
+    ]) {
+      assert.deepStrictEqual(
+        pageLeaks(`<!doctype html><html><body>${markup}</body></html>`),
+        [],
+        markup,
+      );
+    }
+  });
+
+  it("ignores comments, <title>, <textarea>, <option>, and <noscript> text", function () {
+    for (const markup of [
+      "<!-- flex --><p>x</p>",
+      "<textarea>flex</textarea>",
+      "<select><option>flex</option></select>",
+      "<noscript>Turn on JavaScript for the grid view.</noscript>",
+    ]) {
+      assert.deepStrictEqual(
+        pageLeaks(`<!doctype html><html><body>${markup}</body></html>`),
+        [],
+        markup,
+      );
+    }
+    assert.deepStrictEqual(
+      pageLeaks(
+        "<!doctype html><html><head><title>grid</title></head>" +
+          "<body><p>x</p></body></html>",
+      ),
+      [],
+    );
+  });
+
+  it("decodes only what the mask leaves, so encoded prose stays ignored", function () {
+    assert.deepStrictEqual(
+      pageLeaks("<!doctype html><html><body><p>a gr&#105;d</p></body></html>"),
+      [],
+    );
+    assert.deepStrictEqual(
+      pageLeaks(
+        '<!doctype html><html><body><p data-x="gr&#105;d">x</p></body></html>',
+      ),
+      ["grid"],
+    );
+  });
+
+  it("still scans a text node that spans an adopted <body> start tag", function () {
+    // The <img> ends <head> and implies <body>, so the real <body> start tag
+    // only adds its attributes, and parse5 merges the whitespace around it
+    // into one text node whose span covers that tag.
+    assert.deepStrictEqual(
+      pageLeaks(
+        '<!doctype html><html><head><noscript><img src="x"></noscript>\n' +
+          '</head>\n<body data-active-class="hidden">\n' +
+          '<p class="hidden">x</p></body></html>',
+      ),
+      ["hidden"],
+    );
+  });
+
+  it("ignores JSON-LD and still scans other script data", function () {
+    assert.deepStrictEqual(
+      pageLeaks(
+        '<!doctype html><html><head><script type="application/ld+json">' +
+          '{"description":"a grid"}</script></head><body></body></html>',
+      ),
+      [],
+    );
+    assert.deepStrictEqual(
+      pageLeaks(
+        '<!doctype html><html><head><script type="application/json">' +
+          '{"c":"flex"}</script></head><body></body></html>',
+      ),
+      ["flex"],
+    );
+  });
+
+  it("still scans data-*, handlers, value, id, name, island props, and unknown attributes (AE8)", function () {
+    for (const [markup, token] of [
+      ['<div data-active-class="hidden"></div>', "hidden"],
+      [`<button onclick="el.classList.add('hidden')">x</button>`, "hidden"],
+      ['<option value="dark">Dark</option>', "dark"],
+      ['<div id="block"></div>', "block"],
+      ['<input name="block">', "block"],
+      [`<astro-island props='{"class":[0,"flex"]}'></astro-island>`, "flex"],
+      ['<div x-transition:enter="opacity-0"></div>', "opacity-0"],
+      ['<div content="hidden"></div>', "hidden"],
+    ]) {
+      assert.deepStrictEqual(
+        pageLeaks(`<!doctype html><html><body>${markup}</body></html>`),
+        [token],
+        markup,
+      );
+    }
+  });
+
+  it("ignores comments and reserved words in executable inline scripts", function () {
+    for (const script of [
+      "<script>// block\n</script>",
+      '<script type="module">/* flex */ init();</script>',
+      "<script>class A { static x = 1; }</script>",
+      "<script>// gr&#105;d\n</script>",
+    ]) {
+      assert.deepStrictEqual(
+        pageLeaks(`<!doctype html><html><body>${script}</body></html>`),
+        [],
+        script,
+      );
+    }
+    assert.deepStrictEqual(
+      pageLeaks(
+        '<!doctype html><html><body><script>el.classList.add("block")' +
+          "</script></body></html>",
+      ),
+      ["block"],
+    );
+  });
+
+  it("ignores comments and reserved words in a bundle", function () {
+    for (const code of [
+      "/*! flex */\nexport const a = 1;\n",
+      "const a = 1; // grid\n",
+      "class X { static y }\n",
+      "// gr&#105;d\nconst a = 1;\n",
+    ]) {
+      assert.deepStrictEqual(bundleLeaks(code), [], code);
+    }
+  });
+
+  it("still counts strings in comparisons, case labels, and style assignments", function () {
+    for (const [code, token] of [
+      ['if (el.className === "hidden") go();\n', "hidden"],
+      ['switch (c) { case "flex": go(); }\n', "flex"],
+      ['el.style.display = "block";\n', "block"],
+    ]) {
+      assert.deepStrictEqual(bundleLeaks(code), [token], code);
+    }
+  });
+});

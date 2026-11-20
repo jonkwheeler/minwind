@@ -1392,13 +1392,61 @@ describe(
         }
       });
     });
+
+    describe("prose and keyword attributes (R8, AE8)", function () {
+      const SPELLED = ["grid", "flex", "group"];
+      const VARIANT = "group-aria-[current=page]:underline";
+
+      it("renames the utilities that prose and a role value spell", function () {
+        // About's prose spells grid and flex, and SiteNav's wrapper has
+        // role="group" on every page.
+        const prose = builds.baseline["about/index.html"].replace(/\s+/g, " ");
+        assert.match(
+          prose,
+          /<p\b[^>]*>[^<]* a grid, [^<]* a flex row\.\s*<\/p>/,
+        );
+        const renamed = new Set(
+          report.renames.map(function (entry) {
+            return entry.token;
+          }),
+        );
+        for (const token of [...SPELLED, VARIANT]) {
+          assert.ok(renamed.has(token), `${token} kept its original name`);
+        }
+        assert.deepStrictEqual(
+          report.exclusions.filter(function (entry) {
+            return [...SPELLED, VARIANT].includes(entry.token);
+          }),
+          [],
+        );
+      });
+
+      it("renames SiteNav's group marker and its variant together on every page", function () {
+        const pages = pagesOf(builds.on);
+        assert.ok(pages.length >= 2, pages.join(", "));
+        for (const page of pages) {
+          const html = builds.on[page];
+          assert.match(html, /<div\b[^>]*\srole="group"/, page);
+          const current =
+            /<a\b[^>]*\sclass="([^"]*)"[^>]*\saria-current="page"[^>]*>\s*<span class="([^"]*)">/.exec(
+              html,
+            );
+          assert.ok(current !== null, page);
+          assert.ok(
+            splitClasses(current[1]).map(decode).includes("group"),
+            `${page}: ${current[1]}`,
+          );
+          assert.strictEqual(decode(current[2]), VARIANT, page);
+        }
+      });
+    });
   },
 );
 
 // KTD7 on the Astro route: GTM Frontier's nav marks the current page's link
-// with a group variant, and a role="group" wrapper spells the marker in an
-// attribute minwind cannot rewrite. The marker keeps its name, and the
-// variant compounding it keeps its name too, logged on a line of its own.
+// with a group variant, and a data-* hook spells the marker in an attribute
+// minwind cannot rewrite. The marker keeps its name, and the variant
+// compounding it keeps its name too, logged on a line of its own.
 const NAV_STYLESHEET = `@layer utilities {
   .flex { display: flex; }
   .group-aria-\\[current\\=page\\]\\:underline:is(:where(.group)[aria-current="page"] *) { text-decoration-line: underline; }
@@ -1406,7 +1454,7 @@ const NAV_STYLESHEET = `@layer utilities {
 `;
 
 const NAV_MARKUP =
-  '<nav class="flex"><div role="group">' +
+  '<nav class="flex"><div data-active-class="group">' +
   '<a href="/" class="group" aria-current="page">' +
   '<span class="group-aria-[current=page]:underline">Inbox</span>' +
   "</a></div></nav>";

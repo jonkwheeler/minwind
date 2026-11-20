@@ -8,6 +8,7 @@ import {
   type ClassContextVisitor,
   type LiteralOccurrence,
 } from "./class-contexts.js";
+import { maskCommentsAndReservedWords } from "./js-mask.js";
 
 // Single-file-component support (Vue, Svelte, Astro). One walker feeds both
 // the U2 pre-pass scan and the U3 transform so classification can never
@@ -943,6 +944,7 @@ function emitClassListAttribute(
 }
 
 type TreeNode = DefaultTreeAdapterMap["node"];
+type TreeDocument = DefaultTreeAdapterMap["document"];
 type TreeElement = DefaultTreeAdapterMap["element"];
 type TreeTemplate = DefaultTreeAdapterMap["template"];
 
@@ -1177,13 +1179,15 @@ function walkTemplateElements(
   }
 }
 
+// Returns the template tree it walked, which the built-HTML leak mask reads
+// (KTD8), or null for a path of no SFC format.
 export function walkSfcClassContexts(
   filePath: string,
   text: string,
   visitor: ClassContextVisitor,
-): void {
+): TreeDocument | null {
   const format = sfcFormatFor(filePath);
-  if (format === null) return;
+  if (format === null) return null;
   const regions = findScriptRegions(format, text);
   // KTD5: the frontmatter's class constants, counted across the script
   // parse here and every template brace run after the element walk.
@@ -1403,7 +1407,7 @@ export function walkSfcClassContexts(
   });
   walkContentRunsBefore(Infinity);
 
-  if (constants.size === 0) return;
+  if (constants.size === 0) return document;
   // KTD5: every brace run is code, wherever it sits. A run that names a
   // constant is counted on its parse; a run TSX rejects has none, so each
   // occurrence of a name in its text is an other reference.
@@ -1445,6 +1449,145 @@ export function walkSfcClassContexts(
     );
     visitor.exitRenameGroup?.("class-attribute", true, false);
   }
+  return document;
+}
+
+// KTD8: built-HTML attributes whose values never hold a class name. A
+// script that copies one into a class list is unsupported, like a class
+// name fetched at runtime. `content` joins them on <meta> only.
+const NON_CLASS_ATTRIBUTES = new Set([
+  "role",
+  "type",
+  "alt",
+  "title",
+  "placeholder",
+  "lang",
+  "dir",
+  "rel",
+  "autocomplete",
+  "loading",
+  "decoding",
+  "fetchpriority",
+  "style",
+]);
+
+function isNonClassAttribute(element: TreeElement, name: string): boolean {
+  return (
+    NON_CLASS_ATTRIBUTES.has(name) ||
+    name.startsWith("aria-") ||
+    (name === "content" && element.tagName === "meta")
+  );
+}
+
+// The type values a browser runs as script: none, empty, module, or a
+// JavaScript MIME type essence (the HTML standard's list).
+const JAVASCRIPT_TYPES = new Set([
+  "",
+  "module",
+  "application/ecmascript",
+  "application/javascript",
+  "application/x-ecmascript",
+  "application/x-javascript",
+  "text/ecmascript",
+  "text/javascript",
+  "text/javascript1.0",
+  "text/javascript1.1",
+  "text/javascript1.2",
+  "text/javascript1.3",
+  "text/javascript1.4",
+  "text/javascript1.5",
+  "text/jscript",
+  "text/livescript",
+  "text/x-ecmascript",
+  "text/x-javascript",
+]);
+
+type ScriptContent = "javascript" | "json-ld" | "other";
+
+function scriptContent(element: TreeElement): ScriptContent {
+  const type = element.attrs.find(function (attr) {
+    return attr.name === "type";
+  });
+  if (type === undefined) return "javascript";
+  const essence = type.value
+    .replace(/^[\t\n\f\r ]+|[\t\n\f\r ]+$/g, "")
+    .toLowerCase();
+  if (JAVASCRIPT_TYPES.has(essence)) return "javascript";
+  return essence === "application/ld+json" ? "json-ld" : "other";
+}
+
+// KTD8: the leak text of a built page, with the positions that never hold a
+// class reference blanked: text, comments, JSON-LD, and the values of
+// NON_CLASS_ATTRIBUTES. Executable scripts keep everything but comments and
+// reserved words (KTD9). Every other script type, every other attribute
+// (data-*, value, on* handlers, island props), and attributes the parser
+// adopted without a location stay scanned. `document` is the tree
+// walkSfcClassContexts parsed from the same file, so its offsets index
+// `text`.
+export function maskHtmlLeakText(
+  filePath: string,
+  text: string,
+  document: TreeDocument,
+): string {
+  const blank: Array<SourceSpan> = [];
+  const scripts: Array<SourceSpan> = [];
+  function visit(node: TreeNode): void {
+    const location = node.sourceCodeLocation;
+    if (node.nodeName === "#comment" || node.nodeName === "#text") {
+      if (location === null || location === undefined) return;
+      const span = { start: location.startOffset, end: location.endOffset };
+      // parse5 merges the text on both sides of a tag it drops or adopts,
+      // so a text node holding `<` can span an adopted <body> start tag,
+      // whose attributes stay scanned.
+      if (
+        node.nodeName === "#text" &&
+        text.slice(span.start, span.end).includes("<")
+      ) {
+        return;
+      }
+      blank.push(span);
+      return;
+    }
+    if (!isElement(node)) {
+      if ("childNodes" in node) node.childNodes.forEach(visit);
+      return;
+    }
+    const attributes = node.sourceCodeLocation?.attrs;
+    for (const attr of node.attrs) {
+      const at = attributes?.[attr.name];
+      if (at === undefined || !isNonClassAttribute(node, attr.name)) continue;
+      blank.push(attributeValueSpan(text, at.startOffset, at.endOffset));
+    }
+    if (node.tagName === "script") {
+      // Script data, never text.
+      const first = node.childNodes[0]?.sourceCodeLocation;
+      const last =
+        node.childNodes[node.childNodes.length - 1]?.sourceCodeLocation;
+      if (first === null || first === undefined) return;
+      if (last === null || last === undefined) return;
+      const content = { start: first.startOffset, end: last.endOffset };
+      const kind = scriptContent(node);
+      if (kind === "json-ld") blank.push(content);
+      else if (kind === "javascript") scripts.push(content);
+      return;
+    }
+    if (node.tagName === "template") visit((node as TreeTemplate).content);
+    node.childNodes.forEach(visit);
+  }
+  visit(document);
+
+  const chars = maskSpans(text, blank).split("");
+  for (const span of scripts) {
+    const script = parseSourceModule(
+      `${filePath}::script.js`,
+      text.slice(span.start, span.end),
+    );
+    const masked = maskCommentsAndReservedWords(script);
+    for (let i = 0; i < masked.length; i += 1) {
+      chars[span.start + i] = masked[i];
+    }
+  }
+  return chars.join("");
 }
 
 // One entry point for modules of every supported flavor: SFCs get the
