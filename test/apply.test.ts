@@ -1,9 +1,11 @@
 import assert from "node:assert";
+import { execFile } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { applyBuildOutput } from "../src/apply.js";
 import { parseArgs, runApplyCli } from "../src/apply-cli.js";
 import { compileTailwindStylesheet } from "../src/engines/tailwind.js";
@@ -1550,6 +1552,253 @@ describe("apply --prominence", function () {
       assert.match(outcome.notices[0], /first 7 class-bearing elements/);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// KTD7: a class kept original takes the utilities that compound it with it.
+// GTM Frontier's nav underlines the current page's label through
+// group-aria-[current=page], and a data-* value that spells "group" leaks
+// the marker. In 1.1.0 the variant still renamed while its only selector
+// arm named the kept .group, so the arm was skipped and the build failed
+// on presence.
+const GROUP_VARIANT = "group-aria-[current=page]:text-lav";
+const GROUP_RULE =
+  ".group-aria-\\[current\\=page\\]\\:text-lav" +
+  ":is(:where(.group)[aria-current=page] *){color:red}";
+const GROUP_LEAK = '<div data-active-class="group"></div>';
+
+function registryOf(tokens: Array<string>): NameRegistry {
+  return createNameRegistry({
+    universe: new Set(tokens),
+    sourceTokens: new Set(tokens),
+  });
+}
+
+function writeOutput(files: Record<string, string>): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minwind-dependents-"));
+  for (const [file, text] of Object.entries(files)) {
+    fs.writeFileSync(path.join(dir, file), text);
+  }
+  return dir;
+}
+
+const execFileAsync = promisify(execFile);
+const CLI = path.join(HERE, "..", "src", "cli.ts");
+const TSX = path.join(HERE, "..", "node_modules", ".bin", "tsx");
+
+describe("dependent variants keep their markers (R7, KTD7)", function () {
+  it("keeps a leaked marker's variant original instead of failing on presence", function () {
+    const html =
+      '<!doctype html><a class="group" aria-current="page">' +
+      `<span class="${GROUP_VARIANT}">Inbox</span></a>${GROUP_LEAK}`;
+    const css = `@layer utilities{${GROUP_RULE}}`;
+    const dir = writeOutput({ "index.html": html, "app.css": css });
+    try {
+      const result = applyBuildOutput({
+        dir,
+        registry: registryOf(["group", GROUP_VARIANT]),
+        consolidationVerdicts: [],
+        consolidate: false,
+      });
+      assert.deepStrictEqual(result.keptOriginal, ["group", GROUP_VARIANT]);
+      assert.deepStrictEqual(result.keptDependent, [GROUP_VARIANT]);
+      assert.strictEqual(
+        fs.readFileSync(path.join(dir, "index.html"), "utf8"),
+        html,
+      );
+      assert.strictEqual(
+        fs.readFileSync(path.join(dir, "app.css"), "utf8"),
+        css,
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("renames a token with an ordinary arm and skips its dependent arm with a warning", function () {
+    const registry = registryOf(["group", "nav-link"]);
+    const dir = writeOutput({
+      "index.html":
+        '<!doctype html><a class="group"><span class="nav-link">Inbox</span>' +
+        `</a>${GROUP_LEAK}`,
+      "app.css":
+        "@layer utilities{.nav-link{color:gray}}" +
+        ".group:hover .nav-link{color:black}",
+    });
+    try {
+      const result = applyBuildOutput({
+        dir,
+        registry,
+        consolidationVerdicts: [],
+        consolidate: false,
+      });
+      const name = registry.nameFor("nav-link");
+      assert.ok(name !== undefined);
+      assert.deepStrictEqual(result.keptOriginal, ["group"]);
+      assert.deepStrictEqual(result.keptDependent, []);
+      assert.strictEqual(
+        fs.readFileSync(path.join(dir, "app.css"), "utf8"),
+        `@layer utilities{.${name}{color:gray}}` +
+          ".group:hover .nav-link{color:black}",
+      );
+      const skipped = result.warnings.filter(function (warning) {
+        return warning.kind === "mixed-compound-skipped";
+      });
+      assert.deepStrictEqual(
+        skipped.map(function (warning) {
+          return "selector" in warning ? warning.selector : "";
+        }),
+        [".group:hover .nav-link"],
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("still fails presence for a renamed token with no selector arm", function () {
+    const dir = writeOutput({
+      "index.html":
+        '<!doctype html><a class="group" aria-current="page">' +
+        `<span class="${GROUP_VARIANT} ghost">Inbox</span></a>${GROUP_LEAK}`,
+      "app.css": `@layer utilities{${GROUP_RULE}}`,
+    });
+    try {
+      assert.throws(
+        function () {
+          applyBuildOutput({
+            dir,
+            registry: registryOf(["group", GROUP_VARIANT, "ghost"]),
+            consolidationVerdicts: [],
+            consolidate: false,
+          });
+        },
+        function (error: Error) {
+          assert.match(error.message, /presence assertion failed/);
+          assert.ok(error.message.includes('"ghost"'), error.message);
+          assert.ok(!error.message.includes(GROUP_VARIANT), error.message);
+          return true;
+        },
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("stops merging a consolidation verdict that names a dependent token", function () {
+    const registry = registryOf(["flex", "group", GROUP_VARIANT]);
+    const flex = registry.nameFor("flex");
+    assert.ok(flex !== undefined);
+    const dir = writeOutput({
+      "index.html":
+        '<!doctype html><a class="group" aria-current="page">' +
+        `<span class="flex ${GROUP_VARIANT}">a</span></a>` +
+        `<p class="flex ${GROUP_VARIANT}">b</p>${GROUP_LEAK}`,
+      "app.css": `@layer utilities{.flex{display:flex}${GROUP_RULE}}`,
+    });
+    try {
+      const result = applyBuildOutput({
+        dir,
+        registry,
+        consolidationVerdicts: [
+          {
+            tokens: ["flex", GROUP_VARIANT],
+            frequency: 2,
+            safe: true,
+            name: "combo",
+            removableTokens: ["flex", GROUP_VARIANT],
+          },
+        ],
+        consolidate: true,
+      });
+      assert.strictEqual(result.consolidated, 0);
+      const css = fs.readFileSync(path.join(dir, "app.css"), "utf8");
+      assert.strictEqual(
+        css,
+        `@layer utilities{.${flex}{display:flex}${GROUP_RULE}}`,
+      );
+      const html = fs.readFileSync(path.join(dir, "index.html"), "utf8");
+      assert.ok(html.includes(`<p class="${flex} ${GROUP_VARIANT}">`), html);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("prints dependents on their own line and reports them runtime-context", async function () {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "minwind-dep-site-"));
+    try {
+      function write(relative: string, text: string): void {
+        const file = path.join(root, relative);
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, text);
+      }
+      write(
+        path.join("src", "app.css"),
+        `@layer utilities {\n  .flex { display: flex; }\n  ${GROUP_RULE}\n}\n`,
+      );
+      write(
+        path.join("src", "nav.tsx"),
+        "export function Nav() {\n" +
+          "  return (\n" +
+          '    <nav class="flex">\n' +
+          '      <a class="group" aria-current="page">\n' +
+          `        <span class="${GROUP_VARIANT}">Inbox</span>\n` +
+          "      </a>\n" +
+          "    </nav>\n" +
+          "  );\n" +
+          "}\n",
+      );
+      const compiled = await compileTailwindStylesheet({
+        cssEntry: path.join(root, "src", "app.css"),
+        root,
+      });
+      write(path.join("dist", "app.css"), compiled.stylesheet);
+      write(
+        path.join("dist", "index.html"),
+        '<!doctype html><nav class="flex"><a class="group"' +
+          ` aria-current="page"><span class="${GROUP_VARIANT}">Inbox</span>` +
+          `</a></nav>${GROUP_LEAK}`,
+      );
+      const { stdout } = await execFileAsync(TSX, [
+        CLI,
+        "apply",
+        path.join(root, "dist"),
+        "--root",
+        root,
+      ]);
+      const lines = stdout.split("\n");
+      assert.ok(
+        lines.includes(
+          "  kept original names for 1 token(s) in unrewritable positions:" +
+            " group",
+        ),
+        stdout,
+      );
+      assert.ok(
+        lines.includes(
+          "  kept original names for 1 token(s) because each depends on a" +
+            ` class kept original: ${GROUP_VARIANT}`,
+        ),
+        stdout,
+      );
+      const report = JSON.parse(
+        fs.readFileSync(
+          path.join(root, ".output", "minwind", "report.json"),
+          "utf8",
+        ),
+      ) as TransformReport;
+      assert.deepStrictEqual(report.exclusions, [
+        { token: "group", reason: "runtime-context" },
+        { token: GROUP_VARIANT, reason: "runtime-context" },
+      ]);
+      assert.deepStrictEqual(
+        report.renames.map(function (entry) {
+          return entry.token;
+        }),
+        ["flex"],
+      );
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
     }
   });
 });

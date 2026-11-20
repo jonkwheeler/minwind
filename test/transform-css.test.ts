@@ -5,6 +5,7 @@ import { createNameRegistry, type NameRegistry } from "../src/names.js";
 import {
   assertNoSurvivingTokens,
   assertPresence,
+  selectorArmTokens,
   transformStylesheet,
   type TransformCssResult,
 } from "../src/transform-css.js";
@@ -529,5 +530,28 @@ describe("transformStylesheet dialect names", function () {
         ".items-centah{align-items:center}" +
         "}",
     );
+  });
+});
+
+describe("selectorArmTokens (KTD7)", function () {
+  it("lists each selector arm's class tokens, as the transform decides them", function () {
+    const css =
+      "@layer utilities{" +
+      "@media (hover:hover){" +
+      ".group-hover\\:underline:is(:where(.group):hover *){text-decoration-line:underline}" +
+      "}" +
+      ".flex.flex,.shiki .line{display:flex}" +
+      "}" +
+      ".site-card{.flex{outline:none}}" +
+      "a{color:red}" +
+      "@keyframes spin{to{rotate:1turn}}";
+    assert.deepStrictEqual(selectorArmTokens(css), [
+      ["group-hover:underline", "group"],
+      ["flex"],
+      ["shiki", "line"],
+      ["site-card"],
+      ["flex"],
+      [],
+    ]);
   });
 });

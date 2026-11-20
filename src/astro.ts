@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { keptUnrewritable } from "./apply.js";
 import type { MinwindEngineId, MinwindMode } from "./flags.js";
 import type { ExclusionConfig } from "./names.js";
 import {
@@ -167,12 +168,20 @@ function logSummary(
         " visible drew the first vocabulary words",
     );
   }
-  if (result.keptOriginal.length > 0) {
+  const unrewritable = keptUnrewritable(result);
+  if (unrewritable.length > 0) {
     logger.info(
-      `kept original names for ${result.keptOriginal.length} class(es)` +
+      `kept original names for ${unrewritable.length} class(es)` +
         " that also appear where minwind cannot rewrite them (a minified" +
         " call argument or an inline script):" +
-        ` ${result.keptOriginal.join(", ")}`,
+        ` ${unrewritable.join(", ")}`,
+    );
+  }
+  if (result.keptDependent.length > 0) {
+    logger.info(
+      `kept original names for ${result.keptDependent.length} class(es)` +
+        " because each depends on a class kept original:" +
+        ` ${result.keptDependent.join(", ")}`,
     );
   }
   if (result.warnings.length > 0) {

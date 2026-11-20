@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
+import { keptUnrewritable } from "./apply.js";
 import {
   parseEngineList,
   resolveFlags,
@@ -582,6 +583,7 @@ export async function runApplyCli(argv: Array<string>): Promise<number> {
     process.stderr.write(`${notice}\n`);
   }
   const { result, renamed } = outcome;
+  const unrewritable = keptUnrewritable(result);
   process.stdout.write(
     `minwind apply${options.dryRun ? " (dry run)" : ""}: renamed ${renamed}` +
       ` class(es) across ${result.rewrittenFiles} file(s)` +
@@ -590,9 +592,14 @@ export async function runApplyCli(argv: Array<string>): Promise<number> {
       (result.consolidated > 0
         ? `; consolidated ${result.consolidated} list(s)`
         : "") +
-      (result.keptOriginal.length > 0
-        ? `\n  kept original names for ${result.keptOriginal.length}` +
-          ` token(s) in unrewritable positions: ${result.keptOriginal.join(", ")}`
+      (unrewritable.length > 0
+        ? `\n  kept original names for ${unrewritable.length}` +
+          ` token(s) in unrewritable positions: ${unrewritable.join(", ")}`
+        : "") +
+      (result.keptDependent.length > 0
+        ? `\n  kept original names for ${result.keptDependent.length}` +
+          " token(s) because each depends on a class kept original:" +
+          ` ${result.keptDependent.join(", ")}`
         : "") +
       (result.warnings.length > 0
         ? `\n  ${result.warnings.length} warning(s) — inspect before deploy`

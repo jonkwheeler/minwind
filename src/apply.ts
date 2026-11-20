@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { ConsolidationVerdict } from "./consolidate.js";
+import { dependentTokens } from "./dependents.js";
 import {
   applyModulesRemap,
   type ModuleRemapContext,
@@ -12,7 +13,10 @@ import {
   type TransformSourceResult,
   type TransformWarning,
 } from "./transform-source.js";
-import type { CssTransformWarning } from "./transform-css.js";
+import {
+  selectorArmTokens,
+  type CssTransformWarning,
+} from "./transform-css.js";
 import { rewriteCssAssets } from "./webpack.js";
 
 // The post-build rewriter behind `minwind apply` — the path for bundlers
@@ -43,9 +47,23 @@ export interface ApplyResult {
   consolidated: number;
   // Tokens that kept their original names because a whole-word occurrence
   // appeared in a position the post-build passes cannot rewrite (a minified
-  // call argument, an SSR payload in an inline script). Skip-and-warn: the
-  // conservative choice costs compression, never correctness.
+  // call argument, an SSR payload in an inline script), plus keptDependent.
+  // Skip-and-warn: the conservative choice costs compression, never
+  // correctness.
   keptOriginal: Array<string>;
+  // The subset of keptOriginal kept only because every selector arm it
+  // appears in compounds a class kept original (KTD7), such as a
+  // `group-hover:*` utility whose `group` marker leaked.
+  keptDependent: Array<string>;
+}
+
+// The tokens kept original for an occurrence in an unrewritable position:
+// keptOriginal less keptDependent. Logged apart from the dependents.
+export function keptUnrewritable(result: ApplyResult): Array<string> {
+  const dependent = new Set(result.keptDependent);
+  return result.keptOriginal.filter(function (token) {
+    return !dependent.has(token);
+  });
 }
 
 const BUNDLE_PATTERN = /\.[cm]?js$/;
@@ -191,6 +209,26 @@ export function applyBuildOutput(options: ApplyOptions): ApplyResult {
       }
     }
   }
+  const stylesheets: Record<string, string> = {};
+  const stylesheetPaths = new Map<string, string>();
+  for (const file of files) {
+    if (!file.endsWith(".css")) continue;
+    stylesheets[path.relative(dir, file)] = fs.readFileSync(file, "utf8");
+    stylesheetPaths.set(path.relative(dir, file), file);
+  }
+  // KTD7: a token whose every selector arm in the built stylesheets
+  // compounds a dropped or excluded class would have no selector left to
+  // rename, so it drops out too, and reports as runtime-context with the
+  // leaked tokens.
+  const keptDependent = dependentTokens(
+    Object.values(stylesheets).flatMap(selectorArmTokens),
+    function (token) {
+      return (
+        !leaked.has(token) && options.registry.nameFor(token) !== undefined
+      );
+    },
+  );
+  for (const token of keptDependent) leaked.add(token);
   const registry = filterRegistry(options.registry, leaked);
   // A consolidation verdict mentioning a dropped token can no longer merge:
   // its kept-original member rule must survive.
@@ -229,15 +267,8 @@ export function applyBuildOutput(options: ApplyOptions): ApplyResult {
     warnings: [],
     consolidated: 0,
     keptOriginal: Array.from(leaked).sort(),
+    keptDependent,
   };
-
-  const stylesheets: Record<string, string> = {};
-  const stylesheetPaths = new Map<string, string>();
-  for (const file of files) {
-    if (!file.endsWith(".css")) continue;
-    stylesheets[path.relative(dir, file)] = fs.readFileSync(file, "utf8");
-    stylesheetPaths.set(path.relative(dir, file), file);
-  }
 
   const css = rewriteCssAssets(
     stylesheets,

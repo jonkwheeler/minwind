@@ -895,6 +895,94 @@ describe(
       });
     });
 
+    describe("SiteNav's group marker (R7, KTD7)", function () {
+      interface Arm {
+        classes: Array<string>;
+        text: string;
+      }
+
+      // Every selector arm's source text and class names, at any depth.
+      function armsOf(css: string): Array<Arm> {
+        const arms: Array<Arm> = [];
+        function collect(node: CssNode, arm: Arm): void {
+          if (node.type === "ClassSelector" && node.name !== undefined) {
+            arm.classes.push(ident.decode(node.name));
+          }
+          if (node.children) {
+            node.children.forEach(function (child) {
+              collect(child, arm);
+            });
+          }
+        }
+        function visit(node: CssNode): void {
+          if (node.type === "Rule" && node.prelude?.type === "SelectorList") {
+            node.prelude.children?.forEach(function (selector) {
+              const arm: Arm = {
+                classes: [],
+                text: css.slice(
+                  selector.loc?.start.offset,
+                  selector.loc?.end.offset,
+                ),
+              };
+              collect(selector, arm);
+              arms.push(arm);
+            });
+          }
+          if (node.children) node.children.forEach(visit);
+          if (node.block) visit(node.block);
+        }
+        visit(parse(css, { positions: true }));
+        return arms;
+      }
+
+      function original(name: string): string {
+        return decode(name) ?? name;
+      }
+
+      it("keeps the marker and its variant together, and the variant's selector matches", function () {
+        const arms = armsOf(stylesheetOf(builds.on));
+        const pages = pagesOf(builds.on);
+        assert.ok(pages.length >= 2, pages.join(", "));
+        for (const page of pages) {
+          const html = builds.on[page];
+          assert.match(html, /<div\b[^>]*\srole="group"/, page);
+          const current = Array.from(
+            html.matchAll(
+              /<a\b([^>]*\saria-current="page"[^>]*)>\s*<span class="([^"]*)">/g,
+            ),
+          );
+          assert.strictEqual(current.length, 1, `${page}: one current link`);
+          const anchor = /\sclass="([^"]*)"/.exec(current[0][1]);
+          assert.ok(anchor !== null, current[0][0]);
+          const marker = splitClasses(anchor[1]).find(function (name) {
+            return original(name) === "group";
+          });
+          assert.ok(marker !== undefined, current[0][0]);
+          const variant = current[0][2];
+          assert.strictEqual(
+            original(variant),
+            "group-aria-[current=page]:underline",
+          );
+          // Renamed together or kept together, never split.
+          assert.strictEqual(
+            isRenamed(marker),
+            isRenamed(variant),
+            `${page}: ${marker} and ${variant}`,
+          );
+          assert.ok(
+            arms.some(function (arm) {
+              return (
+                sorted(new Set(arm.classes)).join(" ") ===
+                  sorted([marker, variant]).join(" ") &&
+                /\[aria-current="?page"?\]/.test(arm.text)
+              );
+            }),
+            `${page}: no .${variant} arm compounding .${marker}[aria-current]`,
+          );
+        }
+      });
+    });
+
     it("pins the astro version whose Node floor gates this suite", function () {
       const fixture = readJson<{ dependencies: Record<string, string> }>(
         path.join(FIXTURE, "package.json"),
@@ -1085,3 +1173,67 @@ describe(
     });
   },
 );
+
+// KTD7 on the Astro route: GTM Frontier's nav marks the current page's link
+// with a group variant, and a role="group" wrapper spells the marker in an
+// attribute minwind cannot rewrite. The marker keeps its name, and the
+// variant compounding it keeps its name too, logged on a line of its own.
+const NAV_STYLESHEET = `@layer utilities {
+  .flex { display: flex; }
+  .group-aria-\\[current\\=page\\]\\:underline:is(:where(.group)[aria-current="page"] *) { text-decoration-line: underline; }
+}
+`;
+
+const NAV_MARKUP =
+  '<nav class="flex"><div role="group">' +
+  '<a href="/" class="group" aria-current="page">' +
+  '<span class="group-aria-[current=page]:underline">Inbox</span>' +
+  "</a></div></nav>";
+
+describe("astro:build:done dependent variants (R7, KTD7)", function () {
+  it("logs a kept marker's dependents apart from the unrewritable classes", async function () {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "minwind-astro-nav-"));
+    try {
+      const cssEntry = path.join("src", "styles", "global.css");
+      writeFile(root, cssEntry, NAV_STYLESHEET);
+      writeFile(root, path.join("src", "pages", "index.astro"), NAV_MARKUP);
+      const compiled = await compileTailwindStylesheet({
+        cssEntry: path.join(root, cssEntry),
+        root,
+      });
+      writeFile(
+        root,
+        path.join("dist", "_astro", "index.css"),
+        compiled.stylesheet,
+      );
+      writeFile(
+        root,
+        path.join("dist", "index.html"),
+        "<!DOCTYPE html><html><head>" +
+          '<link rel="stylesheet" href="/_astro/index.css"></head>' +
+          `<body>${NAV_MARKUP}</body></html>`,
+      );
+      const logs = await build({}, root);
+      const kept = logs.info.filter(function (line) {
+        return line.includes("kept original");
+      });
+      assert.strictEqual(kept.length, 2, logs.info.join("\n"));
+      assert.match(kept[0], /cannot rewrite/);
+      assert.match(kept[0], /: group$/);
+      assert.match(kept[1], /depends on a class kept original/);
+      assert.ok(
+        kept[1].endsWith(": group-aria-[current=page]:underline"),
+        kept[1],
+      );
+      const page = builtPage(root);
+      assert.ok(page.includes('class="group"'), page);
+      assert.ok(
+        page.includes('<span class="group-aria-[current=page]:underline">'),
+        page,
+      );
+      assert.ok(page.includes(`<nav class="${hashClassName("flex")}">`), page);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});

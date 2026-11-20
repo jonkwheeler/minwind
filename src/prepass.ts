@@ -31,7 +31,9 @@ import {
   type StylesheetModel,
 } from "./consolidate.js";
 import { compareCodeUnits } from "./util.js";
+import { dependentTokens } from "./dependents.js";
 import { compileTailwindStylesheet } from "./engines/tailwind.js";
+import { selectorArmTokens } from "./transform-css.js";
 import {
   collectCustomPropertyNamesInCss,
   createCustomPropertyRegistry,
@@ -294,6 +296,28 @@ export async function runPrepass(
     exclusions: options.exclusions,
     hash: classHasher,
   });
+
+  // KTD7: a utility whose every selector arm compounds a class kept
+  // original (excluded, runtime-poisoned, or css-only, such as a `group`
+  // marker) keeps its original name too. It joins the runtime tokens, so
+  // the registry reports it as runtime-context, and the naming solver below
+  // never deals it a name.
+  const dependents = dependentTokens(
+    selectorArmTokens(stylesheet),
+    function (token) {
+      return registry.nameFor(token) !== undefined;
+    },
+  );
+  if (dependents.length > 0) {
+    for (const token of dependents) scan.runtimeTokens.add(token);
+    registry = createNameRegistry({
+      universe: stylesheetModel.universe,
+      sourceTokens,
+      runtimeTokens: scan.runtimeTokens,
+      exclusions: options.exclusions,
+      hash: classHasher,
+    });
+  }
 
   // Themed naming: the provisional hash registry determines which tokens
   // rename (the registry's own classification), the solver assigns words,

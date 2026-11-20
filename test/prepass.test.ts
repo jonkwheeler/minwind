@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
 import { runPrepass } from "../src/prepass.js";
 import { hashClassName } from "../src/names.js";
+import { assertPresence, transformStylesheet } from "../src/transform-css.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SITE = path.join(HERE, "fixtures", "prepass-site");
@@ -408,5 +409,128 @@ import Row from "../components/Row.astro";
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+// KTD7 in the pre-pass: a marker class kept original by an exclusion,
+// runtime poison, or css-only takes every utility whose selector arms all
+// compound it, so the registry never asks the CSS transform to rename a
+// selector it must skip. The site lives under test/fixtures so the CSS
+// entry resolves the real tailwindcss package and the arms are Tailwind's.
+const DEPENDENTS_NAV = `export function Nav() {
+  return (
+    <nav>
+      <a class="group" aria-current="page">
+        <span class="group-aria-[current=page]:underline">Inbox</span>
+      </a>
+      <ul>
+        <li class="group/item">
+          <span class="group-hover/item:underline">Item</span>
+        </li>
+      </ul>
+      <input class="peer" type="checkbox" />
+      <label class="peer-checked:underline">On</label>
+      <main class="dark:bg-black">Body</main>
+    </nav>
+  );
+}
+`;
+
+async function withDependentsSite<T>(
+  fn: (root: string, css: string) => Promise<T>,
+): Promise<T> {
+  const root = path.join(HERE, "fixtures", `dependents-site-${process.pid}`);
+  fs.rmSync(root, { recursive: true, force: true });
+  fs.mkdirSync(path.join(root, "src"), { recursive: true });
+  const css = path.join(root, "src", "app.css");
+  fs.writeFileSync(
+    css,
+    '@import "tailwindcss";\n' +
+      "@custom-variant dark (&:where(.dark, .dark *));\n",
+  );
+  fs.writeFileSync(path.join(root, "src", "nav.tsx"), DEPENDENTS_NAV);
+  fs.writeFileSync(
+    path.join(root, "src", "theme.ts"),
+    "export function toggleTheme(root: HTMLElement): void {\n" +
+      '  root.classList.toggle("dark");\n' +
+      "}\n",
+  );
+  try {
+    return await fn(root, css);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+// The stylesheet transform and the cross-asset presence check the build
+// runs on the pre-pass's own stylesheet.
+function assertStylesheetRenames(
+  result: Awaited<ReturnType<typeof runPrepass>>,
+): void {
+  const renamed = transformStylesheet({
+    css: result.stylesheet,
+    registry: result.registry,
+    fileName: "app.css",
+  });
+  assertPresence(result.registry, [renamed.css]);
+}
+
+describe("runPrepass dependent variants (R7, KTD7)", function () {
+  it("keeps an excluded group marker's variant original as runtime-context (AE7)", async function () {
+    await withDependentsSite(async function (root, cssEntry) {
+      const result = await runPrepass({
+        root,
+        cssEntry,
+        exclusions: { names: ["group"], prefixes: [] },
+      });
+      const reasons = exclusionReasons(result);
+      assert.strictEqual(reasons.get("group"), "excluded-prefix");
+      assert.strictEqual(
+        reasons.get("group-aria-[current=page]:underline"),
+        "runtime-context",
+      );
+      assert.strictEqual(
+        result.registry.nameFor("group-aria-[current=page]:underline"),
+        undefined,
+      );
+      // The named group and the peer pair do not compound .group.
+      assert.ok(result.registry.nameFor("group-hover/item:underline"));
+      assert.ok(result.registry.nameFor("peer-checked:underline"));
+      assertStylesheetRenames(result);
+    });
+  });
+
+  it("keeps named-group and peer variants with their excluded markers", async function () {
+    await withDependentsSite(async function (root, cssEntry) {
+      const result = await runPrepass({
+        root,
+        cssEntry,
+        exclusions: { names: ["group/item", "peer"], prefixes: [] },
+      });
+      const reasons = exclusionReasons(result);
+      // group-hover/item's arm sits inside @media (hover: hover).
+      assert.strictEqual(
+        reasons.get("group-hover/item:underline"),
+        "runtime-context",
+      );
+      assert.strictEqual(
+        reasons.get("peer-checked:underline"),
+        "runtime-context",
+      );
+      assert.ok(result.registry.nameFor("group"));
+      assert.ok(result.registry.nameFor("group-aria-[current=page]:underline"));
+      assertStylesheetRenames(result);
+    });
+  });
+
+  it("keeps a class-strategy dark variant original when classList.toggle adds dark", async function () {
+    await withDependentsSite(async function (root, cssEntry) {
+      const result = await runPrepass({ root, cssEntry });
+      const reasons = exclusionReasons(result);
+      assert.strictEqual(reasons.get("dark"), "runtime-context");
+      assert.strictEqual(reasons.get("dark:bg-black"), "runtime-context");
+      assert.ok(result.registry.nameFor("group-aria-[current=page]:underline"));
+      assertStylesheetRenames(result);
+    });
   });
 });

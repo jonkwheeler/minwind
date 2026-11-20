@@ -230,14 +230,20 @@ interface ArmInfo {
   mixed: boolean;
 }
 
-function analyzeArm(selector: CssNode, registry: NameRegistry): ArmInfo {
-  const classNodes: Array<CssNode> = [];
-  collectClassNodes(selector, classNodes);
+// An arm's distinct class tokens in document order, decoded.
+function armTokens(classNodes: ReadonlyArray<CssNode>): Array<string> {
   const tokens: Array<string> = [];
   for (const classNode of classNodes) {
     const token = ident.decode(classNode.name ?? "");
     if (!tokens.includes(token)) tokens.push(token);
   }
+  return tokens;
+}
+
+function analyzeArm(selector: CssNode, registry: NameRegistry): ArmInfo {
+  const classNodes: Array<CssNode> = [];
+  collectClassNodes(selector, classNodes);
+  const tokens = armTokens(classNodes);
   const uniqueRegistryCount = tokens.filter(function (token) {
     return registry.nameFor(token) !== undefined;
   }).length;
@@ -481,10 +487,17 @@ function collectContainerEdits(
   return edits;
 }
 
-// Every class-selector name visible in the given CSS, including inside
-// at-rule blocks and Raw nested-rule fragments.
-function collectSelectorNames(css: string, out: Set<string>): void {
-  const ast = parseStylesheet(css, "stylesheet");
+// The class tokens of every selector arm in the given CSS, one entry per
+// arm in document order, deduplicated within the arm exactly as the
+// transform's arm analysis sees them. Arms inside at-rule blocks
+// (`@media (hover: hover)`) and nested rules count; keyframe blocks do not.
+// Each nested rule is its own arm set, as in the transform. KTD7's
+// dependency closure reads these to predict which arms the transform skips.
+// Tolerant: a Raw fragment that does not reparse contributes no arms. The
+// transform's gate rejects such a stylesheet anyway, and presence runs on
+// transform output that already passed it.
+export function selectorArmTokens(css: string): Array<Array<string>> {
+  const arms: Array<Array<string>> = [];
   function visit(node: CssNode): void {
     if (node.type === "Atrule") {
       const name = node.name ?? "";
@@ -495,11 +508,11 @@ function collectSelectorNames(css: string, out: Set<string>): void {
       return;
     }
     if (node.type === "Rule") {
-      if (node.prelude != null) {
-        const classNodes: Array<CssNode> = [];
-        collectClassNodes(node.prelude, classNodes);
-        for (const classNode of classNodes) {
-          out.add(ident.decode(classNode.name ?? ""));
+      if (node.prelude != null && node.prelude.type === "SelectorList") {
+        for (const selector of childArray(node.prelude)) {
+          const classNodes: Array<CssNode> = [];
+          collectClassNodes(selector, classNodes);
+          arms.push(armTokens(classNodes));
         }
       }
       if (node.block != null) {
@@ -510,8 +523,6 @@ function collectSelectorNames(css: string, out: Set<string>): void {
     if (node.type === "Raw") {
       const value = node.value ?? "";
       if (value.trim() === "") return;
-      // Tolerant here: presence is a cross-asset check U6 runs on transform
-      // output, which has already passed the gate's strict Raw parsing.
       try {
         const fragment = parseRawFragment(value, "stylesheet", 0);
         for (const child of childArray(fragment)) visit(child);
@@ -520,7 +531,18 @@ function collectSelectorNames(css: string, out: Set<string>): void {
       }
     }
   }
-  for (const child of childArray(ast)) visit(child);
+  for (const child of childArray(parseStylesheet(css, "stylesheet"))) {
+    visit(child);
+  }
+  return arms;
+}
+
+// Every class-selector name visible in the given CSS, including inside
+// at-rule blocks and Raw nested-rule fragments.
+function collectSelectorNames(css: string, out: Set<string>): void {
+  for (const arm of selectorArmTokens(css)) {
+    for (const token of arm) out.add(token);
+  }
 }
 
 // Presence assertion (R10): every registry name must appear as a renamed
