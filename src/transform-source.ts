@@ -422,7 +422,8 @@ export function transformModule(
   const objectKeys: Array<LiteralOccurrence> = [];
   // KTD16: class selectors inside strings, which the whole-word scan misses
   // because `.` is a class-name character. Built HTML gathers those of its
-  // executable scripts in its leak mask instead.
+  // executable scripts and JavaScript attribute values in its leak mask
+  // instead.
   const selectorReferences: Array<LiteralOccurrence> = [];
 
   const visitor: ClassContextVisitor = {

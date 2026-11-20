@@ -2192,11 +2192,10 @@ describe("leak scan narrowing in built HTML and JS (R8, R9, KTD8, KTD9)", functi
     }
   });
 
-  it("ignores comments, <title>, <textarea>, <option>, and <noscript> text", function () {
+  it("ignores comments, <title>, valued <option>, and <noscript> text", function () {
     for (const markup of [
       "<!-- flex --><p>x</p>",
-      "<textarea>flex</textarea>",
-      "<select><option>flex</option></select>",
+      '<select><option value="x">flex</option></select>',
       "<noscript>Turn on JavaScript for the grid view.</noscript>",
     ]) {
       assert.deepStrictEqual(
@@ -3178,5 +3177,399 @@ describe("inline-style tripwire spellings CSS matches case-insensitively (R11, K
       ),
       null,
     );
+  });
+});
+// R17 (KTD16): a tagged template hands its tag the raw text too,
+// and String.raw keeps the backslash that makes `:` part of the CSS class
+// name, so String.raw`.md\:flex` selects md:flex.
+describe("tagged-template selector strings in built output (R17, KTD16)", function () {
+  const registry = registryOf(["hidden", "md", "md:flex", "flex"]);
+
+  function leaks(result: TransformSourceResult | null): Array<string> {
+    if (result === null) return [];
+    return result.warnings
+      .filter(function (warning) {
+        return warning.kind === "reverse-leak";
+      })
+      .map(function (warning) {
+        return warning.token ?? "";
+      })
+      .sort();
+  }
+
+  it("counts the raw text of a String.raw selector in a bundle", function () {
+    for (const [code, tokens] of [
+      ["document.querySelector(String.raw`.md\\:flex`);\n", ["md", "md:flex"]],
+      [
+        "document.querySelector(String.raw`ul > .md\\:flex ${x}`);\n",
+        ["md", "md:flex"],
+      ],
+      ["e.querySelector(String.raw`${x} .md\\:flex`);\n", ["md", "md:flex"]],
+      ["e.querySelector(String.raw`.hidden`);\n", ["hidden"]],
+      ["e.querySelector(`.md\\:flex`);\n", ["md"]],
+    ] as const) {
+      const result = transformBundle({
+        code,
+        id: "/out/assets/app.js",
+        registry,
+      });
+      assert.deepStrictEqual(leaks(result), tokens, code);
+    }
+  });
+
+  it("reports the raw selector at the class name", function () {
+    const code = "x();\ne.querySelector(String.raw`.md\\:flex`);\n";
+    const result = transformBundle({
+      code,
+      id: "/out/assets/app.js",
+      registry: registryOf(["md:flex"]),
+    });
+    assert.ok(result !== null);
+    assert.deepStrictEqual(
+      result.warnings.map(function (warning) {
+        return [warning.token, warning.line, warning.column];
+      }),
+      [["md:flex", 2, code.indexOf("md\\:flex") - code.indexOf("\n")]],
+    );
+  });
+
+  it("counts a String.raw selector in an executable inline script", function () {
+    assert.deepStrictEqual(
+      leaks(
+        transformModule({
+          code:
+            '<!doctype html><html><body><div class="md:flex">x</div>' +
+            "<script>document.querySelector(String.raw`.md\\:flex`)</script>" +
+            "</body></html>",
+          id: "/out/index.html",
+          registry: registryOf(["md:flex"]),
+        }),
+      ),
+      ["md:flex"],
+    );
+  });
+
+  it("keeps a String.raw-selected class original everywhere", function () {
+    const dir = writeOutput({
+      "index.html":
+        '<!doctype html><html><body><div class="md:flex hidden">x</div>' +
+        "</body></html>",
+      "app.css":
+        "@layer utilities{.hidden{display:none}" +
+        "@media (width>=48rem){.md\\:flex{display:flex}}}",
+      "app.js": "document.querySelector(String.raw`.md\\:flex`).x=1;\n",
+    });
+    try {
+      const result = applyBuildOutput({
+        dir,
+        registry: registryOf(["hidden", "md:flex"]),
+        consolidationVerdicts: [],
+        consolidate: false,
+      });
+      assert.deepStrictEqual(result.keptOriginal, ["md:flex"]);
+      const css = fs.readFileSync(path.join(dir, "app.css"), "utf8");
+      assert.ok(css.includes(".md\\:flex{display:flex}"), css);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// R8 and R17 (KTD16): an inline event handler is a script body, so
+// a class selector in one of its strings selects that class. The handler
+// is read after HTML decoding, and each occurrence reports at its bytes in
+// the page.
+describe("selector strings in inline event handlers (R8, R17, KTD16)", function () {
+  const registry = registryOf(["hidden", "md:flex", "flex", "block"]);
+
+  function pageWarnings(code: string): Array<[string, number]> {
+    const result = transformModule({ code, id: "/out/index.html", registry });
+    if (result === null) return [];
+    return result.warnings
+      .filter(function (warning) {
+        return warning.kind === "reverse-leak";
+      })
+      .map(function (warning): [string, number] {
+        return [warning.token ?? "", warning.column];
+      })
+      .sort(function (a, b) {
+        return a[1] - b[1];
+      });
+  }
+
+  it("counts a class selector in an onclick handler", function () {
+    const code =
+      "<!doctype html><html><body>" +
+      `<button onclick="document.querySelector('.hidden').remove()"></button>` +
+      '<div class="hidden"></div></body></html>';
+    assert.deepStrictEqual(pageWarnings(code), [
+      ["hidden", code.indexOf("hidden") + 1],
+    ]);
+  });
+
+  it("reads a handler body with statements, after HTML decoding", function () {
+    for (const [handler, token, raw] of [
+      [
+        "document.querySelector('.block').hidden = true; return false",
+        "block",
+        "block",
+      ],
+      ["q(&quot;.flex&quot;)", "flex", "flex"],
+      ["q('.&#104;idden')", "hidden", "&#104;idden"],
+      ["q(&quot;.md\\\\:flex&quot;)", "md:flex", "md\\\\:flex"],
+    ] as const) {
+      const code =
+        "<!doctype html><html><body>" +
+        `<button onclick="${handler}">x</button></body></html>`;
+      assert.deepStrictEqual(
+        pageWarnings(code),
+        [[token, code.indexOf(raw) + 1]],
+        handler,
+      );
+    }
+  });
+
+  it("keeps a class an inline handler selects original everywhere", function () {
+    const dir = writeOutput({
+      "index.html":
+        "<!doctype html><html><body>" +
+        `<button onclick="document.querySelector('.hidden').remove()">x</button>` +
+        '<div class="hidden block">y</div></body></html>',
+      "app.css": "@layer utilities{.hidden{display:none}.block{display:block}}",
+    });
+    try {
+      const result = applyBuildOutput({
+        dir,
+        registry: registryOf(["hidden", "block"]),
+        consolidationVerdicts: [],
+        consolidate: false,
+      });
+      assert.deepStrictEqual(result.keptOriginal, ["hidden"]);
+      const html = fs.readFileSync(path.join(dir, "index.html"), "utf8");
+      assert.ok(html.includes("querySelector('.hidden')"), html);
+      assert.ok(html.includes('class="hidden '), html);
+      const css = fs.readFileSync(path.join(dir, "app.css"), "utf8");
+      assert.ok(css.includes(".hidden{display:none}"), css);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// R8 (KTD8): an <option> without a value attribute exposes its
+// text as option.value and select.value, and a <textarea> exposes its text
+// as its value, so scripts read both back. Their text stays in the leak
+// scan; the text of an option with a value attribute is still masked.
+describe("form-value text in built HTML (R8, KTD8)", function () {
+  const registry = registryOf(["hidden", "flex", "dark"]);
+
+  function pageLeaks(code: string): Array<string> {
+    const result = transformModule({ code, id: "/out/index.html", registry });
+    if (result === null) return [];
+    return result.warnings
+      .filter(function (warning) {
+        return warning.kind === "reverse-leak";
+      })
+      .map(function (warning) {
+        return warning.token ?? "";
+      })
+      .sort();
+  }
+
+  it("scans the text of a value-less <option> and of a <textarea>", function () {
+    for (const [markup, tokens] of [
+      ["<select><option>hidden</option></select>", ["hidden"]],
+      ["<select><option> flex </option><option>x</option></select>", ["flex"]],
+      ["<datalist><option>hidden</option></datalist>", ["hidden"]],
+      ["<textarea>flex</textarea>", ["flex"]],
+      ['<select><option value="x">hidden</option></select>', []],
+      ['<select><option value="">flex</option></select>', []],
+      ['<select><option value="dark">Dark</option></select>', ["dark"]],
+    ] as const) {
+      assert.deepStrictEqual(
+        pageLeaks(`<!doctype html><html><body>${markup}</body></html>`),
+        tokens,
+        markup,
+      );
+    }
+  });
+
+  it("keeps a class a select's implicit value toggles original everywhere", function () {
+    const dir = writeOutput({
+      "index.html":
+        "<!doctype html><html><body>" +
+        '<select id="mode"><option>hidden</option><option>x</option></select>' +
+        '<div id="t" class="hidden flex">y</div>' +
+        "<script>t.classList.toggle(mode.value)</script></body></html>",
+      "app.css": "@layer utilities{.hidden{display:none}.flex{display:flex}}",
+    });
+    try {
+      const result = applyBuildOutput({
+        dir,
+        registry: registryOf(["hidden", "flex"]),
+        consolidationVerdicts: [],
+        consolidate: false,
+      });
+      assert.deepStrictEqual(result.keptOriginal, ["hidden"]);
+      const html = fs.readFileSync(path.join(dir, "index.html"), "utf8");
+      assert.ok(html.includes('class="hidden '), html);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// R16 and R17 (KTD15, KTD16): markup held in a <script> of a type
+// that is neither JavaScript nor JSON, such as Vue's text/x-template, is
+// compiled at runtime, so its attribute values get the object-key and
+// selector scans of page markup. Executable scripts and JSON keep theirs.
+describe("markup in non-JavaScript script types (R16, R17, KTD15, KTD16)", function () {
+  const registry = registryOf(["hidden", "flex", "block"]);
+
+  function pageLeaks(code: string): Array<string> {
+    const result = transformModule({ code, id: "/out/index.html", registry });
+    if (result === null) return [];
+    return result.warnings
+      .filter(function (warning) {
+        return warning.kind === "reverse-leak";
+      })
+      .map(function (warning) {
+        return warning.token ?? "";
+      })
+      .sort();
+  }
+
+  function page(script: string): string {
+    return `<!doctype html><html><body>${script}<div class="hidden flex"></div></body></html>`;
+  }
+
+  it("counts object keys in template markup", function () {
+    for (const type of [
+      "text/x-template",
+      "text/template",
+      "text/html",
+      "text/x-handlebars-template",
+    ]) {
+      assert.deepStrictEqual(
+        pageLeaks(
+          page(
+            `<script type="${type}" id="t">` +
+              '<div :class="{ hidden: !open }"><template>' +
+              "<p x-bind:class=\"{ 'x': a, flex: b }\"></p>" +
+              "</template></div></script>",
+          ),
+        ),
+        ["flex", "hidden"],
+        type,
+      );
+    }
+  });
+
+  it("reports a template key at its bytes in the page", function () {
+    const code = page(
+      '<script type="text/x-template"><i :class="{ hidden: a }"></i></script>',
+    );
+    const result = transformModule({ code, id: "/out/index.html", registry });
+    assert.ok(result !== null);
+    assert.deepStrictEqual(
+      result.warnings.map(function (warning) {
+        return [warning.token, warning.column];
+      }),
+      [["hidden", code.indexOf("hidden") + 1]],
+    );
+  });
+
+  it("counts a class selector in a template's inline handler", function () {
+    assert.deepStrictEqual(
+      pageLeaks(
+        page(
+          '<script type="text/x-template">' +
+            `<button onclick="document.querySelector('.block').remove()">x</button>` +
+            "</script>",
+        ),
+      ),
+      ["block"],
+    );
+  });
+
+  it("leaves executable scripts and JSON to their own scans", function () {
+    for (const script of [
+      `<script>const t = "<div :class='{ hidden: a }'></div>";</script>`,
+      `<script type="module">const t = "<i :class='{ hidden: a }'></i>";</script>`,
+      `<script type="application/json">"<div :class='{ hidden: a }'></div>"</script>`,
+      `<script type="importmap">{"x":"<div :class='{ hidden: a }'></div>"}</script>`,
+      `<script type="application/ld+json">{"x":"<i :class='{ hidden: a }'></i>"}</script>`,
+    ]) {
+      assert.deepStrictEqual(pageLeaks(page(script)), [], script);
+    }
+  });
+});
+
+// R17 (KTD16): the attributes Alpine and htmx run as JavaScript hold
+// selector strings as an inline handler does, so a class selector in one
+// of their strings counts, read decoded and reported at its page bytes.
+// Every other attribute is never parsed for selectors.
+describe("selector strings in framework JavaScript attributes (R17, KTD16)", function () {
+  const registry = registryOf(["hidden", "block"]);
+
+  function pageWarnings(code: string): Array<[string, number]> {
+    const result = transformModule({ code, id: "/out/index.html", registry });
+    if (result === null) return [];
+    return result.warnings
+      .filter(function (warning) {
+        return warning.kind === "reverse-leak";
+      })
+      .map(function (warning): [string, number] {
+        return [warning.token ?? "", warning.column];
+      });
+  }
+
+  function page(attribute: string): string {
+    return (
+      "<!doctype html><html><body>" +
+      `<div ${attribute}>x</div><p class="hidden block">y</p>` +
+      "</body></html>"
+    );
+  }
+
+  it("counts a class selector in Alpine and htmx JavaScript attributes", function () {
+    for (const attribute of [
+      `@click="document.querySelector('.hidden').remove()"`,
+      `x-on:click.prevent="$el.closest('.hidden').remove()"`,
+      `x-init="$el.querySelector('.hidden').focus()"`,
+      `x-effect="open && $el.querySelector('.hidden')"`,
+      `x-data="{ init() { this.$el.querySelector('.hidden') } }"`,
+      `x-bind:data-on="!!$el.querySelector('.hidden')"`,
+      `:data-on="!!document.querySelector('.hidden')"`,
+      `hx-on:click="htmx.find('.hidden')"`,
+      `hx-on::after-request="htmx.find('.hidden')"`,
+      `hx-on--after-request="htmx.find('.hidden')"`,
+    ]) {
+      const code = page(attribute);
+      assert.deepStrictEqual(
+        pageWarnings(code),
+        [["hidden", code.indexOf("hidden") + 1]],
+        attribute,
+      );
+    }
+  });
+
+  it("reads the value after HTML decoding, reporting the raw bytes", function () {
+    const code = page('@click="q(&quot;.&#104;idden&quot;)"');
+    assert.deepStrictEqual(pageWarnings(code), [
+      ["hidden", code.indexOf("&#104;idden") + 1],
+    ]);
+  });
+
+  it("never parses another attribute for selectors", function () {
+    for (const attribute of [
+      `data-x="document.querySelector('.hidden')"`,
+      'data-bs-target=".hidden"',
+      `x-text="'.hidden'"`,
+      'href="/a.hidden"',
+      `id="'.block'"`,
+    ]) {
+      assert.deepStrictEqual(pageWarnings(page(attribute)), [], attribute);
+    }
   });
 });

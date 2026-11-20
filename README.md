@@ -383,21 +383,30 @@ HTML, CSS, and JavaScript, and the report lists it as `runtime-context`:
   `el.className === "hidden"` or `el.style.display = "block"`; an identifier
   object key, shorthand, or method name, as in `e({hidden:t})`; and a class
   selector inside a string, as in `querySelector(".hidden")`,
-  `":not(.hidden)"`, or `".md\\:flex"`.
+  `":not(.hidden)"`, `".md\\:flex"`, or ``String.raw`.md\:flex` ``.
 - Built HTML: a whole word in the value of any attribute not listed below,
   such as `data-*`, `value`, `id`, `name`, event handlers, URLs, and
-  `<astro-island>` props; a whole word in a script whose type is neither
-  JavaScript nor JSON-LD, such as `application/json`; and an identifier
-  object key in an attribute value that parses as JavaScript, such as Alpine
-  `:class="{ hidden: !open }"`, `x-bind:class`, or `x-data`. Entity-encoded
+  `<astro-island>` props; a whole word in the text of a `<textarea>` or of
+  an `<option>` without a `value` attribute, which a script reads back as
+  the field's value; a whole word in a script whose type is neither
+  JavaScript nor JSON-LD, such as `application/json`; an identifier object
+  key in an attribute value that parses as JavaScript, such as Alpine
+  `:class="{ hidden: !open }"`, `x-bind:class`, or `x-data`; and a class
+  selector inside a string of an attribute that runs as JavaScript: an
+  event handler, as in `onclick="document.querySelector('.hidden').remove()"`,
+  or an Alpine or htmx attribute (`@*`, `x-on:*`, `x-init`, `x-effect`,
+  `x-data`, `x-bind:*`, `:*`, `hx-on:*`, or `hx-on-*`). Other attributes,
+  such as `data-bs-target=".hidden"`, are not read for selectors. Markup
+  held in a script whose type is neither JavaScript nor JSON, such as Vue's
+  `text/x-template`, gets the same key and selector reads. Entity-encoded
   names count too.
 
 These positions never count:
 
 - JavaScript comments and reserved words (`static` is the one Tailwind
   utility among them), and property access outside strings (`el.hidden`).
-- HTML text, including `<title>`, `<textarea>`, `<option>`, and `<noscript>`
-  text, and HTML comments.
+- Other HTML text, including `<title>`, `<noscript>`, and the text of an
+  `<option>` with a `value` attribute, and HTML comments.
 - The contents of `<script type="application/ld+json">`.
 - The values of `role`, `type`, `aria-*`, `alt`, `title`, `placeholder`,
   `lang`, `dir`, `rel`, `autocomplete`, `loading`, `decoding`,
@@ -787,7 +796,12 @@ A class written as a selector inside a JavaScript string, as in
 `document.querySelector(".hidden")` or `el.closest(".group")`, keeps its
 original name on every route. minwind cannot prove which API reads a string,
 so it does not rename the selector. Property access such as `el.hidden` does
-not count. Select by `data-*` attribute or id to let the class rename.
+not count. A tagged template counts in its raw form too, so
+``String.raw`.md\:flex` `` keeps `md:flex` original. On the `minwind apply`
+and `minwind/astro` routes, so does a selector in an HTML attribute that
+runs as JavaScript: an inline event handler such as `onclick`, or an Alpine
+or htmx attribute such as `@click`, `x-init`, or `hx-on:click`. Select by
+`data-*` attribute or id to let the class rename.
 
 A string that only looks like a selector counts too, such as a file name
 ending in `.hidden`. On the Vite and webpack routes, so does a class string in

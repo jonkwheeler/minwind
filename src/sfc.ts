@@ -1739,7 +1739,10 @@ const JAVASCRIPT_TYPES = new Set([
   "text/x-javascript",
 ]);
 
-type ScriptContent = "javascript" | "json-ld" | "other";
+// Every other type is data: JSON (a JSON MIME type, an import map, or
+// speculation rules), or else markup that a script compiles at runtime,
+// such as Vue's text/x-template.
+type ScriptContent = "javascript" | "json-ld" | "json" | "markup";
 
 function scriptContent(element: TreeElement): ScriptContent {
   const type = element.attrs.find(function (attr) {
@@ -1750,7 +1753,33 @@ function scriptContent(element: TreeElement): ScriptContent {
     .replace(/^[\t\n\f\r ]+|[\t\n\f\r ]+$/g, "")
     .toLowerCase();
   if (JAVASCRIPT_TYPES.has(essence)) return "javascript";
-  return essence === "application/ld+json" ? "json-ld" : "other";
+  if (essence === "application/ld+json") return "json-ld";
+  if (
+    essence === "importmap" ||
+    essence === "speculationrules" ||
+    essence.endsWith("json")
+  ) {
+    return "json";
+  }
+  return "markup";
+}
+
+// The attribute values a browser or a framework runs as JavaScript: on*
+// handlers, Alpine's @*, x-on:*, x-init, x-effect, x-data, and x-bind:*
+// or :* bindings, and htmx's hx-on handlers.
+function holdsJavaScript(name: string): boolean {
+  return (
+    name.startsWith("on") ||
+    name.startsWith("@") ||
+    name.startsWith(":") ||
+    name.startsWith("x-on:") ||
+    name.startsWith("x-bind:") ||
+    name === "x-init" ||
+    name === "x-effect" ||
+    name === "x-data" ||
+    name.startsWith("hx-on:") ||
+    name.startsWith("hx-on-")
+  );
 }
 
 // The leak text of a built page, and the object keys and selector strings
@@ -1763,16 +1792,20 @@ export interface HtmlLeakText {
 
 // KTD8: the leak text of a built page, with the positions that never hold a
 // class reference blanked: text, comments, JSON-LD, and the values of
-// NON_CLASS_ATTRIBUTES. Executable scripts keep everything but comments and
-// reserved words (KTD9). Every other script type, every other attribute
-// (data-*, value, on* handlers, island props), and attributes the parser
-// adopted without a location stay scanned. `document` is the tree
-// walkSfcClassContexts parsed from the same file, so its offsets index
+// NON_CLASS_ATTRIBUTES. Text a script reads back as a form value stays:
+// a <textarea>'s, and an <option>'s without a value attribute, which the
+// option's value returns. Executable scripts keep everything but comments
+// and reserved words (KTD9). Every other script type, every other
+// attribute (data-*, value, on* handlers, island props), and attributes
+// the parser adopted without a location stay scanned. `document` is the
+// tree walkSfcClassContexts parsed from the same file, so its offsets index
 // `text`. KTD15: objectKeys are the identifier object keys of executable
 // scripts and of scanned attribute values that parse as a JavaScript
 // expression once decoded (Alpine :class and x-data), less the objects
 // `skipObject` drops. KTD16: selectorReferences are the class selectors
-// inside the strings of executable scripts.
+// inside the strings of executable scripts and of the attribute values
+// holdsJavaScript names, read decoded. The attribute values of markup held in a
+// script of another non-JSON type (text/x-template) give both too.
 export function maskHtmlLeakText(
   filePath: string,
   text: string,
@@ -1784,30 +1817,84 @@ export function maskHtmlLeakText(
   const objectKeys: Array<LiteralOccurrence> = [];
   const selectorReferences: Array<LiteralOccurrence> = [];
 
-  function readAttributeKeys(span: SourceSpan): void {
+  function readAttribute(name: string, span: SourceSpan): void {
     const raw = text.slice(span.start, span.end);
-    if (!raw.includes("{")) return;
+    const script = holdsJavaScript(name);
+    if (!script && !raw.includes("{")) return;
     const views = leakViews(raw, true);
     const view = views[views.length - 1];
-    const parsed = parseExpression(filePath, view.text, 0, "ts");
-    if (parsed === null) return;
-    for (const key of objectLiteralKeys(parsed.sourceFile, skipObject)) {
-      const at = view.rawSpan(
-        parsed.toOriginal(key.start),
-        parsed.toOriginal(key.end),
-      );
-      objectKeys.push({
-        ...key,
+    function inPage(
+      occurrence: LiteralOccurrence,
+      toView: (position: number) => number,
+    ): LiteralOccurrence {
+      const at = view.rawSpan(toView(occurrence.start), toView(occurrence.end));
+      return {
+        ...occurrence,
         start: span.start + at.start,
         end: span.start + at.end,
-      });
+      };
+    }
+    const parsed = raw.includes("{")
+      ? parseExpression(filePath, view.text, 0, "ts")
+      : null;
+    if (parsed !== null) {
+      for (const key of objectLiteralKeys(parsed.sourceFile, skipObject)) {
+        objectKeys.push(inPage(key, parsed.toOriginal));
+      }
+    }
+    if (!script) return;
+    // A value that is not one expression is a handler body of statements.
+    const body = parsed ?? {
+      sourceFile: parseSourceModule(`${filePath}::attribute.js`, view.text),
+      toOriginal: function (position: number): number {
+        return position;
+      },
+    };
+    for (const reference of selectorClassReferences(body.sourceFile)) {
+      selectorReferences.push(inPage(reference, body.toOriginal));
     }
   }
-  function visit(node: TreeNode): void {
+  // `offset` places the element's locations in `text`; `mask` blanks the
+  // values of NON_CLASS_ATTRIBUTES.
+  function readAttributes(
+    element: TreeElement,
+    offset: number,
+    mask: boolean,
+  ): void {
+    const attributes = element.sourceCodeLocation?.attrs;
+    for (const attr of element.attrs) {
+      const at = attributes?.[attr.name];
+      if (at === undefined) continue;
+      const span = attributeValueSpan(
+        text,
+        offset + at.startOffset,
+        offset + at.endOffset,
+      );
+      if (isNonClassAttribute(element, attr.name)) {
+        if (mask) blank.push(span);
+      } else if (attr.name !== "class") {
+        readAttribute(attr.name, span);
+      }
+    }
+  }
+  // Markup a script compiles at runtime keeps its text and every attribute
+  // in the whole-word scan; only the attribute reads are added.
+  function readMarkup(content: SourceSpan): void {
+    const fragment = parse5.parseFragment(
+      renameParserSpecialTags("html", text.slice(content.start, content.end)),
+      { sourceCodeLocationInfo: true, scriptingEnabled: false },
+    );
+    walkTemplateElements(fragment, function (element) {
+      readAttributes(element, content.start, false);
+    });
+  }
+  // `valueText`: the node sits in a <textarea> or a value-less <option>.
+  function visit(node: TreeNode, valueText: boolean): void {
     const location = node.sourceCodeLocation;
     if (node.nodeName === "#comment" || node.nodeName === "#text") {
       if (location === null || location === undefined) return;
       const span = { start: location.startOffset, end: location.endOffset };
+      if (node.nodeName === "#text" && valueText) return;
       // parse5 merges the text on both sides of a tag it drops or adopts,
       // so a text node holding `<` can span an adopted <body> start tag,
       // whose attributes stay scanned.
@@ -1821,17 +1908,12 @@ export function maskHtmlLeakText(
       return;
     }
     if (!isElement(node)) {
-      if ("childNodes" in node) node.childNodes.forEach(visit);
+      if ("childNodes" in node) {
+        for (const child of node.childNodes) visit(child, valueText);
+      }
       return;
     }
-    const attributes = node.sourceCodeLocation?.attrs;
-    for (const attr of node.attrs) {
-      const at = attributes?.[attr.name];
-      if (at === undefined) continue;
-      const span = attributeValueSpan(text, at.startOffset, at.endOffset);
-      if (isNonClassAttribute(node, attr.name)) blank.push(span);
-      else if (attr.name !== "class") readAttributeKeys(span);
-    }
+    readAttributes(node, 0, true);
     if (node.tagName === "script") {
       const first = node.childNodes[0]?.sourceCodeLocation;
       const last =
@@ -1842,12 +1924,22 @@ export function maskHtmlLeakText(
       const kind = scriptContent(node);
       if (kind === "json-ld") blank.push(content);
       else if (kind === "javascript") scripts.push(content);
+      else if (kind === "markup") readMarkup(content);
       return;
     }
-    if (node.tagName === "template") visit((node as TreeTemplate).content);
-    node.childNodes.forEach(visit);
+    const childValueText =
+      valueText ||
+      node.tagName === "textarea" ||
+      (node.tagName === "option" &&
+        !node.attrs.some(function (attr) {
+          return attr.name === "value";
+        }));
+    if (node.tagName === "template") {
+      visit((node as TreeTemplate).content, childValueText);
+    }
+    for (const child of node.childNodes) visit(child, childValueText);
   }
-  visit(document);
+  visit(document, false);
 
   const blanked = maskSpans(text, blank);
   const maskedScripts: Array<SourceSpan & { masked: string }> = [];

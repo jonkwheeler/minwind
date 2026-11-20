@@ -1020,3 +1020,53 @@ const first = () => document.querySelector(".italic");
     );
   });
 });
+
+// R17 (KTD16): on the source routes, a String.raw selector keeps
+// its CSS escape, so String.raw`.md\:flex` keeps md:flex original, and the
+// transform agrees.
+describe("runPrepass tagged-template selector strings (R17, KTD16)", function () {
+  const MENU = `export function Menu() {
+  return <div class="md:flex hidden">x</div>;
+}
+export function open(root) {
+  root.querySelector(String.raw\`nav > .md\\:flex\`).hidden = false;
+}
+`;
+
+  it("keeps a String.raw-selected class original, and nothing warns", async function () {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "minwind-raw-"));
+    try {
+      fs.mkdirSync(path.join(root, "src"), { recursive: true });
+      fs.writeFileSync(
+        path.join(root, "src", "app.css"),
+        ".md\\:flex { display: flex; }\n.hidden { display: none; }\n",
+      );
+      fs.writeFileSync(path.join(root, "src", "Menu.tsx"), MENU);
+      const result = await runPrepass({
+        root,
+        cssEntry: path.join(root, "src", "app.css"),
+      });
+      assert.strictEqual(
+        exclusionReasons(result).get("md:flex"),
+        "runtime-context",
+      );
+      assert.strictEqual(
+        result.registry.nameFor("hidden"),
+        hashClassName("hidden"),
+      );
+      const transformed = transformSource({
+        code: MENU,
+        id: path.join(root, "src", "Menu.tsx"),
+        registry: result.registry,
+      });
+      assert.ok(transformed !== null);
+      assert.ok(
+        transformed.code.includes(`class="md:flex ${hashClassName("hidden")}"`),
+        transformed.code,
+      );
+      assert.deepStrictEqual(transformed.warnings, []);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});

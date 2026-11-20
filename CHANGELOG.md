@@ -53,7 +53,9 @@ builds that passed on 1.1.0 can now fail; see Builds that can now fail.
   page text or a `title`, `alt`, or `aria-*` value into a class list is now
   unsupported, like a class name fetched at runtime; list such classes in
   `exclusions.names`. `data-*`, `value`, event handlers, URLs, island props,
-  every other attribute, and executable scripts are still scanned.
+  every other attribute, and executable scripts are still scanned, and so is
+  the text of a `<textarea>` and of an `<option>` without a `value`
+  attribute, which a script reads back as the field's value.
 - A utility whose every selector compounds a class kept original now keeps
   its original name too: `group-*` when `group` keeps its name, `peer-*`,
   named groups, a class-strategy `dark` variant, and any custom variant that
@@ -72,10 +74,13 @@ builds that passed on 1.1.0 can now fail; see Builds that can now fail.
     `gsap` import, holds `{grid:1,flex:1}`, so `grid` and `flex` keep their
     original names unless `trustVendorModules` covers `gsap`.
   - A class selector inside a JavaScript string, such as
-    `querySelector(".hidden")`, on every route. A string that only looks
-    like a selector counts too. On the Vite and webpack routes that includes
-    a class string in JavaScript or JSX holding an arbitrary variant such as
-    `[&_.hidden]:block`.
+    `querySelector(".hidden")` or ``String.raw`.md\:flex` ``, on every
+    route, and in built HTML one inside an inline event handler or an
+    Alpine or htmx attribute that runs as JavaScript (`@click`, `x-init`,
+    `x-data`, `:*` bindings, `hx-on:*`, and the like). A string that only
+    looks like a selector counts too. On the Vite and webpack
+    routes that includes a class string in JavaScript or JSX holding an
+    arbitrary variant such as `[&_.hidden]:block`.
   - Inside `cn()`, the string keys of an object passed to another call, such
     as `cn(button({ "ring-2": on }))`, and the strings inside a computed key
     such as `{ [base + " shadow"]: on }`.

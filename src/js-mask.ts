@@ -249,8 +249,10 @@ function consumeEscape(
 // and end span the name's raw bytes in the parse. A name ends where a CSS
 // identifier ends, so ".hidden:hover" and ".hidden.open" name hidden, and
 // an escaped dot ("a\\.hidden") starts none. A JSX attribute string has no
-// JavaScript escapes. Only string contents are read: property access
-// (el.hidden), comments, and regular expressions never count.
+// JavaScript escapes. A tagged template is read cooked and raw, since its
+// tag gets both, so String.raw`.md\:flex` names md:flex. Only string
+// contents are read: property access (el.hidden), comments, and regular
+// expressions never count.
 export function selectorClassReferences(
   sourceFile: ts.SourceFile,
 ): Array<LiteralOccurrence> {
@@ -299,18 +301,40 @@ export function selectorClassReferences(
     }
   }
 
-  function visit(node: ts.Node): void {
+  function scanTemplatePart(part: ts.TemplateLiteralToken): void {
+    const start = part.getStart(sourceFile) + 1;
+    const end =
+      part.getEnd() -
+      (ts.isTemplateHead(part) || ts.isTemplateMiddle(part) ? 2 : 1);
+    scan(start, end, true);
+    const template: ts.Node = ts.isNoSubstitutionTemplateLiteral(part)
+      ? part
+      : ts.isTemplateHead(part)
+        ? part.parent
+        : part.parent.parent;
+    const tag = template.parent;
     if (
-      ts.isStringLiteral(node) ||
-      ts.isNoSubstitutionTemplateLiteral(node) ||
-      ts.isTemplateTail(node)
+      ts.isTaggedTemplateExpression(tag) &&
+      tag.template === template &&
+      text.slice(start, end).includes("\\")
     ) {
+      scan(start, end, false);
+    }
+  }
+
+  function visit(node: ts.Node): void {
+    if (ts.isStringLiteral(node)) {
       const escapes = !ts.isJsxAttribute(node.parent);
       scan(node.getStart(sourceFile) + 1, node.getEnd() - 1, escapes);
       return;
     }
-    if (ts.isTemplateHead(node) || ts.isTemplateMiddle(node)) {
-      scan(node.getStart(sourceFile) + 1, node.getEnd() - 2, true);
+    if (
+      ts.isNoSubstitutionTemplateLiteral(node) ||
+      ts.isTemplateHead(node) ||
+      ts.isTemplateMiddle(node) ||
+      ts.isTemplateTail(node)
+    ) {
+      scanTemplatePart(node);
       return;
     }
     ts.forEachChild(node, visit);
