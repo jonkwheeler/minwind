@@ -19,10 +19,10 @@ import {
   leakViews,
   type LeakView,
 } from "./html-entities.js";
+import { maskHtmlLeakText } from "./html-leak-mask.js";
 import type { NameRegistry } from "./names.js";
 import {
   isSfcModule,
-  maskHtmlLeakText,
   maskSfcStyleContent,
   SFC_PATTERN,
   sfcFormatFor,

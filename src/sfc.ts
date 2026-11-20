@@ -2,8 +2,13 @@ import * as parse5 from "parse5";
 import type { DefaultTreeAdapterMap } from "parse5";
 import * as ts from "typescript";
 import {
-  cnBindingNames,
-  isClassListDirective,
+  findAstroBraceRuns,
+  isAsciiWhitespace,
+  maskBraceExpressions,
+  type BraceRun,
+  type SourceSpan,
+} from "./brace-runs.js";
+import {
   objectLiteralKeys,
   parseSourceModule,
   tokenize,
@@ -11,11 +16,21 @@ import {
   type ClassContextVisitor,
   type LiteralOccurrence,
 } from "./class-contexts.js";
-import { leakViews } from "./html-entities.js";
 import {
-  maskCommentsAndReservedWords,
-  selectorClassReferences,
-} from "./js-mask.js";
+  constantNamePattern,
+  countConstantReferences,
+  frontmatterConstants,
+  type ClassConstant,
+  type ContentRegion,
+  type RunRole,
+} from "./frontmatter-constants.js";
+import { selectorClassReferences } from "./js-mask.js";
+import {
+  parseBraceRun,
+  parseExpression,
+  parsesCleanly,
+  type ParsedRun,
+} from "./template-expressions.js";
 
 // Single-file-component support (Vue, Svelte, Astro). One walker feeds both
 // the U2 pre-pass scan and the U3 transform so classification can never
@@ -60,13 +75,6 @@ export function sfcFormatFor(filePath: string): SfcFormat | null {
 
 export function isSfcModule(filePath: string): boolean {
   return sfcFormatFor(filePath) !== null;
-}
-
-interface ContentRegion {
-  contentStart: number;
-  contentEnd: number;
-  lang: string;
-  frontmatter: boolean;
 }
 
 const SCRIPT_TAG = /<script\b([^>]*)>([\s\S]*?)<\/script\s*>/gi;
@@ -137,7 +145,7 @@ function maskOutside(
   return chars.join("");
 }
 
-function maskSpans(
+export function maskSpans(
   text: string,
   spans: ReadonlyArray<{ start: number; end: number }>,
 ): string {
@@ -148,304 +156,6 @@ function maskSpans(
     }
   }
   return chars.join("");
-}
-
-// Svelte and Astro interpolate {expression} runs in templates — including
-// inside UNQUOTED attribute values (class:list={["a", { "b": c }]}), whose
-// spaces an HTML parser reads as attribute boundaries. Fill each run's
-// contents with x's (braces kept, quote- and escape-aware) so parse5 sees a
-// single whitespace-free value; the run's original bytes are recovered from
-// the unmasked text at the same offsets. Newlines become x's too: a run
-// formatted across lines would otherwise end an unquoted value at its first
-// line break. Nothing reads lines from the masked text — warnings locate
-// offsets in the original. Vue needs no masking: its attributes are always
-// quoted and its bindings always expressions. An unterminated run (a stray
-// brace in text) is left alone.
-function maskBraceExpressions(text: string): {
-  masked: string;
-  runs: Array<SourceSpan>;
-} {
-  const runs: Array<SourceSpan> = [];
-  const chars = text.split("");
-  let i = 0;
-  while (i < chars.length) {
-    if (chars[i] !== "{") {
-      i += 1;
-      continue;
-    }
-    let depth = 0;
-    let quote: string | null = null;
-    let end = i;
-    while (end < chars.length) {
-      const ch = chars[end];
-      if (quote !== null) {
-        if (ch === "\\") {
-          end += 2;
-          continue;
-        }
-        if (ch === quote) quote = null;
-        end += 1;
-        continue;
-      }
-      if (ch === '"' || ch === "'" || ch === "`") {
-        quote = ch;
-      } else if (ch === "{") {
-        depth += 1;
-      } else if (ch === "}") {
-        depth -= 1;
-        if (depth === 0) break;
-      }
-      end += 1;
-    }
-    if (depth !== 0 || end >= chars.length) {
-      i += 1;
-      continue;
-    }
-    for (let k = i + 1; k < end; k += 1) chars[k] = "x";
-    runs.push({ start: i, end: end + 1 });
-    i = end + 1;
-  }
-  return { masked: chars.join(""), runs };
-}
-
-// An Astro brace run: `start` at its `{`, `end` just past its `}`. markup
-// is true when the run holds expression markup, and voidTagEnds are the
-// offsets of the `>` ending each void element written without `/>` in it.
-interface BraceRun {
-  start: number;
-  end: number;
-  markup: boolean;
-  voidTagEnds: Array<number>;
-}
-
-const VOID_ELEMENTS = new Set([
-  "area",
-  "base",
-  "br",
-  "col",
-  "embed",
-  "hr",
-  "img",
-  "input",
-  "link",
-  "meta",
-  "param",
-  "source",
-  "track",
-  "wbr",
-]);
-
-function isAsciiLetter(ch: string | undefined): boolean {
-  return ch !== undefined && /^[A-Za-z]$/.test(ch);
-}
-
-function isWordCharacter(ch: string): boolean {
-  return /^[\w$]$/.test(ch) || ch >= "\u0080";
-}
-
-// The keywords after which `<` starts an operand, not a comparison.
-const OPERAND_KEYWORDS = new Set(["return", "yield", "await"]);
-
-const UNTERMINATED = -1;
-
-// KTD3: Astro expressions hold markup, and maskBraceExpressions' quote
-// tracking would read the apostrophe in {cond && <p>Don't</p>} as a string
-// that closes outside the run, masking real elements. This finder is a small
-// state machine. In JavaScript it tracks quotes, template literals with
-// ${...} nesting, and comments, and `<` followed by a letter or `>` starts
-// markup only in operand position (`<` after an operand is a comparison or
-// a type argument: {a<b}, Array<Item>). Markup ignores quotes in text,
-// skips quoted attribute values and comments, counts element depth (void
-// and self-closing tags don't nest), and enters JavaScript at `{`; at depth
-// 0 it returns to JavaScript. Regex literals are not tracked. Runs are
-// masked as maskBraceExpressions masks them.
-function findAstroBraceRuns(text: string): {
-  masked: string;
-  runs: Array<BraceRun>;
-} {
-  let markup = false;
-  let voidTagEnds: Array<number> = [];
-
-  function skipQuoted(from: number, quote: string): number {
-    let i = from;
-    while (i < text.length) {
-      if (text[i] === "\\") {
-        i += 2;
-        continue;
-      }
-      if (text[i] === quote) return i + 1;
-      i += 1;
-    }
-    return UNTERMINATED;
-  }
-
-  function skipTemplateLiteral(from: number): number {
-    let i = from;
-    while (i < text.length) {
-      const ch = text[i];
-      if (ch === "\\") {
-        i += 2;
-      } else if (ch === "`") {
-        return i + 1;
-      } else if (ch === "$" && text[i + 1] === "{") {
-        i = scanScript(i + 2);
-        if (i === UNTERMINATED) return UNTERMINATED;
-      } else {
-        i += 1;
-      }
-    }
-    return UNTERMINATED;
-  }
-
-  // JavaScript from just past a `{` through the `}` that closes it.
-  function scanScript(from: number): number {
-    let i = from;
-    let depth = 0;
-    let operand = true;
-    while (i < text.length) {
-      const ch = text[i];
-      const next = text[i + 1];
-      if (ch === "'" || ch === '"' || ch === "`") {
-        i = ch === "`" ? skipTemplateLiteral(i + 1) : skipQuoted(i + 1, ch);
-        if (i === UNTERMINATED) return UNTERMINATED;
-        operand = false;
-      } else if (ch === "/" && next === "/") {
-        const lineEnd = text.indexOf("\n", i);
-        if (lineEnd === -1) return UNTERMINATED;
-        i = lineEnd + 1;
-      } else if (ch === "/" && next === "*") {
-        const close = text.indexOf("*/", i + 2);
-        if (close === -1) return UNTERMINATED;
-        i = close + 2;
-      } else if (
-        ch === "<" &&
-        operand &&
-        (isAsciiLetter(next) || next === ">")
-      ) {
-        i = scanMarkup(i);
-        if (i === UNTERMINATED) return UNTERMINATED;
-        operand = false;
-      } else if (isWordCharacter(ch)) {
-        let end = i + 1;
-        while (end < text.length && isWordCharacter(text[end])) end += 1;
-        operand = OPERAND_KEYWORDS.has(text.slice(i, end));
-        i = end;
-      } else {
-        if (ch === "}") {
-          if (depth === 0) return i + 1;
-          depth -= 1;
-        } else if (ch === "{") {
-          depth += 1;
-        }
-        if (!isAsciiWhitespace(ch)) {
-          const previous = text[i - 1];
-          operand =
-            "([{,;?:=!".includes(ch) ||
-            ((ch === "&" || ch === "|") && previous === ch) ||
-            (ch === ">" && previous === "=");
-        }
-        i += 1;
-      }
-    }
-    return UNTERMINATED;
-  }
-
-  function scanStartTag(
-    from: number,
-  ): { end: number; selfClosing: boolean } | null {
-    let i = from;
-    while (i < text.length) {
-      const ch = text[i];
-      if (ch === '"' || ch === "'") {
-        const close = text.indexOf(ch, i + 1);
-        if (close === -1) return null;
-        i = close + 1;
-      } else if (ch === "`" || ch === "{") {
-        i = ch === "`" ? skipTemplateLiteral(i + 1) : scanScript(i + 1);
-        if (i === UNTERMINATED) return null;
-      } else if (ch === "/" && text[i + 1] === ">") {
-        return { end: i + 2, selfClosing: true };
-      } else if (ch === ">") {
-        return { end: i + 1, selfClosing: false };
-      } else {
-        i += 1;
-      }
-    }
-    return null;
-  }
-
-  function scanMarkup(from: number): number {
-    markup = true;
-    let i = from;
-    let depth = 0;
-    while (i < text.length) {
-      const ch = text[i];
-      const next = text[i + 1];
-      if (ch === "{") {
-        i = scanScript(i + 1);
-        if (i === UNTERMINATED) return UNTERMINATED;
-      } else if (text.startsWith("<!--", i)) {
-        const close = text.indexOf("-->", i + 4);
-        if (close === -1) return UNTERMINATED;
-        i = close + 3;
-      } else if (ch === "<" && next === ">") {
-        depth += 1;
-        i += 2;
-      } else if (ch === "<" && next === "/") {
-        const close = text.indexOf(">", i);
-        if (close === -1) return UNTERMINATED;
-        i = close + 1;
-        depth -= 1;
-        if (depth <= 0) return i;
-      } else if (ch !== "<" || !isAsciiLetter(next)) {
-        i += 1;
-      } else {
-        let nameEnd = i + 1;
-        while (
-          nameEnd < text.length &&
-          !isAsciiWhitespace(text[nameEnd]) &&
-          text[nameEnd] !== "/" &&
-          text[nameEnd] !== ">"
-        ) {
-          nameEnd += 1;
-        }
-        const name = text.slice(i + 1, nameEnd);
-        const tag = scanStartTag(nameEnd);
-        if (tag === null) return UNTERMINATED;
-        i = tag.end;
-        if (!tag.selfClosing && VOID_ELEMENTS.has(name)) {
-          voidTagEnds.push(i - 1);
-        } else if (!tag.selfClosing) {
-          depth += 1;
-          continue;
-        }
-        if (depth === 0) return i;
-      }
-    }
-    return UNTERMINATED;
-  }
-
-  const chars = text.split("");
-  const runs: Array<BraceRun> = [];
-  let i = 0;
-  while (i < text.length) {
-    if (text[i] !== "{") {
-      i += 1;
-      continue;
-    }
-    markup = false;
-    voidTagEnds = [];
-    const end = scanScript(i + 1);
-    // An unterminated run (a stray brace in text) is left alone.
-    if (end === UNTERMINATED) {
-      i += 1;
-      continue;
-    }
-    runs.push({ start: i, end, markup, voidTagEnds });
-    for (let k = i + 1; k < end - 1; k += 1) chars[k] = "x";
-    i = end;
-  }
-  return { masked: chars.join(""), runs };
 }
 
 // The KTD7 reverse-leak check scans the whole module for registry tokens;
@@ -572,77 +282,6 @@ function walkBindingExpression(
   );
 }
 
-// parseDiagnostics is internal in the TypeScript typings.
-function parsesCleanly(sourceFile: ts.SourceFile): boolean {
-  const parsed = sourceFile as unknown as {
-    parseDiagnostics: ReadonlyArray<ts.Diagnostic>;
-  };
-  return parsed.parseDiagnostics.length === 0;
-}
-
-// An expression parsed alone, wrapped in parentheses, or null when it does
-// not parse. Positions map back by the wrapper's one byte.
-function parseExpression(
-  filePath: string,
-  expression: string,
-  expressionStart: number,
-  kind: "ts" | "tsx",
-): ParsedRun | null {
-  const sourceFile = parseSourceModule(
-    `${filePath}::expression.${kind}`,
-    `(${expression})`,
-  );
-  if (!parsesCleanly(sourceFile)) return null;
-  return {
-    sourceFile,
-    toOriginal: function (position) {
-      return position + expressionStart - 1;
-    },
-  };
-}
-
-// An Astro brace run parsed alone as TSX. toOriginal maps a position in the
-// parse back into the file.
-interface ParsedRun {
-  sourceFile: ts.SourceFile;
-  toOriginal: (position: number) => number;
-}
-
-// KTD4: a brace run is parsed alone as TSX, wrapped as `(` + content + `)`.
-// The copy closes each unclosed void element (<img ...> becomes <img .../>),
-// and spans map back through the inserted bytes. A run TSX still rejects (an
-// HTML comment, an unquoted attribute value) parses to null.
-function parseBraceRun(
-  filePath: string,
-  templateText: string,
-  run: BraceRun,
-): ParsedRun | null {
-  const contentStart = run.start + 1;
-  const insertedSlashOffsets: Array<number> = [];
-  let copy = "(";
-  let cursor = contentStart;
-  for (const tagEnd of run.voidTagEnds) {
-    copy += templateText.slice(cursor, tagEnd);
-    insertedSlashOffsets.push(copy.length);
-    copy += "/";
-    cursor = tagEnd;
-  }
-  copy += `${templateText.slice(cursor, run.end - 1)})`;
-  const sourceFile = parseSourceModule(`${filePath}::expression.tsx`, copy);
-  if (!parsesCleanly(sourceFile)) return null;
-  return {
-    sourceFile,
-    toOriginal: function (position) {
-      let before = 1;
-      for (const at of insertedSlashOffsets) {
-        if (at >= position) break;
-        before += 1;
-      }
-      return contentStart + position - before;
-    },
-  };
-}
-
 // KTD4: a content run that holds markup is walked with the JSX rules:
 // class="..." is a static class attribute, class={expr} poisons what it
 // cannot prove, and class:list gets cn() semantics. A run TSX rejects emits
@@ -657,154 +296,6 @@ function walkExpressionMarkup(
     parsed.sourceFile,
     offsetVisitor(visitor, parsed.toOriginal),
     { astroClassList: true },
-  );
-}
-
-// KTD5: a frontmatter const that may hold a class string, with what the
-// reference count has found so far.
-interface ClassConstant {
-  declaration: ts.Identifier;
-  literal: ts.StringLiteral | ts.NoSubstitutionTemplateLiteral;
-  classPositions: number;
-  otherReference: boolean;
-}
-
-// Eligible: a top-level, non-exported const declared inside the
-// frontmatter, initialized with a string literal or a template literal
-// without substitutions. A later declaration of the same name is not the
-// declaration, so the count reads it as an other reference.
-function frontmatterConstants(
-  sourceFile: ts.SourceFile,
-  frontmatter: ContentRegion,
-): Map<string, ClassConstant> {
-  const constants = new Map<string, ClassConstant>();
-  for (const statement of sourceFile.statements) {
-    if (!ts.isVariableStatement(statement)) continue;
-    const at = statement.getStart(sourceFile);
-    if (at < frontmatter.contentStart || at >= frontmatter.contentEnd) {
-      continue;
-    }
-    if ((statement.modifiers?.length ?? 0) > 0) continue;
-    const list = statement.declarationList;
-    if ((list.flags & ts.NodeFlags.BlockScoped) !== ts.NodeFlags.Const) {
-      continue;
-    }
-    for (const declaration of list.declarations) {
-      const name = declaration.name;
-      const literal = declaration.initializer;
-      if (!ts.isIdentifier(name) || constants.has(name.text)) continue;
-      if (
-        literal === undefined ||
-        !(
-          ts.isStringLiteral(literal) ||
-          ts.isNoSubstitutionTemplateLiteral(literal)
-        )
-      ) {
-        continue;
-      }
-      constants.set(name.text, {
-        declaration: name,
-        literal,
-        classPositions: 0,
-        otherReference: false,
-      });
-    }
-  }
-  return constants;
-}
-
-// How a brace run sits in the template: the whole value of a class or a
-// class:list attribute.
-type RunRole = "class" | "class-list";
-
-// KTD5's reference count over one parse. A reference is the name as a whole
-// identifier, not after `.`, other than the declaration. It is a class
-// position when it is the whole value of class={X}, the whole class:list
-// expression or an array element at any depth inside it, or a direct cn()
-// argument. role says the parse itself is the value of a class or class:list
-// attribute.
-function countConstantReferences(
-  sourceFile: ts.SourceFile,
-  constants: ReadonlyMap<string, ClassConstant>,
-  role: RunRole | undefined,
-): void {
-  const cnNames = cnBindingNames(sourceFile);
-  cnNames.add("cn");
-  const classPositions = new Set<ts.Node>();
-  function addClassList(expression: ts.Expression): void {
-    if (ts.isIdentifier(expression)) {
-      classPositions.add(expression);
-    } else if (ts.isArrayLiteralExpression(expression)) {
-      for (const element of expression.elements) addClassList(element);
-    }
-  }
-  const first = sourceFile.statements[0];
-  if (
-    role !== undefined &&
-    first !== undefined &&
-    ts.isExpressionStatement(first) &&
-    ts.isParenthesizedExpression(first.expression)
-  ) {
-    const value = first.expression.expression;
-    if (role === "class-list") addClassList(value);
-    else if (ts.isIdentifier(value)) classPositions.add(value);
-  }
-  function visit(node: ts.Node): void {
-    if (ts.isIdentifier(node)) {
-      const constant = constants.get(node.text);
-      if (constant === undefined || node === constant.declaration) return;
-      const parent = node.parent;
-      if (
-        (ts.isPropertyAccessExpression(parent) && parent.name === node) ||
-        (ts.isQualifiedName(parent) && parent.right === node)
-      ) {
-        return;
-      }
-      if (classPositions.has(node)) constant.classPositions += 1;
-      else constant.otherReference = true;
-      return;
-    }
-    if (
-      ts.isCallExpression(node) &&
-      ts.isIdentifier(node.expression) &&
-      cnNames.has(node.expression.text)
-    ) {
-      for (const argument of node.arguments) {
-        if (ts.isIdentifier(argument)) classPositions.add(argument);
-      }
-    } else if (
-      ts.isJsxAttribute(node) &&
-      node.initializer !== undefined &&
-      ts.isJsxExpression(node.initializer) &&
-      node.initializer.expression !== undefined
-    ) {
-      const value = node.initializer.expression;
-      if (isClassListDirective(node.name)) {
-        addClassList(value);
-      } else if (
-        ts.isIdentifier(node.name) &&
-        node.name.text === "class" &&
-        ts.isIdentifier(value)
-      ) {
-        classPositions.add(value);
-      }
-    }
-    ts.forEachChild(node, visit);
-  }
-  visit(sourceFile);
-}
-
-// The names as whole words in a run's text, which picks the runs worth
-// parsing and stands in for a parse TSX rejects. A `.` before a name does
-// not exclude it here: the spread in [...card] is a reference, and only the
-// parse tells it from member access.
-function constantNamePattern(names: Iterable<string>): RegExp {
-  const alternatives = Array.from(names, function (name) {
-    return name.replace(/\$/g, "\\$");
-  });
-  return new RegExp(
-    `(?<![\\w$\\u0080-\\uffff])(?:${alternatives.join("|")})(?![\\w$\\u0080-\\uffff])`,
-    "g",
   );
 }
 
@@ -958,11 +449,6 @@ function emitStaticClassAttribute(
   visitor.exitRenameGroup?.("class-attribute", true, true);
 }
 
-interface SourceSpan {
-  start: number;
-  end: number;
-}
-
 // Vue 3 forbids mustache interpolation in attributes and plain HTML has no
 // expression syntax, so their class attributes are always static; Svelte
 // and Astro interpolate {}. Only plain HTML is built output, whose values
@@ -1008,22 +494,18 @@ function emitClassListAttribute(
   );
 }
 
-type TreeNode = DefaultTreeAdapterMap["node"];
-type TreeDocument = DefaultTreeAdapterMap["document"];
-type TreeElement = DefaultTreeAdapterMap["element"];
-type TreeTemplate = DefaultTreeAdapterMap["template"];
+export type TreeNode = DefaultTreeAdapterMap["node"];
+export type TreeDocument = DefaultTreeAdapterMap["document"];
+export type TreeElement = DefaultTreeAdapterMap["element"];
+export type TreeTemplate = DefaultTreeAdapterMap["template"];
 
-function isElement(node: TreeNode): node is TreeElement {
+export function isElement(node: TreeNode): node is TreeElement {
   return "tagName" in node && "attrs" in node;
-}
-
-function isAsciiWhitespace(ch: string): boolean {
-  return ch === " " || ch === "\t" || ch === "\n" || ch === "\f" || ch === "\r";
 }
 
 // parse5 attribute locations span the whole `name="value"` attribute; the
 // value span is recovered by scanning the raw source inside that span.
-function attributeValueSpan(
+export function attributeValueSpan(
   source: string,
   start: number,
   end: number,
@@ -1217,7 +699,10 @@ const PARSER_SPECIAL_TAGS = new Set([
 
 const TAG_NAME = /(<\/?)([A-Za-z][^\t\n\f\r />]*)(?=[\t\n\f\r />])/g;
 
-function renameParserSpecialTags(format: SfcFormat, text: string): string {
+export function renameParserSpecialTags(
+  format: SfcFormat,
+  text: string,
+): string {
   const components = format !== "html";
   return text.replace(TAG_NAME, function (match, open: string, name: string) {
     const first = name[0];
@@ -1293,7 +778,7 @@ function svelteTagExpression(
   return { from, to, declaration: false };
 }
 
-function walkTemplateElements(
+export function walkTemplateElements(
   node: TreeNode,
   visit: (element: TreeElement) => void,
 ): void {
@@ -1687,297 +1172,6 @@ export function walkSfcClassContexts(
     visitor.exitRenameGroup?.("class-attribute", true, false);
   }
   return document;
-}
-
-// KTD8: built-HTML attributes whose values never hold a class name. A
-// script that copies one into a class list is unsupported, like a class
-// name fetched at runtime. `content` joins them on <meta> only.
-const NON_CLASS_ATTRIBUTES = new Set([
-  "role",
-  "type",
-  "alt",
-  "title",
-  "placeholder",
-  "lang",
-  "dir",
-  "rel",
-  "autocomplete",
-  "loading",
-  "decoding",
-  "fetchpriority",
-  "style",
-]);
-
-function isNonClassAttribute(element: TreeElement, name: string): boolean {
-  return (
-    NON_CLASS_ATTRIBUTES.has(name) ||
-    name.startsWith("aria-") ||
-    (name === "content" && element.tagName === "meta")
-  );
-}
-
-// The type values a browser runs as script: none, empty, module, or a
-// JavaScript MIME type essence (the HTML standard's list).
-const JAVASCRIPT_TYPES = new Set([
-  "",
-  "module",
-  "application/ecmascript",
-  "application/javascript",
-  "application/x-ecmascript",
-  "application/x-javascript",
-  "text/ecmascript",
-  "text/javascript",
-  "text/javascript1.0",
-  "text/javascript1.1",
-  "text/javascript1.2",
-  "text/javascript1.3",
-  "text/javascript1.4",
-  "text/javascript1.5",
-  "text/jscript",
-  "text/livescript",
-  "text/x-ecmascript",
-  "text/x-javascript",
-]);
-
-// Every other type is data: JSON (a JSON MIME type, an import map, or
-// speculation rules), or else markup that a script compiles at runtime,
-// such as Vue's text/x-template.
-type ScriptContent = "javascript" | "json-ld" | "json" | "markup";
-
-function scriptContent(element: TreeElement): ScriptContent {
-  const type = element.attrs.find(function (attr) {
-    return attr.name === "type";
-  });
-  if (type === undefined) return "javascript";
-  const essence = type.value
-    .replace(/^[\t\n\f\r ]+|[\t\n\f\r ]+$/g, "")
-    .toLowerCase();
-  if (JAVASCRIPT_TYPES.has(essence)) return "javascript";
-  if (essence === "application/ld+json") return "json-ld";
-  if (
-    essence === "importmap" ||
-    essence === "speculationrules" ||
-    essence.endsWith("json")
-  ) {
-    return "json";
-  }
-  return "markup";
-}
-
-// The attribute values a browser or a framework runs as JavaScript: on*
-// handlers, Alpine's @*, x-on:*, x-init, x-effect, x-data, and x-bind:*
-// or :* bindings, and htmx's hx-on handlers.
-function holdsJavaScript(name: string): boolean {
-  return (
-    name.startsWith("on") ||
-    name.startsWith("@") ||
-    name.startsWith(":") ||
-    name.startsWith("x-on:") ||
-    name.startsWith("x-bind:") ||
-    name === "x-init" ||
-    name === "x-effect" ||
-    name === "x-data" ||
-    name.startsWith("hx-on:") ||
-    name.startsWith("hx-on-")
-  );
-}
-
-// The leak text of a built page, and the object keys and selector strings
-// it holds.
-export interface HtmlLeakText {
-  text: string;
-  objectKeys: Array<LiteralOccurrence>;
-  selectorReferences: Array<LiteralOccurrence>;
-}
-
-// KTD8: the leak text of a built page, with the positions that never hold a
-// class reference blanked: text, comments, JSON-LD, and the values of
-// NON_CLASS_ATTRIBUTES. Text a script reads back as a form value stays:
-// a <textarea>'s, and an <option>'s without a value attribute, which the
-// option's value returns. Executable scripts keep everything but comments
-// and reserved words (KTD9). Every other script type, every other
-// attribute (data-*, value, on* handlers, island props), and attributes
-// the parser adopted without a location stay scanned. `document` is the
-// tree walkSfcClassContexts parsed from the same file, so its offsets index
-// `text`. KTD15: objectKeys are the identifier object keys of executable
-// scripts and of scanned attribute values that parse as a JavaScript
-// expression once decoded (Alpine :class and x-data), less the objects
-// `skipObject` drops. KTD16: selectorReferences are the class selectors
-// inside the strings of executable scripts and of the attribute values
-// holdsJavaScript names, read decoded. The attribute values of markup held in a
-// script of another non-JSON type (text/x-template) give both too.
-export function maskHtmlLeakText(
-  filePath: string,
-  text: string,
-  document: TreeDocument,
-  skipObject?: (node: ts.ObjectLiteralExpression) => boolean,
-): HtmlLeakText {
-  const blank: Array<SourceSpan> = [];
-  const scripts: Array<SourceSpan> = [];
-  const objectKeys: Array<LiteralOccurrence> = [];
-  const selectorReferences: Array<LiteralOccurrence> = [];
-
-  function readAttribute(name: string, span: SourceSpan): void {
-    const raw = text.slice(span.start, span.end);
-    const script = holdsJavaScript(name);
-    if (!script && !raw.includes("{")) return;
-    const views = leakViews(raw, true);
-    const view = views[views.length - 1];
-    function inPage(
-      occurrence: LiteralOccurrence,
-      toView: (position: number) => number,
-    ): LiteralOccurrence {
-      const at = view.rawSpan(toView(occurrence.start), toView(occurrence.end));
-      return {
-        ...occurrence,
-        start: span.start + at.start,
-        end: span.start + at.end,
-      };
-    }
-    const parsed = raw.includes("{")
-      ? parseExpression(filePath, view.text, 0, "ts")
-      : null;
-    if (parsed !== null) {
-      for (const key of objectLiteralKeys(parsed.sourceFile, skipObject)) {
-        objectKeys.push(inPage(key, parsed.toOriginal));
-      }
-    }
-    if (!script) return;
-    // A value that is not one expression is a handler body of statements.
-    const body = parsed ?? {
-      sourceFile: parseSourceModule(`${filePath}::attribute.js`, view.text),
-      toOriginal: function (position: number): number {
-        return position;
-      },
-    };
-    for (const reference of selectorClassReferences(body.sourceFile)) {
-      selectorReferences.push(inPage(reference, body.toOriginal));
-    }
-  }
-  // `offset` places the element's locations in `text`; `mask` blanks the
-  // values of NON_CLASS_ATTRIBUTES.
-  function readAttributes(
-    element: TreeElement,
-    offset: number,
-    mask: boolean,
-  ): void {
-    const attributes = element.sourceCodeLocation?.attrs;
-    for (const attr of element.attrs) {
-      const at = attributes?.[attr.name];
-      if (at === undefined) continue;
-      const span = attributeValueSpan(
-        text,
-        offset + at.startOffset,
-        offset + at.endOffset,
-      );
-      if (isNonClassAttribute(element, attr.name)) {
-        if (mask) blank.push(span);
-      } else if (attr.name !== "class") {
-        readAttribute(attr.name, span);
-      }
-    }
-  }
-  // Markup a script compiles at runtime keeps its text and every attribute
-  // in the whole-word scan; only the attribute reads are added.
-  function readMarkup(content: SourceSpan): void {
-    const fragment = parse5.parseFragment(
-      renameParserSpecialTags("html", text.slice(content.start, content.end)),
-      { sourceCodeLocationInfo: true, scriptingEnabled: false },
-    );
-    walkTemplateElements(fragment, function (element) {
-      readAttributes(element, content.start, false);
-    });
-  }
-  // `valueText`: the node sits in a <textarea> or a value-less <option>.
-  function visit(node: TreeNode, valueText: boolean): void {
-    const location = node.sourceCodeLocation;
-    if (node.nodeName === "#comment" || node.nodeName === "#text") {
-      if (location === null || location === undefined) return;
-      const span = { start: location.startOffset, end: location.endOffset };
-      if (node.nodeName === "#text" && valueText) return;
-      // parse5 merges the text on both sides of a tag it drops or adopts,
-      // so a text node holding `<` can span an adopted <body> start tag,
-      // whose attributes stay scanned.
-      if (
-        node.nodeName === "#text" &&
-        text.slice(span.start, span.end).includes("<")
-      ) {
-        return;
-      }
-      blank.push(span);
-      return;
-    }
-    if (!isElement(node)) {
-      if ("childNodes" in node) {
-        for (const child of node.childNodes) visit(child, valueText);
-      }
-      return;
-    }
-    readAttributes(node, 0, true);
-    if (node.tagName === "script") {
-      const first = node.childNodes[0]?.sourceCodeLocation;
-      const last =
-        node.childNodes[node.childNodes.length - 1]?.sourceCodeLocation;
-      if (first === null || first === undefined) return;
-      if (last === null || last === undefined) return;
-      const content = { start: first.startOffset, end: last.endOffset };
-      const kind = scriptContent(node);
-      if (kind === "json-ld") blank.push(content);
-      else if (kind === "javascript") scripts.push(content);
-      else if (kind === "markup") readMarkup(content);
-      return;
-    }
-    const childValueText =
-      valueText ||
-      node.tagName === "textarea" ||
-      (node.tagName === "option" &&
-        !node.attrs.some(function (attr) {
-          return attr.name === "value";
-        }));
-    if (node.tagName === "template") {
-      visit((node as TreeTemplate).content, childValueText);
-    }
-    for (const child of node.childNodes) visit(child, childValueText);
-  }
-  visit(document, false);
-
-  const blanked = maskSpans(text, blank);
-  const maskedScripts: Array<SourceSpan & { masked: string }> = [];
-  for (const span of scripts) {
-    const script = parseSourceModule(
-      `${filePath}::script.js`,
-      text.slice(span.start, span.end),
-    );
-    maskedScripts.push({
-      ...span,
-      masked: maskCommentsAndReservedWords(script),
-    });
-    for (const key of objectLiteralKeys(script, skipObject)) {
-      objectKeys.push({
-        ...key,
-        start: span.start + key.start,
-        end: span.start + key.end,
-      });
-    }
-    for (const reference of selectorClassReferences(script)) {
-      selectorReferences.push({
-        ...reference,
-        start: span.start + reference.start,
-        end: span.start + reference.end,
-      });
-    }
-  }
-  maskedScripts.sort(function (a, b) {
-    return a.start - b.start;
-  });
-  let leakText = "";
-  let copied = 0;
-  for (const script of maskedScripts) {
-    leakText += blanked.slice(copied, script.start) + script.masked;
-    copied = script.end;
-  }
-  leakText += blanked.slice(copied);
-  return { text: leakText, objectKeys, selectorReferences };
 }
 
 // One entry point for modules of every supported flavor: SFCs get the
