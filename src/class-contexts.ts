@@ -244,7 +244,7 @@ export function objectLiteralKeys(
   return keys;
 }
 
-function isClassListDirective(name: ts.JsxAttributeName): boolean {
+export function isClassListDirective(name: ts.JsxAttributeName): boolean {
   return (
     ts.isJsxNamespacedName(name) &&
     name.namespace.text === "class" &&
@@ -252,13 +252,7 @@ function isClassListDirective(name: ts.JsxAttributeName): boolean {
   );
 }
 
-export function walkClassContexts(
-  sourceFile: ts.SourceFile,
-  visitor: ClassContextVisitor,
-  options: WalkClassContextsOptions = {},
-): void {
-  // Identify cn by its import-traced binding; fall back to a bare-name match
-  // so an unimported global-style helper still counts (KTD4).
+export function cnBindingNames(sourceFile: ts.SourceFile): Set<string> {
   const cnNames = new Set<string>();
   for (const statement of sourceFile.statements) {
     if (!ts.isImportDeclaration(statement)) continue;
@@ -271,6 +265,17 @@ export function walkClassContexts(
       if (imported === "cn") cnNames.add(element.name.text);
     }
   }
+  return cnNames;
+}
+
+export function walkClassContexts(
+  sourceFile: ts.SourceFile,
+  visitor: ClassContextVisitor,
+  options: WalkClassContextsOptions = {},
+): void {
+  // Identify cn by its import-traced binding; fall back to a bare-name match
+  // so an unimported global-style helper still counts (KTD4).
+  const cnNames = cnBindingNames(sourceFile);
 
   function isCnCall(node: ts.CallExpression): boolean {
     return (
@@ -410,7 +415,6 @@ export function walkClassContexts(
       }
       const name = property.name;
       if (!ts.isPropertyAssignment(property)) {
-        // A method's or accessor's result is runtime-chosen.
         if (ts.isIdentifier(name)) {
           visitor.runtimeLiteral?.(occurrence(name, false), "class-expression");
         } else {
@@ -622,7 +626,6 @@ export function walkClassContexts(
         visit(initializer.expression);
         return;
       }
-      // Other namespaced attribute names (a:b) are never class contexts.
       const attribute = ts.isIdentifier(node.name) ? node.name.text : "";
       if (attribute === "class" && initializer !== undefined) {
         if (ts.isStringLiteral(initializer)) {

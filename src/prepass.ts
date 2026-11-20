@@ -191,15 +191,18 @@ function scanModule(
   let groupLiterals: Array<{ start: number; tokens: Array<string> }> = [];
   // KTD15: every identifier object key in the module, and the starts of the
   // literals a class position consumed, renamed or poisoned.
-  const objectKeys: Array<LiteralOccurrence> = [];
-  const consumed = new Set<number>();
+  const objectKeys: Array<LiteralOccurrence> | undefined = sourceRoute
+    ? []
+    : undefined;
+  const consumed = sourceRoute ? new Set<number>() : undefined;
 
   walkModuleContexts(filePath, text, {
-    objectLiteralKey: sourceRoute
-      ? function (key: LiteralOccurrence): void {
-          objectKeys.push(key);
-        }
-      : undefined,
+    objectLiteralKey:
+      objectKeys === undefined
+        ? undefined
+        : function (key: LiteralOccurrence): void {
+            objectKeys.push(key);
+          },
     selectorReference: sourceRoute
       ? function (reference: LiteralOccurrence): void {
           scan.selectorTokens.add(reference.text);
@@ -210,7 +213,7 @@ function scanModule(
       groupLiterals = [];
     },
     renameLiteral: function (literal: LiteralOccurrence): void {
-      consumed.add(literal.start);
+      consumed?.add(literal.start);
       const tokens = tokenize(literal.text);
       for (const token of tokens) groupTokens.push(token);
       if (
@@ -236,11 +239,12 @@ function scanModule(
       poisonTemplate(node);
     },
     runtimeLiteral: function (literal: LiteralOccurrence): void {
-      consumed.add(literal.start);
+      consumed?.add(literal.start);
       if (literal.objectKey === true) scan.keyTokens.add(literal.text);
       else recordRuntime(tokenize(literal.text));
     },
   });
+  if (objectKeys === undefined || consumed === undefined) return;
   for (const key of objectKeys) {
     if (!consumed.has(key.start)) scan.keyTokens.add(key.text);
   }

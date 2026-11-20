@@ -1,9 +1,6 @@
 import { ident, walk, type AttributeSelector, type CssNode } from "css-tree";
 import { tokenize } from "./class-contexts.js";
-
-// Shared css-tree helpers and the span-edit applicator used by the U4
-// stylesheet transform, the U5 consolidation kernel, and the apply
-// inline-style tripwire.
+import type { NameRegistry } from "./names.js";
 
 export interface SpanEdit {
   start: number;
@@ -67,7 +64,7 @@ function matchesPiece(
 // Empty for any other node, for other attributes, and for a bare `[class]`.
 export function classAttributeTokens(
   node: CssNode,
-  originals: ReadonlyArray<string>,
+  originals: () => ReadonlyArray<string>,
 ): Array<string> {
   if (node.type !== "AttributeSelector") return [];
   const attribute = node as unknown as AttributeSelector;
@@ -81,11 +78,25 @@ export function classAttributeTokens(
       ? (value.value ?? "")
       : ident.decode(value.name ?? ""),
   );
-  return originals.filter(function (original) {
+  return originals().filter(function (original) {
     return pieces.some(function (piece) {
       return matchesPiece(matcher, original, piece);
     });
   });
+}
+
+export function lazyOriginals(
+  registry: NameRegistry,
+): () => ReadonlyArray<string> {
+  let originals: Array<string> | undefined;
+  return function () {
+    if (originals === undefined) {
+      originals = registry.entries().map(function (entry) {
+        return entry.token;
+      });
+    }
+    return originals;
+  };
 }
 
 // Applies verified, non-overlapping span edits against the original bytes.

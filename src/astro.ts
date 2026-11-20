@@ -312,6 +312,7 @@ export default function minwind(
           vendorProvenance:
             trust === undefined ? undefined : { trust, chunks: vendorChunks },
         });
+        vendorChunks.length = 0;
         logSummary(params.logger, outcome, ranked);
       },
     },

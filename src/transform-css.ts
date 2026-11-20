@@ -4,6 +4,7 @@ import {
   childArray,
   classAttributeTokens,
   classSelectorNodes,
+  lazyOriginals,
   type SpanEdit,
 } from "./css-util.js";
 import type { NameRegistry, RegistryEntry } from "./names.js";
@@ -593,9 +594,7 @@ export function assertNoSurvivingTokens(
   fileName: string,
 ): void {
   const ast = parseStylesheet(css, fileName);
-  const originals = registry.entries().map(function (entry) {
-    return entry.token;
-  });
+  const originals = lazyOriginals(registry);
   const survivors: Array<string> = [];
   const unrenamed: Array<string> = [];
 

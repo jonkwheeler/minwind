@@ -130,7 +130,6 @@ function decodeJavaScript(raw: string): DecodedString {
       continue;
     }
     const next = raw[i + 1];
-    // A line continuation decodes to nothing.
     if (next === "\r") {
       i += raw[i + 2] === "\n" ? 3 : 2;
       continue;
@@ -170,7 +169,6 @@ function decodeJavaScript(raw: string): DecodedString {
         continue;
       }
     }
-    // Legacy octal: up to three digits, at most \377.
     const octal = /^[0-3][0-7]{0,2}|^[4-7][0-7]?/.exec(raw.slice(i + 1, i + 4));
     if (octal !== null) {
       const end = i + 1 + octal[0].length;
@@ -178,7 +176,6 @@ function decodeJavaScript(raw: string): DecodedString {
       i = end;
       continue;
     }
-    // Every other escaped character stands for itself.
     const code = raw.codePointAt(i + 1) ?? 0;
     const end = i + (code > 0xffff ? 3 : 2);
     emit(String.fromCodePoint(code), i, end);

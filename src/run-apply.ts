@@ -4,7 +4,7 @@ import process from "node:process";
 import { generate, ident, parse, walk, type CssNode } from "css-tree";
 import { applyBuildOutput, filterRegistry, type ApplyResult } from "./apply.js";
 import { assertConsolidatedNames } from "./consolidate.js";
-import { classAttributeTokens } from "./css-util.js";
+import { classAttributeTokens, lazyOriginals } from "./css-util.js";
 import {
   assertSharedCollision,
   prepareModulesNaming,
@@ -119,9 +119,7 @@ function assertInlineStylesUnrenamed(
   dir: string,
   registry: NameRegistry,
 ): void {
-  const originals = registry.entries().map(function (entry) {
-    return entry.token;
-  });
+  const originals = lazyOriginals(registry);
   const matches: Array<string> = [];
   for (const file of walkHtmlFiles(dir).sort(compareCodeUnits)) {
     const classes = new Set<string>();

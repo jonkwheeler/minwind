@@ -2,6 +2,8 @@ import * as parse5 from "parse5";
 import type { DefaultTreeAdapterMap } from "parse5";
 import * as ts from "typescript";
 import {
+  cnBindingNames,
+  isClassListDirective,
   objectLiteralKeys,
   parseSourceModule,
   tokenize,
@@ -64,7 +66,6 @@ interface ContentRegion {
   contentStart: number;
   contentEnd: number;
   lang: string;
-  // The Astro frontmatter, as opposed to a <script> block.
   frontmatter: boolean;
 }
 
@@ -245,6 +246,8 @@ function isWordCharacter(ch: string): boolean {
 // The keywords after which `<` starts an operand, not a comparison.
 const OPERAND_KEYWORDS = new Set(["return", "yield", "await"]);
 
+const UNTERMINATED = -1;
+
 // KTD3: Astro expressions hold markup, and maskBraceExpressions' quote
 // tracking would read the apostrophe in {cond && <p>Don't</p>} as a string
 // that closes outside the run, masking real elements. This finder is a small
@@ -263,8 +266,6 @@ function findAstroBraceRuns(text: string): {
   let markup = false;
   let voidTagEnds: Array<number> = [];
 
-  // Each scan starts at an offset and returns the offset just past what it
-  // consumed, or -1 when the text ends first.
   function skipQuoted(from: number, quote: string): number {
     let i = from;
     while (i < text.length) {
@@ -275,10 +276,9 @@ function findAstroBraceRuns(text: string): {
       if (text[i] === quote) return i + 1;
       i += 1;
     }
-    return -1;
+    return UNTERMINATED;
   }
 
-  // From just past an opening backtick.
   function skipTemplateLiteral(from: number): number {
     let i = from;
     while (i < text.length) {
@@ -289,12 +289,12 @@ function findAstroBraceRuns(text: string): {
         return i + 1;
       } else if (ch === "$" && text[i + 1] === "{") {
         i = scanScript(i + 2);
-        if (i === -1) return -1;
+        if (i === UNTERMINATED) return UNTERMINATED;
       } else {
         i += 1;
       }
     }
-    return -1;
+    return UNTERMINATED;
   }
 
   // JavaScript from just past a `{` through the `}` that closes it.
@@ -307,15 +307,15 @@ function findAstroBraceRuns(text: string): {
       const next = text[i + 1];
       if (ch === "'" || ch === '"' || ch === "`") {
         i = ch === "`" ? skipTemplateLiteral(i + 1) : skipQuoted(i + 1, ch);
-        if (i === -1) return -1;
+        if (i === UNTERMINATED) return UNTERMINATED;
         operand = false;
       } else if (ch === "/" && next === "/") {
         const lineEnd = text.indexOf("\n", i);
-        if (lineEnd === -1) return -1;
+        if (lineEnd === -1) return UNTERMINATED;
         i = lineEnd + 1;
       } else if (ch === "/" && next === "*") {
         const close = text.indexOf("*/", i + 2);
-        if (close === -1) return -1;
+        if (close === -1) return UNTERMINATED;
         i = close + 2;
       } else if (
         ch === "<" &&
@@ -323,7 +323,7 @@ function findAstroBraceRuns(text: string): {
         (isAsciiLetter(next) || next === ">")
       ) {
         i = scanMarkup(i);
-        if (i === -1) return -1;
+        if (i === UNTERMINATED) return UNTERMINATED;
         operand = false;
       } else if (isWordCharacter(ch)) {
         let end = i + 1;
@@ -347,11 +347,9 @@ function findAstroBraceRuns(text: string): {
         i += 1;
       }
     }
-    return -1;
+    return UNTERMINATED;
   }
 
-  // A start tag's attributes, from just past its name. selfClosing is
-  // true for `/>`.
   function scanStartTag(
     from: number,
   ): { end: number; selfClosing: boolean } | null {
@@ -364,7 +362,7 @@ function findAstroBraceRuns(text: string): {
         i = close + 1;
       } else if (ch === "`" || ch === "{") {
         i = ch === "`" ? skipTemplateLiteral(i + 1) : scanScript(i + 1);
-        if (i === -1) return null;
+        if (i === UNTERMINATED) return null;
       } else if (ch === "/" && text[i + 1] === ">") {
         return { end: i + 2, selfClosing: true };
       } else if (ch === ">") {
@@ -376,7 +374,6 @@ function findAstroBraceRuns(text: string): {
     return null;
   }
 
-  // Markup from its first `<` until its outermost element closes.
   function scanMarkup(from: number): number {
     markup = true;
     let i = from;
@@ -386,22 +383,21 @@ function findAstroBraceRuns(text: string): {
       const next = text[i + 1];
       if (ch === "{") {
         i = scanScript(i + 1);
-        if (i === -1) return -1;
+        if (i === UNTERMINATED) return UNTERMINATED;
       } else if (text.startsWith("<!--", i)) {
         const close = text.indexOf("-->", i + 4);
-        if (close === -1) return -1;
+        if (close === -1) return UNTERMINATED;
         i = close + 3;
       } else if (ch === "<" && next === ">") {
         depth += 1;
         i += 2;
       } else if (ch === "<" && next === "/") {
         const close = text.indexOf(">", i);
-        if (close === -1) return -1;
+        if (close === -1) return UNTERMINATED;
         i = close + 1;
         depth -= 1;
         if (depth <= 0) return i;
       } else if (ch !== "<" || !isAsciiLetter(next)) {
-        // Text, quotes included.
         i += 1;
       } else {
         let nameEnd = i + 1;
@@ -415,7 +411,7 @@ function findAstroBraceRuns(text: string): {
         }
         const name = text.slice(i + 1, nameEnd);
         const tag = scanStartTag(nameEnd);
-        if (tag === null) return -1;
+        if (tag === null) return UNTERMINATED;
         i = tag.end;
         if (!tag.selfClosing && VOID_ELEMENTS.has(name)) {
           voidTagEnds.push(i - 1);
@@ -426,7 +422,7 @@ function findAstroBraceRuns(text: string): {
         if (depth === 0) return i;
       }
     }
-    return -1;
+    return UNTERMINATED;
   }
 
   const chars = text.split("");
@@ -441,7 +437,7 @@ function findAstroBraceRuns(text: string): {
     voidTagEnds = [];
     const end = scanScript(i + 1);
     // An unterminated run (a stray brace in text) is left alone.
-    if (end === -1) {
+    if (end === UNTERMINATED) {
       i += 1;
       continue;
     }
@@ -622,13 +618,12 @@ function parseBraceRun(
   run: BraceRun,
 ): ParsedRun | null {
   const contentStart = run.start + 1;
-  // Ascending offsets in the copy where a `/` was inserted.
-  const inserted: Array<number> = [];
+  const insertedSlashOffsets: Array<number> = [];
   let copy = "(";
   let cursor = contentStart;
   for (const tagEnd of run.voidTagEnds) {
     copy += templateText.slice(cursor, tagEnd);
-    inserted.push(copy.length);
+    insertedSlashOffsets.push(copy.length);
     copy += "/";
     cursor = tagEnd;
   }
@@ -639,7 +634,7 @@ function parseBraceRun(
     sourceFile,
     toOriginal: function (position) {
       let before = 1;
-      for (const at of inserted) {
+      for (const at of insertedSlashOffsets) {
         if (at >= position) break;
         before += 1;
       }
@@ -722,35 +717,19 @@ function frontmatterConstants(
 // class:list attribute.
 type RunRole = "class" | "class-list";
 
-function isClassListName(name: ts.JsxAttributeName): boolean {
-  return (
-    ts.isJsxNamespacedName(name) &&
-    name.namespace.text === "class" &&
-    name.name.text === "list"
-  );
-}
-
 // KTD5's reference count over one parse. A reference is the name as a whole
 // identifier, not after `.`, other than the declaration. It is a class
 // position when it is the whole value of class={X}, the whole class:list
 // expression or an array element at any depth inside it, or a direct cn()
-// argument, cn named as walkClassContexts names it. role says the parse
-// itself is the value of a class or class:list attribute.
+// argument. role says the parse itself is the value of a class or class:list
+// attribute.
 function countConstantReferences(
   sourceFile: ts.SourceFile,
   constants: ReadonlyMap<string, ClassConstant>,
   role: RunRole | undefined,
 ): void {
-  const cnNames = new Set(["cn"]);
-  for (const statement of sourceFile.statements) {
-    if (!ts.isImportDeclaration(statement)) continue;
-    const bindings = statement.importClause?.namedBindings;
-    if (bindings === undefined || !ts.isNamedImports(bindings)) continue;
-    for (const element of bindings.elements) {
-      const imported = element.propertyName?.text ?? element.name.text;
-      if (imported === "cn") cnNames.add(element.name.text);
-    }
-  }
+  const cnNames = cnBindingNames(sourceFile);
+  cnNames.add("cn");
   const classPositions = new Set<ts.Node>();
   function addClassList(expression: ts.Expression): void {
     if (ts.isIdentifier(expression)) {
@@ -770,7 +749,6 @@ function countConstantReferences(
     if (role === "class-list") addClassList(value);
     else if (ts.isIdentifier(value)) classPositions.add(value);
   }
-  // A parent marks its class positions before the walk reaches them.
   function visit(node: ts.Node): void {
     if (ts.isIdentifier(node)) {
       const constant = constants.get(node.text);
@@ -801,7 +779,7 @@ function countConstantReferences(
       node.initializer.expression !== undefined
     ) {
       const value = node.initializer.expression;
-      if (isClassListName(node.name)) {
+      if (isClassListDirective(node.name)) {
         addClassList(value);
       } else if (
         ts.isIdentifier(node.name) &&
@@ -892,7 +870,6 @@ function emitMixedTemplate(
       parsed.sourceFile,
       {
         ...shifted,
-        // As the quoted-literal fallback does, skip literals with no token.
         runtimeLiteral: function (literal, kind) {
           if (tokenize(literal.text).length === 0) return;
           shifted.runtimeLiteral?.(literal, kind);
@@ -1616,7 +1593,6 @@ export function walkSfcClassContexts(
         reportReferences(parseExpression(filePath, value, span.start, "ts"));
         continue;
       }
-      // A handler is an expression or statements.
       const sourceFile = parseSourceModule(`${filePath}::handler.ts`, value);
       if (!parsesCleanly(sourceFile)) continue;
       reportReferences({
@@ -1857,7 +1833,6 @@ export function maskHtmlLeakText(
       else if (attr.name !== "class") readAttributeKeys(span);
     }
     if (node.tagName === "script") {
-      // Script data, never text.
       const first = node.childNodes[0]?.sourceCodeLocation;
       const last =
         node.childNodes[node.childNodes.length - 1]?.sourceCodeLocation;
@@ -1874,16 +1849,17 @@ export function maskHtmlLeakText(
   }
   visit(document);
 
-  const chars = maskSpans(text, blank).split("");
+  const blanked = maskSpans(text, blank);
+  const maskedScripts: Array<SourceSpan & { masked: string }> = [];
   for (const span of scripts) {
     const script = parseSourceModule(
       `${filePath}::script.js`,
       text.slice(span.start, span.end),
     );
-    const masked = maskCommentsAndReservedWords(script);
-    for (let i = 0; i < masked.length; i += 1) {
-      chars[span.start + i] = masked[i];
-    }
+    maskedScripts.push({
+      ...span,
+      masked: maskCommentsAndReservedWords(script),
+    });
     for (const key of objectLiteralKeys(script, skipObject)) {
       objectKeys.push({
         ...key,
@@ -1899,7 +1875,17 @@ export function maskHtmlLeakText(
       });
     }
   }
-  return { text: chars.join(""), objectKeys, selectorReferences };
+  maskedScripts.sort(function (a, b) {
+    return a.start - b.start;
+  });
+  let leakText = "";
+  let copied = 0;
+  for (const script of maskedScripts) {
+    leakText += blanked.slice(copied, script.start) + script.masked;
+    copied = script.end;
+  }
+  leakText += blanked.slice(copied);
+  return { text: leakText, objectKeys, selectorReferences };
 }
 
 // One entry point for modules of every supported flavor: SFCs get the

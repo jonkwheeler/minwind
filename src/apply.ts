@@ -145,7 +145,6 @@ function atVendorOccurrence(
 }
 
 // HTML through the SFC walker, JS bundles through the bundle pass.
-// isExportMap drops proven CSS Modules export maps from the leak scans.
 function transformOutput(
   file: string,
   code: string,
@@ -255,7 +254,10 @@ export function applyBuildOutput(options: ApplyOptions): ApplyResult {
       isExportMap,
     );
     if (detected === null) continue;
-    const isVendor = vendorTest(file, code);
+    const leaks = detected.warnings.some(function (warning) {
+      return warning.kind === "reverse-leak";
+    });
+    const isVendor = leaks ? vendorTest(file, code) : null;
     for (const warning of detected.warnings) {
       if (warning.kind !== "reverse-leak" || warning.token === undefined) {
         continue;
@@ -365,7 +367,8 @@ export function applyBuildOutput(options: ApplyOptions): ApplyResult {
     if (isHtml) result.htmlFiles += 1;
     else result.jsFiles += 1;
     if (transformed === null) continue;
-    const isVendor = vendorTest(file, code);
+    const isVendor =
+      transformed.warnings.length > 0 ? vendorTest(file, code) : null;
     for (const warning of transformed.warnings) {
       if (!atVendorOccurrence(warning, isVendor)) result.warnings.push(warning);
     }
